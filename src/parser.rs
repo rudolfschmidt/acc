@@ -10,32 +10,38 @@ struct Error {
 	message: String,
 }
 
-pub fn parse_tokens<'a>(
+pub fn parse_unbalanced_transactions<'a>(
 	tokens: &'a [Token],
-) -> Result<Vec<Transaction<'a, UnbalancedPosting<'a>>>, String> {
-	match parse(tokens) {
+	transactions: &'a mut Vec<Transaction<'a, UnbalancedPosting<'a>>>,
+) -> Result<(), String> {
+	match parse(tokens, transactions) {
 		Err(err) => Err(format!("Parse Error : {}", err.message)),
-		Ok(transactions) => Ok(transactions),
+		Ok(()) => Ok(()),
 	}
 }
 
-fn parse<'a>(tokens: &'a [Token]) -> Result<Vec<Transaction<'a, UnbalancedPosting<'a>>>, Error> {
+fn parse<'a>(
+	tokens: &'a [Token],
+	transactions: &'a mut Vec<Transaction<'a, UnbalancedPosting<'a>>>,
+) -> Result<(), Error> {
 	let mut parser = Parser {
 		tokens: tokens,
-		transactions: Vec::new(),
+		transactions: transactions,
 		index: 0,
 	};
+
 	while parser.index < tokens.len() {
 		parser.parse_transaction_header()?;
 		parser.parse_transaction_comment()?;
 		parser.parse_posting()?;
 	}
-	Ok(parser.transactions)
+
+	Ok(())
 }
 
 struct Parser<'a> {
 	tokens: &'a [Token],
-	transactions: Vec<Transaction<'a, UnbalancedPosting<'a>>>,
+	transactions: &'a mut Vec<Transaction<'a, UnbalancedPosting<'a>>>,
 	index: usize,
 }
 

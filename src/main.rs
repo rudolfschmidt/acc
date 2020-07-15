@@ -79,33 +79,42 @@ fn start() -> Result<(), String> {
 }
 
 fn read_file<'a>(file: String, arguments: &[Argument]) -> Result<model::Journal<'a>, String> {
-	let content = reader::read_file(&file)?;
+	let mut journal = model::Journal {
+		file: file,
+		content: String::new(),
+		lexer_tokens: Vec::new(),
+		unbalanced_transactions: Vec::new(),
+		balanced_transactions: Vec::new(),
+	};
 
-	let lexer_tokens = lexer::read_lines(&file, &content)?;
+	reader::read_file(&journal.file, &mut journal.content)?;
+
+	lexer::read_lines(&journal.file, &journal.content, &mut journal.lexer_tokens)?;
 
 	if arguments.contains(&Argument::DebugLexer) {
-		debuger::print_tokens(&lexer_tokens)
+		debuger::print_tokens(&journal.lexer_tokens);
 	}
 
-	let unbalanced_transactions = parser::parse_tokens(&lexer_tokens)?;
+	parser::parse_unbalanced_transactions(
+		&journal.lexer_tokens,
+		&mut journal.unbalanced_transactions,
+	)?;
 
-	if arguments.contains(&Argument::DebugUnbalancedTransactions) {
-		debuger::print_unbalanced_transactions(&unbalanced_transactions);
-	}
+	// if arguments.contains(&Argument::DebugUnbalancedTransactions) {
+	// 	debuger::print_unbalanced_transactions(&journal.unbalanced_transactions);
+	// }
 
-	let balanced_transactions = balancer::balance_transactions(&file, &unbalanced_transactions)?;
+	// balancer::balance_transactions(
+	// 	&journal.file,
+	// 	&journal.unbalanced_transactions,
+	// 	&mut journal.balanced_transactions,
+	// )?;
 
-	if arguments.contains(&Argument::DebugBalancedTransactions) {
-		debuger::print_balanced_transactions(&balanced_transactions)
-	}
+	// if arguments.contains(&Argument::DebugBalancedTransactions) {
+	// 	debuger::print_balanced_transactions(&journal.balanced_transactions);
+	// }
 
-	Ok(model::Journal {
-		file: file,
-		content: content,
-		lexer_tokens: lexer_tokens,
-		unbalanced_transactions: unbalanced_transactions,
-		balanced_transactions: balanced_transactions,
-	})
+	Ok(journal)
 }
 
 fn execute<'a>(
@@ -134,32 +143,14 @@ fn execute<'a>(
 			)?;
 		}
 		Command::Register => {
-			printer_register::print(
-				ledger
-					.journals
-					.iter()
-					.flat_map(|j| j.balanced_transactions.iter())
-					.collect(),
-			)?;
+			printer_register::print(&ledger)?;
 		}
 		Command::Print => {
 			if arguments.contains(&Argument::Raw) {
-				printer_print::print_raw(
-					ledger
-						.journals
-						.iter()
-						.flat_map(|j| j.balanced_transactions.iter())
-						.collect(),
-				)?;
+				printer_print::print_raw(&ledger)?;
 				return Ok(());
 			}
-			printer_print::print(
-				ledger
-					.journals
-					.iter()
-					.flat_map(|j| j.balanced_transactions.iter())
-					.collect(),
-			)?;
+			printer_print::print(&ledger)?;
 		}
 	}
 	Ok(())

@@ -11,7 +11,8 @@ use std::ops::Neg;
 pub fn balance_transactions<'a>(
 	file: &str,
 	unbalanced_transactions: &'a [Transaction<'a, UnbalancedPosting<'a>>],
-) -> Result<Vec<Transaction<'a, BalancedPosting<'a>>>, String> {
+	balanced_transactions: &'a mut Vec<Transaction<'a, BalancedPosting<'a>>>,
+) -> Result<(), String> {
 	let mut balanced_transactions = Vec::with_capacity(unbalanced_transactions.len());
 
 	for unbalanced_transaction in unbalanced_transactions {
@@ -64,7 +65,7 @@ pub fn balance_transactions<'a>(
 		})
 	}
 
-	Ok(balanced_transactions)
+	Ok(())
 }
 
 fn total_commodities<'a>(

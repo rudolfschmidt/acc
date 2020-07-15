@@ -1,19 +1,26 @@
 use super::model::BalancedPosting;
+use super::model::Ledger;
 use super::model::State;
 use super::model::Transaction;
-use super::printer::format_amount;
 
 const INDENT: &str = "\t";
 const WIDTH_OFFSET: usize = 4;
 
-pub fn print(transactions: Vec<&Transaction<BalancedPosting>>) -> Result<(), String> {
-	let account_width = transactions
+pub fn print(ledger: &Ledger) -> Result<(), String> {
+	let account_width = ledger
+		.journals
 		.iter()
+		.flat_map(|j| j.balanced_transactions.iter())
 		.flat_map(|t| t.postings.iter())
 		.map(|p| p.account.chars().count())
 		.max()
 		.unwrap_or(0);
-	for transaction in transactions {
+	for transaction in ledger
+		.journals
+		.iter()
+		.flat_map(|j| j.balanced_transactions.iter())
+		.collect::<Vec<&Transaction<BalancedPosting>>>()
+	{
 		println!(
 			"{}{}{}",
 			transaction.date,
@@ -29,7 +36,7 @@ pub fn print(transactions: Vec<&Transaction<BalancedPosting>>) -> Result<(), Str
 			for _ in 0..(account_width + WIDTH_OFFSET - posting.account.chars().count()) {
 				print!(" ");
 			}
-			let formatted_amount = format_amount(&posting.amount);
+			let formatted_amount = super::printer::format_amount(&posting.amount);
 			print!(
 				"{}{}",
 				posting.commodity,
@@ -48,6 +55,7 @@ pub fn print(transactions: Vec<&Transaction<BalancedPosting>>) -> Result<(), Str
 	}
 	Ok(())
 }
-pub fn print_raw(transactions: Vec<&Transaction<BalancedPosting>>) -> Result<(), String> {
+
+pub fn print_raw(_ledger: &Ledger) -> Result<(), String> {
 	Ok(())
 }

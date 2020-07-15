@@ -52,7 +52,7 @@ pub struct UnbalancedPosting<'a> {
 	pub amount: Option<num::rational::Rational64>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct BalancedPosting<'a> {
 	pub account: &'a str,
 	pub commodity: &'a str,

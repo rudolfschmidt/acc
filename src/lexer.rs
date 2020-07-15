@@ -1,26 +1,23 @@
 use super::model::State;
 use super::model::Token;
 
-struct Lexer<'a> {
-	tokens: Vec<Token>,
-	line_str: &'a str,
-	line_chars: Vec<char>,
-	line_index: usize,
-	line_pos: usize,
-}
-
 struct Error {}
 
-pub fn read_lines<'a>(file: &str, content: &str) -> Result<Vec<Token>, String> {
+pub fn read_lines<'a>(
+	file: &'a str,
+	content: &'a str,
+	tokens: &'a mut Vec<Token>,
+) -> Result<(), String> {
 	let mut lexer = Lexer {
-		tokens: Vec::new(),
+		tokens,
+		content,
 		line_chars: Vec::new(),
 		line_index: 0,
 		line_str: "",
 		line_pos: 0,
 	};
-	match lexer.create_tokens(content) {
-		Ok(()) => Ok(lexer.tokens),
+	match lexer.create_tokens() {
+		Ok(()) => Ok(()),
 		Err(_) => {
 			let mut msg = String::new();
 
@@ -52,9 +49,18 @@ pub fn read_lines<'a>(file: &str, content: &str) -> Result<Vec<Token>, String> {
 	}
 }
 
+struct Lexer<'a> {
+	tokens: &'a mut Vec<Token>,
+	content: &'a str,
+	line_str: &'a str,
+	line_chars: Vec<char>,
+	line_index: usize,
+	line_pos: usize,
+}
+
 impl<'a> Lexer<'a> {
-	fn create_tokens(&mut self, content: &'a str) -> Result<(), Error> {
-		for (line_index, line_str) in content.lines().enumerate() {
+	fn create_tokens(&mut self) -> Result<(), Error> {
+		for (line_index, line_str) in self.content.lines().enumerate() {
 			self.line_str = line_str;
 			self.line_chars = line_str.chars().collect();
 			self.line_index = line_index;
