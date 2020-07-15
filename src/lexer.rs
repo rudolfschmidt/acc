@@ -3,11 +3,7 @@ use super::model::Token;
 
 struct Error {}
 
-pub fn read_lines<'a>(
-	file: &'a str,
-	content: &'a str,
-	tokens: &'a mut Vec<Token>,
-) -> Result<(), String> {
+pub fn read_lines(file: &str, content: &str, tokens: &mut Vec<Token>) -> Result<(), String> {
 	let mut lexer = Lexer {
 		tokens,
 		content,

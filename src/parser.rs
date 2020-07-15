@@ -10,9 +10,9 @@ struct Error {
 	message: String,
 }
 
-pub fn parse_unbalanced_transactions<'a>(
-	tokens: &'a [Token],
-	transactions: &'a mut Vec<Transaction<'a, UnbalancedPosting<'a>>>,
+pub fn parse_unbalanced_transactions(
+	tokens: &[Token],
+	transactions: &mut Vec<Transaction<UnbalancedPosting>>,
 ) -> Result<(), String> {
 	match parse(tokens, transactions) {
 		Err(err) => Err(format!("Parse Error : {}", err.message)),
@@ -20,9 +20,9 @@ pub fn parse_unbalanced_transactions<'a>(
 	}
 }
 
-fn parse<'a>(
-	tokens: &'a [Token],
-	transactions: &'a mut Vec<Transaction<'a, UnbalancedPosting<'a>>>,
+fn parse(
+	tokens: &[Token],
+	transactions: &mut Vec<Transaction<UnbalancedPosting>>,
 ) -> Result<(), Error> {
 	let mut parser = Parser {
 		tokens: tokens,
@@ -41,7 +41,7 @@ fn parse<'a>(
 
 struct Parser<'a> {
 	tokens: &'a [Token],
-	transactions: &'a mut Vec<Transaction<'a, UnbalancedPosting<'a>>>,
+	transactions: &'a mut Vec<Transaction<UnbalancedPosting>>,
 	index: usize,
 }
 
@@ -79,9 +79,9 @@ impl<'a> Parser<'a> {
 
 		self.transactions.push(Transaction {
 			line: *line,
-			date: date,
-			state: state,
-			description: description,
+			date: date.to_owned(),
+			state: state.clone(),
+			description: description.to_owned(),
 			comments: Vec::new(),
 			postings: Vec::new(),
 		});
@@ -99,7 +99,7 @@ impl<'a> Parser<'a> {
 					.comments
 					.push(TransactionComment {
 						line: *line,
-						comment: value,
+						comment: value.to_owned(),
 					});
 				self.index += 1;
 			}
@@ -132,7 +132,7 @@ impl<'a> Parser<'a> {
 					.postings
 					.push(UnbalancedPosting {
 						line: *line,
-						account: account,
+						account: account.to_owned(),
 						commodity: None,
 						amount: None,
 					});
@@ -148,7 +148,7 @@ impl<'a> Parser<'a> {
 						.postings
 						.push(UnbalancedPosting {
 							line: *line,
-							account: account,
+							account: account.to_owned(),
 							commodity: None,
 							amount: None,
 						});
@@ -186,8 +186,8 @@ impl<'a> Parser<'a> {
 			.postings
 			.push(UnbalancedPosting {
 				line: *line,
-				account: account,
-				commodity: Some(commodity),
+				account: account.to_owned(),
+				commodity: Some(commodity.to_owned()),
 				amount: Some(create_rational(&amount)?),
 			});
 

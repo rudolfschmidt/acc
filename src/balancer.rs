@@ -8,13 +8,11 @@ use super::model::UnbalancedPosting;
 use std::collections::HashSet;
 use std::ops::Neg;
 
-pub fn balance_transactions<'a>(
+pub fn balance_transactions(
 	file: &str,
-	unbalanced_transactions: &'a [Transaction<'a, UnbalancedPosting<'a>>],
-	balanced_transactions: &'a mut Vec<Transaction<'a, BalancedPosting<'a>>>,
+	unbalanced_transactions: &[Transaction<UnbalancedPosting>],
+	balanced_transactions: &mut Vec<Transaction<BalancedPosting>>,
 ) -> Result<(), String> {
-	let mut balanced_transactions = Vec::with_capacity(unbalanced_transactions.len());
-
 	for unbalanced_transaction in unbalanced_transactions {
 		let mut blanaced_postings = Vec::with_capacity(unbalanced_transaction.postings.len());
 		let mut balanced_empty_posting = false;
@@ -22,8 +20,8 @@ pub fn balance_transactions<'a>(
 		for unbalanced_posting in &unbalanced_transaction.postings {
 			if unbalanced_posting.commodity.is_some() && unbalanced_posting.amount.is_some() {
 				blanaced_postings.push(BalancedPosting {
-					account: unbalanced_posting.account,
-					commodity: unbalanced_posting.commodity.unwrap(),
+					account: unbalanced_posting.account.to_owned(),
+					commodity: unbalanced_posting.commodity.as_ref().unwrap().to_owned(),
 					amount: unbalanced_posting.amount.unwrap(),
 				})
 			} else {
@@ -41,8 +39,8 @@ pub fn balance_transactions<'a>(
 					));
 				}
 				blanaced_postings.push(BalancedPosting {
-					account: unbalanced_posting.account,
-					commodity: total_commodities.iter().next().unwrap(),
+					account: unbalanced_posting.account.to_owned(),
+					commodity: total_commodities.iter().next().unwrap().to_string(),
 					amount: total_amount(&unbalanced_transaction).neg(),
 				});
 				balanced_empty_posting = true;
@@ -50,32 +48,29 @@ pub fn balance_transactions<'a>(
 		}
 		balanced_transactions.push(Transaction {
 			line: unbalanced_transaction.line,
-			date: unbalanced_transaction.date,
-			state: unbalanced_transaction.state,
-			description: unbalanced_transaction.description,
+			date: unbalanced_transaction.date.to_owned(),
+			state: unbalanced_transaction.state.clone(),
+			description: unbalanced_transaction.description.to_owned(),
 			comments: unbalanced_transaction
 				.comments
 				.iter()
 				.map(|c| TransactionComment {
 					line: c.line,
-					comment: c.comment,
+					comment: c.comment.to_owned(),
 				})
 				.collect(),
 			postings: blanaced_postings,
 		})
 	}
-
 	Ok(())
 }
 
-fn total_commodities<'a>(
-	unbalanced_transaction: &'a Transaction<UnbalancedPosting<'a>>,
-) -> HashSet<&'a str> {
+fn total_commodities(unbalanced_transaction: &Transaction<UnbalancedPosting>) -> HashSet<String> {
 	unbalanced_transaction
 		.postings
 		.iter()
-		.flat_map(|p| p.commodity)
-		.collect::<HashSet<&str>>()
+		.flat_map(|p| p.commodity.to_owned())
+		.collect::<HashSet<String>>()
 }
 
 fn total_amount(

@@ -78,7 +78,7 @@ fn start() -> Result<(), String> {
 	}
 }
 
-fn read_file<'a>(file: String, arguments: &[Argument]) -> Result<model::Journal<'a>, String> {
+fn read_file(file: String, arguments: &[Argument]) -> Result<model::Journal, String> {
 	let mut journal = model::Journal {
 		file: file,
 		content: String::new(),
@@ -100,28 +100,24 @@ fn read_file<'a>(file: String, arguments: &[Argument]) -> Result<model::Journal<
 		&mut journal.unbalanced_transactions,
 	)?;
 
-	// if arguments.contains(&Argument::DebugUnbalancedTransactions) {
-	// 	debuger::print_unbalanced_transactions(&journal.unbalanced_transactions);
-	// }
+	if arguments.contains(&Argument::DebugUnbalancedTransactions) {
+		debuger::print_unbalanced_transactions(&journal.unbalanced_transactions);
+	}
 
-	// balancer::balance_transactions(
-	// 	&journal.file,
-	// 	&journal.unbalanced_transactions,
-	// 	&mut journal.balanced_transactions,
-	// )?;
+	balancer::balance_transactions(
+		&journal.file,
+		&journal.unbalanced_transactions,
+		&mut journal.balanced_transactions,
+	)?;
 
-	// if arguments.contains(&Argument::DebugBalancedTransactions) {
-	// 	debuger::print_balanced_transactions(&journal.balanced_transactions);
-	// }
+	if arguments.contains(&Argument::DebugBalancedTransactions) {
+		debuger::print_balanced_transactions(&journal.balanced_transactions);
+	}
 
 	Ok(journal)
 }
 
-fn execute<'a>(
-	ledger: model::Ledger<'a>,
-	command: Command,
-	arguments: &[Argument],
-) -> Result<(), String> {
+fn execute(ledger: model::Ledger, command: Command, arguments: &[Argument]) -> Result<(), String> {
 	match command {
 		Command::Balance => {
 			if arguments.contains(&Argument::Flat) {
