@@ -1,8 +1,8 @@
 extern crate num;
 
 use super::model::BalancedPosting;
+use super::model::Comment;
 use super::model::Transaction;
-use super::model::TransactionComment;
 use super::model::UnbalancedPosting;
 
 use std::collections::HashSet;
@@ -23,6 +23,14 @@ pub fn balance_transactions(
 					account: unbalanced_posting.account.to_owned(),
 					commodity: unbalanced_posting.commodity.as_ref().unwrap().to_owned(),
 					amount: unbalanced_posting.amount.unwrap(),
+					comments: unbalanced_posting
+						.comments
+						.iter()
+						.map(|c| Comment {
+							line: c.line,
+							comment: c.comment.to_owned(),
+						})
+						.collect(),
 				})
 			} else {
 				if balanced_empty_posting {
@@ -42,6 +50,14 @@ pub fn balance_transactions(
 					account: unbalanced_posting.account.to_owned(),
 					commodity: total_commodities.iter().next().unwrap().to_string(),
 					amount: total_amount(&unbalanced_transaction).neg(),
+					comments: unbalanced_posting
+						.comments
+						.iter()
+						.map(|c| Comment {
+							line: c.line,
+							comment: c.comment.to_owned(),
+						})
+						.collect(),
 				});
 				balanced_empty_posting = true;
 			}
@@ -55,7 +71,7 @@ pub fn balance_transactions(
 			comments: unbalanced_transaction
 				.comments
 				.iter()
-				.map(|c| TransactionComment {
+				.map(|c| Comment {
 					line: c.line,
 					comment: c.comment.to_owned(),
 				})

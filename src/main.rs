@@ -50,9 +50,9 @@ fn start() -> Result<(), String> {
 			},
 			"--flat" => arguments.push(Argument::Flat),
 			"--raw" => arguments.push(Argument::Raw),
-			"--debug-lexer" => arguments.push(Argument::DebugLexer),
-			"--debug-unbalanced-transactions" => arguments.push(Argument::DebugUnbalancedTransactions),
-			"--debug-balanced-transactions" => arguments.push(Argument::DebugBalancedTransactions),
+			"--lexer" => arguments.push(Argument::DebugLexer),
+			"--unbalanced-transactions" => arguments.push(Argument::DebugUnbalancedTransactions),
+			"--balanced-transactions" => arguments.push(Argument::DebugBalancedTransactions),
 			"balance" | "bal" => command = Some(Command::Balance),
 			"register" | "reg" => command = Some(Command::Register),
 			"print" => command = Some(Command::Print),
@@ -73,7 +73,7 @@ fn start() -> Result<(), String> {
 				journals: Vec::new(),
 			};
 			for file in files {
-				let journal = read_file(file)?;
+				let journal = read_file(file, &arguments)?;
 				ledger.journals.push(journal);
 			}
 			execute_command(ledger, command, arguments)
@@ -81,7 +81,7 @@ fn start() -> Result<(), String> {
 	}
 }
 
-fn read_file(file: String) -> Result<model::Journal, String> {
+fn read_file(file: String, arguments: &[Argument]) -> Result<model::Journal, String> {
 	let mut journal = model::Journal {
 		file,
 		content: String::new(),
@@ -94,16 +94,28 @@ fn read_file(file: String) -> Result<model::Journal, String> {
 
 	lexer::read_lines(&journal.file, &journal.content, &mut journal.lexer_tokens)?;
 
+	if arguments.contains(&Argument::DebugLexer) {
+		debuger::print_tokens(&journal.lexer_tokens);
+	}
+
 	parser::parse_unbalanced_transactions(
 		&journal.lexer_tokens,
 		&mut journal.unbalanced_transactions,
 	)?;
+
+	if arguments.contains(&Argument::DebugUnbalancedTransactions) {
+		debuger::print_unbalanced_transactions(&journal.unbalanced_transactions);
+	}
 
 	balancer::balance_transactions(
 		&journal.file,
 		&journal.unbalanced_transactions,
 		&mut journal.balanced_transactions,
 	)?;
+
+	if arguments.contains(&Argument::DebugBalancedTransactions) {
+		debuger::print_balanced_transactions(&journal.balanced_transactions);
+	}
 
 	Ok(journal)
 }
@@ -144,17 +156,17 @@ fn execute_command(
 			printer_print::print(&ledger)?;
 		}
 		Command::Debug => {
-			for journal in ledger.journals {
-				if arguments.contains(&Argument::DebugLexer) {
-					debuger::print_tokens(&journal.lexer_tokens);
-				}
-				if arguments.contains(&Argument::DebugUnbalancedTransactions) {
-					debuger::print_unbalanced_transactions(&journal.unbalanced_transactions);
-				}
-				if arguments.contains(&Argument::DebugBalancedTransactions) {
-					debuger::print_balanced_transactions(&journal.balanced_transactions);
-				}
-			}
+			// for journal in ledger.journals {
+			// 	if arguments.contains(&Argument::DebugLexer) {
+			// 		debuger::print_tokens(&journal.lexer_tokens);
+			// 	}
+			// 	if arguments.contains(&Argument::DebugUnbalancedTransactions) {
+			// 		debuger::print_unbalanced_transactions(&journal.unbalanced_transactions);
+			// 	}
+			// 	if arguments.contains(&Argument::DebugBalancedTransactions) {
+			// 		debuger::print_balanced_transactions(&journal.balanced_transactions);
+			// 	}
+			// }
 		}
 	}
 	Ok(())

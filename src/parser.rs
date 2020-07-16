@@ -1,8 +1,8 @@
 extern crate num;
 
+use super::model::Comment;
 use super::model::Token;
 use super::model::Transaction;
-use super::model::TransactionComment;
 use super::model::UnbalancedPosting;
 
 #[derive(Debug)]
@@ -104,7 +104,7 @@ impl<'a> Parser<'a> {
 					.last_mut()
 					.unwrap()
 					.comments
-					.push(TransactionComment {
+					.push(Comment {
 						line: *line,
 						comment: value.to_owned(),
 					});
@@ -142,6 +142,7 @@ impl<'a> Parser<'a> {
 						account: account.to_owned(),
 						commodity: None,
 						amount: None,
+						comments: Vec::new(),
 					});
 				return Ok(());
 			}
@@ -158,6 +159,7 @@ impl<'a> Parser<'a> {
 							account: account.to_owned(),
 							commodity: None,
 							amount: None,
+							comments: Vec::new(),
 						});
 					return Ok(());
 				}
@@ -196,6 +198,7 @@ impl<'a> Parser<'a> {
 				account: account.to_owned(),
 				commodity: Some(commodity.to_owned()),
 				amount: Some(create_rational(&amount)?),
+				comments: Vec::new(),
 			});
 
 		Ok(())

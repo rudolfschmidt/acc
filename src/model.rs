@@ -36,14 +36,8 @@ pub struct Transaction<T> {
 	pub state: State,
 	pub code: Option<String>,
 	pub description: String,
-	pub comments: Vec<TransactionComment>,
+	pub comments: Vec<Comment>,
 	pub postings: Vec<T>,
-}
-
-#[derive(Debug)]
-pub struct TransactionComment {
-	pub line: usize,
-	pub comment: String,
 }
 
 #[derive(Debug)]
@@ -52,6 +46,7 @@ pub struct UnbalancedPosting {
 	pub account: String,
 	pub commodity: Option<String>,
 	pub amount: Option<num::rational::Rational64>,
+	pub comments: Vec<Comment>,
 }
 
 #[derive(Debug)]
@@ -59,4 +54,11 @@ pub struct BalancedPosting {
 	pub account: String,
 	pub commodity: String,
 	pub amount: num::rational::Rational64,
+	pub comments: Vec<Comment>,
+}
+
+#[derive(Debug)]
+pub struct Comment {
+	pub line: usize,
+	pub comment: String,
 }
