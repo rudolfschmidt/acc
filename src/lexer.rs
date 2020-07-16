@@ -77,6 +77,7 @@ impl<'a> Lexer<'a> {
 				} else {
 					self.toknize_transaction_date()?;
 					self.toknize_transaction_state()?;
+					self.toknize_transaction_code()?;
 					self.toknize_transaction_description()?;
 				}
 			}
@@ -174,6 +175,44 @@ impl<'a> Lexer<'a> {
 		Ok(())
 	}
 
+	fn toknize_transaction_code(&mut self) -> Result<(), Error> {
+		match self.line_chars.get(self.line_pos) {
+			None => {
+				return Ok(());
+			}
+			Some(_) => {
+				self.consume_whitespaces();
+			}
+		}
+		if let Some(&c) = self.line_chars.get(self.line_pos) {
+			if c == '(' {
+				self.line_pos += 1;
+				let mut value = String::new();
+				match self.line_chars.get(self.line_pos) {
+					None => {
+						return Err(Error {});
+					}
+					Some(&c) => {
+						value.push(c);
+						self.line_pos += 1;
+					}
+				}
+				while let Some(&c) = self.line_chars.get(self.line_pos) {
+					if c == ')' {
+						self.line_pos += 1;
+						break;
+					}
+					value.push(c);
+					self.line_pos += 1;
+				}
+				self
+					.tokens
+					.push(Token::TransactionCode(self.line_index, value));
+			}
+		}
+		Ok(())
+	}
+
 	fn toknize_transaction_description(&mut self) -> Result<(), Error> {
 		match self.line_chars.get(self.line_pos) {
 			None => {
@@ -184,8 +223,8 @@ impl<'a> Lexer<'a> {
 			}
 		}
 		let mut value = String::new();
-		while self.line_pos < self.line_chars.len() {
-			value.push(self.line_chars[self.line_pos]);
+		while let Some(&c) = self.line_chars.get(self.line_pos) {
+			value.push(c);
 			self.line_pos += 1;
 		}
 		self

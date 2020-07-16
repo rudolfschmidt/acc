@@ -8,6 +8,7 @@ pub fn print_tokens(tokens: &[Token]) {
 		match token {
 			Token::TransactionDate(_line, value) => println!("TransactionDate({:?})", value),
 			Token::TransactionState(_line, value) => println!("TransactionState({:?})", value),
+			Token::TransactionCode(_line, value) => println!("TransactionCode({:?})", value),
 			Token::TransactionDescription(_line, value) => {
 				println!("TransactionDescription({:?})", value)
 			}

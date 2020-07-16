@@ -53,8 +53,8 @@ impl<'a> Parser<'a> {
 		match self.tokens.get(self.index).unwrap() {
 			Token::TransactionDate(file_line, value) => {
 				self.index += 1;
-				date = value;
 				line = file_line;
+				date = value.to_owned();
 			}
 			_ => return Ok(()),
 		}
@@ -63,25 +63,32 @@ impl<'a> Parser<'a> {
 		match self.tokens.get(self.index).unwrap() {
 			Token::TransactionState(_, value) => {
 				self.index += 1;
-				state = value;
+				state = value.clone();
 			}
 			_ => panic!("transaction state expected"),
+		}
+
+		let mut code: Option<String> = None;
+		if let Token::TransactionCode(_, value) = self.tokens.get(self.index).unwrap() {
+			self.index += 1;
+			code = Some(value.to_owned());
 		}
 
 		let description;
 		match self.tokens.get(self.index).unwrap() {
 			Token::TransactionDescription(_, value) => {
 				self.index += 1;
-				description = value;
+				description = value.to_owned();
 			}
 			_ => panic!("transaction description expected"),
 		}
 
 		self.transactions.push(Transaction {
 			line: *line,
-			date: date.to_owned(),
-			state: state.clone(),
-			description: description.to_owned(),
+			date: date,
+			state: state,
+			code: code,
+			description: description,
 			comments: Vec::new(),
 			postings: Vec::new(),
 		});

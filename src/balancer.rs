@@ -50,6 +50,7 @@ pub fn balance_transactions(
 			line: unbalanced_transaction.line,
 			date: unbalanced_transaction.date.to_owned(),
 			state: unbalanced_transaction.state.clone(),
+			code: unbalanced_transaction.code.clone(),
 			description: unbalanced_transaction.description.to_owned(),
 			comments: unbalanced_transaction
 				.comments

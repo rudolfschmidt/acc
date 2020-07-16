@@ -89,13 +89,25 @@ pub fn print_raw(ledger: &Ledger) -> Result<(), String> {
 
 fn print_head<T>(transaction: &Transaction<T>) {
 	println!(
-		"{}{}{}",
+		"{}{}{}{}",
 		transaction.date,
 		match transaction.state {
 			State::Cleared => " * ",
 			State::Uncleared => " ",
 			State::Pending => " ! ",
 		},
+		transaction
+			.code
+			.as_ref()
+			.and_then(|c| {
+				let mut ret = String::new();
+				ret.push('(');
+				ret.push_str(c);
+				ret.push(')');
+				ret.push(' ');
+				Some(ret)
+			})
+			.unwrap_or("".to_owned()),
 		transaction.description
 	);
 }

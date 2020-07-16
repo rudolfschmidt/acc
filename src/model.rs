@@ -14,6 +14,7 @@ pub struct Journal {
 pub enum Token {
 	TransactionDate(usize, String),
 	TransactionState(usize, State),
+	TransactionCode(usize, String),
 	TransactionDescription(usize, String),
 	TransactionComment(usize, String),
 	PostingAccount(usize, String),
@@ -33,6 +34,7 @@ pub struct Transaction<T> {
 	pub line: usize,
 	pub date: String,
 	pub state: State,
+	pub code: Option<String>,
 	pub description: String,
 	pub comments: Vec<TransactionComment>,
 	pub postings: Vec<T>,
