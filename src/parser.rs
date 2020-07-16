@@ -25,8 +25,8 @@ fn parse(
 	transactions: &mut Vec<Transaction<UnbalancedPosting>>,
 ) -> Result<(), Error> {
 	let mut parser = Parser {
-		tokens: tokens,
-		transactions: transactions,
+		tokens,
+		transactions,
 		index: 0,
 	};
 

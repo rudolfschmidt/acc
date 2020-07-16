@@ -81,7 +81,7 @@ fn start() -> Result<(), String> {
 
 fn read_file(file: String, arguments: &[Argument]) -> Result<model::Journal, String> {
 	let mut journal = model::Journal {
-		file: file,
+		file,
 		content: String::new(),
 		lexer_tokens: Vec::new(),
 		unbalanced_transactions: Vec::new(),
