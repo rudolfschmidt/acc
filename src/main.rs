@@ -53,6 +53,7 @@ fn start() -> Result<(), String> {
 			"--debug-unbalanced-transactions" => arguments.push(Argument::DebugUnbalancedTransactions),
 			"--debug-balanced-transactions" => arguments.push(Argument::DebugBalancedTransactions),
 			"balance" | "bal" => command = Some(Command::Balance),
+			"register" | "reg" => command = Some(Command::Register),
 			"print" => command = Some(Command::Print),
 			_ => {}
 		}
@@ -73,7 +74,7 @@ fn start() -> Result<(), String> {
 				let journal = read_file(file, &arguments)?;
 				ledger.journals.push(journal);
 			}
-			execute(ledger, command, &arguments)
+			execute(ledger, command, arguments)
 		}
 	}
 }
@@ -117,7 +118,11 @@ fn read_file(file: String, arguments: &[Argument]) -> Result<model::Journal, Str
 	Ok(journal)
 }
 
-fn execute(ledger: model::Ledger, command: Command, arguments: &[Argument]) -> Result<(), String> {
+fn execute(
+	ledger: model::Ledger,
+	command: Command,
+	arguments: Vec<Argument>,
+) -> Result<(), String> {
 	match command {
 		Command::Balance => {
 			if arguments.contains(&Argument::Flat) {
