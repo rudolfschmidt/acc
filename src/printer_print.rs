@@ -22,7 +22,8 @@ pub fn print(ledger: &Ledger) -> Result<(), String> {
 		.flat_map(|j| j.balanced_transactions.iter())
 		.collect::<Vec<&Transaction<BalancedPosting>>>()
 	{
-		print_transaction(&transaction);
+		print_head(&transaction);
+		print_comments(&transaction);
 		for posting in &transaction.postings {
 			print_posting_amount(account_width, &posting.account);
 			let formatted_amount = super::printer::format_amount(&posting.amount);
@@ -60,7 +61,8 @@ pub fn print_raw(ledger: &Ledger) -> Result<(), String> {
 		.flat_map(|j| j.unbalanced_transactions.iter())
 		.collect::<Vec<&Transaction<UnbalancedPosting>>>()
 	{
-		print_transaction(&transaction);
+		print_head(&transaction);
+		print_comments(&transaction);
 		for posting in &transaction.postings {
 			print_posting_amount(account_width, &posting.account);
 			if let Some(amount) = posting.amount {
@@ -85,7 +87,7 @@ pub fn print_raw(ledger: &Ledger) -> Result<(), String> {
 	Ok(())
 }
 
-fn print_transaction<T>(transaction: &Transaction<T>) {
+fn print_head<T>(transaction: &Transaction<T>) {
 	println!(
 		"{}{}{}",
 		transaction.date,
@@ -96,6 +98,12 @@ fn print_transaction<T>(transaction: &Transaction<T>) {
 		},
 		transaction.description
 	);
+}
+
+fn print_comments<T>(transaction: &Transaction<T>) {
+	for comment in &transaction.comments {
+		println!("{}{}", INDENT, comment.comment);
+	}
 }
 
 fn print_posting_amount(account_width: usize, account: &str) {
