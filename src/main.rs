@@ -17,6 +17,7 @@ enum Command {
 	Print,
 	Balance,
 	Register,
+	Debug,
 }
 
 #[derive(PartialEq)]
@@ -55,6 +56,7 @@ fn start() -> Result<(), String> {
 			"balance" | "bal" => command = Some(Command::Balance),
 			"register" | "reg" => command = Some(Command::Register),
 			"print" => command = Some(Command::Print),
+			"debug" => command = Some(Command::Debug),
 			_ => {}
 		}
 	}
@@ -71,15 +73,15 @@ fn start() -> Result<(), String> {
 				journals: Vec::new(),
 			};
 			for file in files {
-				let journal = read_file(file, &arguments)?;
+				let journal = read_file(file)?;
 				ledger.journals.push(journal);
 			}
-			execute(ledger, command, arguments)
+			execute_command(ledger, command, arguments)
 		}
 	}
 }
 
-fn read_file(file: String, arguments: &[Argument]) -> Result<model::Journal, String> {
+fn read_file(file: String) -> Result<model::Journal, String> {
 	let mut journal = model::Journal {
 		file,
 		content: String::new(),
@@ -92,18 +94,10 @@ fn read_file(file: String, arguments: &[Argument]) -> Result<model::Journal, Str
 
 	lexer::read_lines(&journal.file, &journal.content, &mut journal.lexer_tokens)?;
 
-	if arguments.contains(&Argument::DebugLexer) {
-		debuger::print_tokens(&journal.lexer_tokens);
-	}
-
 	parser::parse_unbalanced_transactions(
 		&journal.lexer_tokens,
 		&mut journal.unbalanced_transactions,
 	)?;
-
-	if arguments.contains(&Argument::DebugUnbalancedTransactions) {
-		debuger::print_unbalanced_transactions(&journal.unbalanced_transactions);
-	}
 
 	balancer::balance_transactions(
 		&journal.file,
@@ -111,14 +105,10 @@ fn read_file(file: String, arguments: &[Argument]) -> Result<model::Journal, Str
 		&mut journal.balanced_transactions,
 	)?;
 
-	if arguments.contains(&Argument::DebugBalancedTransactions) {
-		debuger::print_balanced_transactions(&journal.balanced_transactions);
-	}
-
 	Ok(journal)
 }
 
-fn execute(
+fn execute_command(
 	ledger: model::Ledger,
 	command: Command,
 	arguments: Vec<Argument>,
@@ -152,6 +142,19 @@ fn execute(
 				return Ok(());
 			}
 			printer_print::print(&ledger)?;
+		}
+		Command::Debug => {
+			for journal in ledger.journals {
+				if arguments.contains(&Argument::DebugLexer) {
+					debuger::print_tokens(&journal.lexer_tokens);
+				}
+				if arguments.contains(&Argument::DebugUnbalancedTransactions) {
+					debuger::print_unbalanced_transactions(&journal.unbalanced_transactions);
+				}
+				if arguments.contains(&Argument::DebugBalancedTransactions) {
+					debuger::print_balanced_transactions(&journal.balanced_transactions);
+				}
+			}
 		}
 	}
 	Ok(())

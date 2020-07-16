@@ -6,15 +6,15 @@ use super::model::UnbalancedPosting;
 pub fn print_tokens(tokens: &[Token]) {
 	for token in tokens {
 		match token {
-			Token::TransactionDate(value, _line) => println!("TransactionDate({:?})", value),
-			Token::TransactionState(value, _line) => println!("TransactionState({:?})", value),
-			Token::TransactionDescription(value, _line) => {
+			Token::TransactionDate(_line, value) => println!("TransactionDate({:?})", value),
+			Token::TransactionState(_line, value) => println!("TransactionState({:?})", value),
+			Token::TransactionDescription(_line, value) => {
 				println!("TransactionDescription({:?})", value)
 			}
-			Token::TransactionComment(value, _line) => println!("TransactionComment({:?})", value),
-			Token::PostingAccount(value, _line) => println!("PostingAccount({:?})", value),
-			Token::PostingCommodity(value, _line) => println!("PostingCommodity({:?})", value),
-			Token::PostingAmount(value, _line) => println!("PostingAmount({:?})", value),
+			Token::TransactionComment(_line, value) => println!("TransactionComment({:?})", value),
+			Token::PostingAccount(_line, value) => println!("PostingAccount({:?})", value),
+			Token::PostingCommodity(_line, value) => println!("PostingCommodity({:?})", value),
+			Token::PostingAmount(_line, value) => println!("PostingAmount({:?})", value),
 		}
 	}
 }
