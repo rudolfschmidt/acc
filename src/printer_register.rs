@@ -20,7 +20,7 @@ struct Row {
 	accounts: Vec<Account>,
 }
 
-//maybe I consider the terminal width in the future
+// Maybe I consider the terminal width in the future
 // let terminal_width = std::process::Command::new("sh")
 // .arg("-c")
 // .arg("tput cols")
@@ -150,57 +150,59 @@ pub fn print(ledger: &Ledger) -> Result<(), String> {
 				)
 			}
 
-			for (index, (total_commodity, total_amount)) in account.total.iter().enumerate() {
-				if index == 0 {
-					if total_amount.starts_with('-') {
-						print!(
-							"{}",
-							format_total_commodity_amount(
-								total_commodity,
-								total_amount,
-								commodity_width,
-								total_amount_width
-							)
-							.red()
-						);
-					} else {
-						print!(
-							"{}",
-							format_total_commodity_amount(
-								total_commodity,
-								total_amount,
-								commodity_width,
-								total_amount_width
-							)
-						);
-					}
+			let mut total_iter = account.total.iter();
+
+			if let Some((total_commodity, total_amount)) = total_iter.next() {
+				if total_amount.starts_with('-') {
+					print!(
+						"{}",
+						format_total_commodity_amount(
+							total_commodity,
+							total_amount,
+							commodity_width,
+							total_amount_width
+						)
+						.red()
+					);
 				} else {
-					if total_amount.starts_with('-') {
-						print!(
-							"{}",
-							format_total_commodity_amount_offset(
-								total_commodity,
-								total_amount,
-								header_width,
-								account_width,
-								commodity_width,
-								total_amount_width
-							)
-							.red()
-						);
-					} else {
-						print!(
-							"{}",
-							format_total_commodity_amount_offset(
-								total_commodity,
-								total_amount,
-								header_width,
-								account_width,
-								commodity_width,
-								total_amount_width
-							)
-						);
-					}
+					print!(
+						"{}",
+						format_total_commodity_amount(
+							total_commodity,
+							total_amount,
+							commodity_width,
+							total_amount_width
+						)
+					);
+				}
+			}
+
+			for (total_commodity, total_amount) in total_iter {
+				if total_amount.starts_with('-') {
+					print!(
+						"{}",
+						format_total_commodity_amount_offset(
+							total_commodity,
+							total_amount,
+							header_width,
+							account_width,
+							commodity_width,
+							total_amount_width
+						)
+						.red()
+					);
+				} else {
+					print!(
+						"{}",
+						format_total_commodity_amount_offset(
+							total_commodity,
+							total_amount,
+							header_width,
+							account_width,
+							commodity_width,
+							total_amount_width
+						)
+					);
 				}
 			}
 		}
