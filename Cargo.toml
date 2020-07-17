@@ -9,7 +9,8 @@ keywords = ["cli", "terminal", "ledger", "accounting", "finance"]
 categories = ["command-line-utilities", "parsing", "text-processing"]
 repository = "https://github.com/rudolfschmidt/acc"
 readme = "README.md"
-exclude = [ ".*" ]
+exclude = [ "**/*.*" ]
+include = [ "**/*.rs" ]
 
 [dependencies]
 colored = "1.9.3"
