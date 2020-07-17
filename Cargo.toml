@@ -5,12 +5,12 @@ authors = ["Rudolf Schmidt <info@rudolfschmidt.com>"]
 edition = "2018"
 license = "GPL-3.0"
 description = "plaintext double-entry accounting command line tool"
-keywords = ["cli", "terminal", "text", "ledger", "accounting", "bookkeeping", "finance", "budget", "currency", "parser"]
-categories = ["command-line-utilities"]
+keywords = ["cli", "terminal", "ledger", "accounting", "finance"]
+categories = ["command-line-utilities", "parsing", "text-processing"]
 repository = "https://github.com/rudolfschmidt/acc"
 readme = "README.md"
+include = [ "**/*.rs" ]
 
 [dependencies]
 colored = "1.9.3"
 num = "0.1.39"
-
