@@ -1,0 +1,12 @@
+2020-01-01 (123) opening balances
+    assets:checking           $1234.00
+    equity
+
+2020-03-15 (456) client payment
+    assets:checking           $2000.00
+    income:consulting
+
+2020-03-20 (789) Sprouts
+    expenses:food:groceries   $100.00
+    assets:cash                $40.00
+    assets:checking
