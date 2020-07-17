@@ -42,6 +42,7 @@ Record transactions in a plain text file using your favorite texteditor
 Use one of the listed commands below.
 
 ### Commands
+
 #### Balance Report
 
 ```
@@ -89,6 +90,7 @@ $ acc -f [file] [reg|register]
 ```
 $ acc -f demo.ledger reg 
 ```
+
 ```
 2020-01-01 opening balances    assets:checking            $ 1234.001       $1234.00
                                equity                     $-1234.001       $   0.00
@@ -108,11 +110,13 @@ $ acc -f [file] [print] [--eval|--raw]
 ```
 
 ##### Evaluated Print Report
+
 It interprets the posting amounts and fill them with useful numbers
 
 ```
 $ acc -f demo.ledger print --eval
 ```
+
 ```
 2020-01-01 opening balances
 	assets:checking            $ 1234.00
@@ -127,11 +131,15 @@ $ acc -f demo.ledger print --eval
 	assets:cash                $ 40.00
 	assets:checking            $-140.00
 ```
+
 ##### Raw Print Report
+
 It prints the data how it is but just formated. Useful when you want to format your ledger files.
+
 ```
 $ acc -f demo.ledger print --raw
 ```
+
 ```
 2020-01-01 opening balances
 	assets:checking            $ 1234.00
@@ -158,6 +166,7 @@ $ acc -f demo.ledger accounts [--tree|--flat]
 ```
 
 ##### Tree Output
+
 ```
 $ acc -f demo.ledger accounts --tree
 ```
@@ -169,6 +178,7 @@ Future Planed...
 ```
 $ acc -f demo.ledger accounts --flat
 ```
+
 ```
 assets:cash
 assets:checking
