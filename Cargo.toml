@@ -9,7 +9,6 @@ keywords = ["cli", "terminal", "ledger", "accounting", "finance"]
 categories = ["command-line-utilities", "parsing", "text-processing"]
 repository = "https://github.com/rudolfschmidt/acc"
 readme = "README.md"
-exclude = [ "**/*.*" ]
 include = [ "**/*.rs" ]
 
 [dependencies]
