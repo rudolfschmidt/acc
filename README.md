@@ -202,6 +202,8 @@ acc -f demo.ledger codes
 ```
 
 ## ToDo
+* Add support for expressions
+* Add support for periodic transactions
 * Implementing a yaml file format
 
 ## References
