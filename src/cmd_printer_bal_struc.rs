@@ -1,8 +1,8 @@
+use super::cmd_printer::format_amount;
+use super::cmd_printer_bal::group_postings_by_account;
+use super::cmd_printer_bal::print_commodity_amount;
 use super::model::BalancedPosting;
 use super::model::Transaction;
-use super::printer::format_amount;
-use super::printer_bal::group_postings_by_account;
-use super::printer_bal::print_commodity_amount;
 
 use colored::Colorize;
 use num::Zero;

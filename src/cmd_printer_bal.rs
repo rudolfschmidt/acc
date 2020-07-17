@@ -1,6 +1,6 @@
+use super::cmd_printer;
 use super::model::BalancedPosting;
 use super::model::Transaction;
-use super::printer;
 
 use colored::Colorize;
 use num::Signed;
@@ -42,7 +42,7 @@ pub fn print_commodity_amount(
 	amount: &num::rational::Rational64,
 	amount_width: usize,
 ) {
-	let value = &printer::format_amount(amount);
+	let value = &cmd_printer::format_amount(amount);
 	if amount.is_negative() {
 		print!(
 			"{:>w$} ",

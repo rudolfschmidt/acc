@@ -59,12 +59,15 @@ pub fn print(ledger: &Ledger) -> Result<(), String> {
 				.or_insert(posting.amount);
 			let mut total_format = BTreeMap::new();
 			for (commoity, amount) in &total {
-				total_format.insert(commoity.to_owned(), super::printer::format_amount(&amount));
+				total_format.insert(
+					commoity.to_owned(),
+					super::cmd_printer::format_amount(&amount),
+				);
 			}
 			row.accounts.push(Account {
 				name: posting.account.to_owned(),
 				commodity: posting.commodity.to_owned(),
-				amount: super::printer::format_amount(&posting.amount),
+				amount: super::cmd_printer::format_amount(&posting.amount),
 				total: total_format,
 			});
 		}

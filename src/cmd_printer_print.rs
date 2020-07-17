@@ -26,7 +26,7 @@ pub fn print(ledger: &Ledger) -> Result<(), String> {
 		print_comments(&transaction);
 		for posting in &transaction.postings {
 			print_posting_amount(account_width, &posting.account);
-			let formatted_amount = super::printer::format_amount(&posting.amount);
+			let formatted_amount = super::cmd_printer::format_amount(&posting.amount);
 			print!(
 				"{}{}",
 				posting.commodity,
@@ -66,7 +66,7 @@ pub fn print_raw(ledger: &Ledger) -> Result<(), String> {
 		for posting in &transaction.postings {
 			print_posting_amount(account_width, &posting.account);
 			if let Some(amount) = posting.amount {
-				let formatted_amount = super::printer::format_amount(&amount);
+				let formatted_amount = super::cmd_printer::format_amount(&amount);
 				print!(
 					"{}{}",
 					posting.commodity.as_ref().unwrap(),
