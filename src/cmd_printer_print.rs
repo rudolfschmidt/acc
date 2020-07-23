@@ -114,7 +114,7 @@ fn print_head<T>(transaction: &Transaction<T>) {
 
 fn print_comments<T>(transaction: &Transaction<T>) {
 	for comment in &transaction.comments {
-		println!("{}{}", INDENT, comment.comment);
+		println!("{}; {}", INDENT, comment.comment);
 	}
 }
 
