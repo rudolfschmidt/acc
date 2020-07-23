@@ -1,9 +1,8 @@
+use super::errors::Error;
 use super::model::State;
 use super::model::Token;
 
-struct Error {}
-
-pub fn read_lines(file: &str, content: &str, tokens: &mut Vec<Token>) -> Result<(), String> {
+pub fn read_lines(content: &str, tokens: &mut Vec<Token>) -> Result<(), Error> {
 	let mut lexer = Lexer {
 		tokens,
 		content,
@@ -17,7 +16,6 @@ pub fn read_lines(file: &str, content: &str, tokens: &mut Vec<Token>) -> Result<
 		Err(_) => {
 			let mut msg = String::new();
 
-			msg.push_str(&format!("Lexer Error in {:?}\n", file));
 			msg.push_str(&format!(
 				"{} : {}\n",
 				lexer.line_index + 1,
@@ -40,7 +38,10 @@ pub fn read_lines(file: &str, content: &str, tokens: &mut Vec<Token>) -> Result<
 
 			msg.push('^');
 
-			Err(msg)
+			Err(Error {
+				line: lexer.line_index + 1,
+				message: msg,
+			})
 		}
 	}
 }
@@ -55,7 +56,7 @@ struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-	fn create_tokens(&mut self) -> Result<(), Error> {
+	fn create_tokens(&mut self) -> Result<(), ()> {
 		for (line_index, line_str) in self.content.lines().enumerate() {
 			self.line_str = line_str;
 			self.line_chars = line_str.chars().collect();
@@ -66,13 +67,17 @@ impl<'a> Lexer<'a> {
 		Ok(())
 	}
 
-	fn toknize_transaction_header(&mut self) -> Result<(), Error> {
+	fn toknize_transaction_header(&mut self) -> Result<(), ()> {
 		match self.line_chars.get(self.line_pos) {
 			None => {
 				return Ok(());
 			}
-			Some(c) => {
-				if c.is_whitespace() {
+			Some(_) => {
+				if self.is_tab(self.line_pos)
+					|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
+				{
+					self.consume_whitespaces();
+					self.toknize_transaction_comment()?;
 					self.toknize_transaction_posting()?;
 				} else {
 					self.toknize_transaction_date()?;
@@ -85,7 +90,32 @@ impl<'a> Lexer<'a> {
 		Ok(())
 	}
 
-	fn toknize_transaction_date(&mut self) -> Result<(), Error> {
+	fn is_space(&mut self, pos: usize) -> bool {
+		match self.line_chars.get(pos) {
+			None => false,
+			Some(c) if *c == ' ' => true,
+			Some(_) => false,
+		}
+	}
+
+	fn is_tab(&mut self, pos: usize) -> bool {
+		match self.line_chars.get(pos) {
+			None => false,
+			Some(c) if *c == '\t' => true,
+			Some(_) => false,
+		}
+	}
+
+	fn consume_whitespaces(&mut self) {
+		while let Some(c) = self.line_chars.get(self.line_pos) {
+			if !c.is_whitespace() {
+				break;
+			}
+			self.line_pos += 1;
+		}
+	}
+
+	fn toknize_transaction_date(&mut self) -> Result<(), ()> {
 		let mut value = String::new();
 		self.is_numeric(&mut value)?;
 		self.is_numeric(&mut value)?;
@@ -103,12 +133,12 @@ impl<'a> Lexer<'a> {
 		Ok(())
 	}
 
-	fn is_numeric(&mut self, value: &mut String) -> Result<(), Error> {
+	fn is_numeric(&mut self, value: &mut String) -> Result<(), ()> {
 		match self.line_chars.get(self.line_pos) {
-			None => return Err(Error {}),
+			None => return Err(()),
 			Some(c) => {
 				if !c.is_numeric() {
-					return Err(Error {});
+					return Err(());
 				} else {
 					value.push(*c);
 					self.line_pos += 1;
@@ -118,14 +148,14 @@ impl<'a> Lexer<'a> {
 		Ok(())
 	}
 
-	fn is_dash(&mut self, value: &mut String) -> Result<(), Error> {
+	fn is_dash(&mut self, value: &mut String) -> Result<(), ()> {
 		match self.line_chars.get(self.line_pos) {
 			None => {
-				return Err(Error {});
+				return Err(());
 			}
 			Some(c) => {
 				if '-' != *c {
-					return Err(Error {});
+					return Err(());
 				} else {
 					value.push(*c);
 					self.line_pos += 1;
@@ -135,14 +165,14 @@ impl<'a> Lexer<'a> {
 		Ok(())
 	}
 
-	fn toknize_transaction_state(&mut self) -> Result<(), Error> {
+	fn toknize_transaction_state(&mut self) -> Result<(), ()> {
 		match self.line_chars.get(self.line_pos) {
 			None => {
-				return Err(Error {});
+				return Err(());
 			}
 			Some(c) => {
 				if !c.is_whitespace() {
-					return Err(Error {});
+					return Err(());
 				} else {
 					self.line_pos += 1;
 				}
@@ -150,7 +180,7 @@ impl<'a> Lexer<'a> {
 		}
 		match self.line_chars.get(self.line_pos) {
 			None => {
-				return Err(Error {});
+				return Err(());
 			}
 			Some(c) => match c {
 				'*' => {
@@ -175,7 +205,7 @@ impl<'a> Lexer<'a> {
 		Ok(())
 	}
 
-	fn toknize_transaction_code(&mut self) -> Result<(), Error> {
+	fn toknize_transaction_code(&mut self) -> Result<(), ()> {
 		match self.line_chars.get(self.line_pos) {
 			None => {
 				return Ok(());
@@ -190,7 +220,7 @@ impl<'a> Lexer<'a> {
 				let mut value = String::new();
 				match self.line_chars.get(self.line_pos) {
 					None => {
-						return Err(Error {});
+						return Err(());
 					}
 					Some(&c) => {
 						value.push(c);
@@ -213,10 +243,10 @@ impl<'a> Lexer<'a> {
 		Ok(())
 	}
 
-	fn toknize_transaction_description(&mut self) -> Result<(), Error> {
+	fn toknize_transaction_description(&mut self) -> Result<(), ()> {
 		match self.line_chars.get(self.line_pos) {
 			None => {
-				return Err(Error {});
+				return Err(());
 			}
 			Some(_) => {
 				self.consume_whitespaces();
@@ -233,159 +263,141 @@ impl<'a> Lexer<'a> {
 		Ok(())
 	}
 
-	fn consume_whitespaces(&mut self) {
-		while self.line_pos < self.line_chars.len() {
-			if !self.line_chars[self.line_pos].is_whitespace() {
-				break;
-			}
-			self.line_pos += 1;
-		}
-	}
-
-	fn toknize_transaction_posting(&mut self) -> Result<(), Error> {
-		match self.line_chars.get(self.line_pos) {
-			None => return Ok(()),
-			Some(c) if !c.is_whitespace() => return Err(Error {}),
-			Some(_) => {}
-		}
-		while self.line_pos < self.line_chars.len() {
-			if !self.line_chars[self.line_pos].is_whitespace() {
-				break;
-			}
-			self.line_pos += 1;
-		}
-		match self.line_chars.get(self.line_pos) {
-			None => {}
-			Some(c) if *c == ';' => {
+	fn toknize_transaction_comment(&mut self) -> Result<(), ()> {
+		if let Some(&c) = self.line_chars.get(self.line_pos) {
+			if c == ';' {
 				self.line_pos += 1;
-				while self.line_pos < self.line_chars.len() {
-					if !self.line_chars[self.line_pos].is_whitespace() {
-						break;
-					}
-					self.line_pos += 1;
-				}
+				self.consume_whitespaces();
 				let mut value = String::new();
-				while self.line_pos < self.line_chars.len() {
-					value.push(self.line_chars[self.line_pos]);
+				while let Some(&c) = self.line_chars.get(self.line_pos) {
+					value.push(c);
 					self.line_pos += 1;
 				}
 				self
 					.tokens
 					.push(Token::TransactionComment(self.line_index, value));
-				return Ok(());
 			}
-			Some(_) => {}
 		}
+		Ok(())
+	}
+
+	fn toknize_transaction_posting(&mut self) -> Result<(), ()> {
+		if self.line_chars.get(self.line_pos).is_none() {
+			return Ok(());
+		}
+
 		let mut value = String::new();
-		while self.line_pos < self.line_chars.len() {
+
+		while let Some(&c) = self.line_chars.get(self.line_pos) {
 			if self.is_tab(self.line_pos)
 				|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
 			{
 				self
 					.tokens
 					.push(Token::PostingAccount(self.line_index, value));
-				return self.posting_mixed_amounts();
+				self.posting_commodity()?;
+				return self.balance_assertion();
 			}
-			value.push(self.line_chars[self.line_pos]);
+			value.push(c);
 			self.line_pos += 1;
 		}
+
 		self
 			.tokens
 			.push(Token::PostingAccount(self.line_index, value));
+
 		Ok(())
 	}
 
-	fn is_space(&mut self, pos: usize) -> bool {
-		match self.line_chars.get(pos) {
-			None => false,
-			Some(c) if *c == ' ' => true,
-			Some(_) => false,
-		}
-	}
-
-	fn is_tab(&mut self, pos: usize) -> bool {
-		match self.line_chars.get(pos) {
-			None => false,
-			Some(c) if *c == '\t' => true,
-			Some(_) => false,
-		}
-	}
-
-	fn posting_mixed_amounts(&mut self) -> Result<(), Error> {
-		while self.line_pos < self.line_chars.len() {
-			if !self.line_chars[self.line_pos].is_whitespace() {
-				break;
-			}
-			self.line_pos += 1;
-		}
-		match self.line_chars.get(self.line_pos) {
-			None => Ok(()),
-			Some(_) => {
-				self.posting_commodity()?;
-				self.posting_amount()?;
-				Ok(())
+	fn balance_assertion(&mut self) -> Result<(), ()> {
+		if let Some(&c) = self.line_chars.get(self.line_pos) {
+			if c == '=' {
+				self.line_pos += 1;
+				self.tokens.push(Token::BalanceAssertion(self.line_index));
+				return if self.line_chars.get(self.line_pos).is_none() {
+					Err(())
+				} else {
+					self.posting_commodity()
+				};
 			}
 		}
-	}
-
-	fn posting_commodity(&mut self) -> Result<(), Error> {
-		let mut value = String::new();
-		while self.line_pos < self.line_chars.len() {
-			if self.line_chars[self.line_pos].is_numeric() || '-' == self.line_chars[self.line_pos] {
-				break;
-			}
-			value.push(self.line_chars[self.line_pos]);
-			self.line_pos += 1;
-		}
-		self
-			.tokens
-			.push(Token::PostingCommodity(self.line_index, value));
 		Ok(())
 	}
 
-	fn posting_amount(&mut self) -> Result<(), Error> {
+	fn posting_commodity(&mut self) -> Result<(), ()> {
 		if self.line_chars.get(self.line_pos).is_none() {
-			return Err(Error {});
+			return Ok(());
 		}
-		while self.line_pos < self.line_chars.len() {
-			if !self.line_chars[self.line_pos].is_whitespace() {
+
+		self.consume_whitespaces();
+
+		let mut value = String::new();
+
+		while let Some(&c) = self.line_chars.get(self.line_pos) {
+			if c == '-' || c.is_numeric() {
 				break;
 			}
+			value.push(c);
 			self.line_pos += 1;
 		}
+
+		if !value.is_empty() {
+			self
+				.tokens
+				.push(Token::PostingCommodity(self.line_index, value));
+		}
+
+		self.posting_amount()
+	}
+
+	fn posting_amount(&mut self) -> Result<(), ()> {
+		if self.line_chars.get(self.line_pos).is_none() {
+			return Err(());
+		}
+
 		let mut value = String::new();
-		if let Some(c) = self.line_chars.get(self.line_pos) {
-			if *c == '-' {
-				value.push(self.line_chars[self.line_pos]);
+
+		if let Some(&c) = self.line_chars.get(self.line_pos) {
+			if c == '-' {
+				value.push(c);
 				self.line_pos += 1;
 			}
 		}
-		while self.line_pos < self.line_chars.len() {
-			match self.line_chars[self.line_pos] {
-				c if c.is_numeric() => value.push(c),
-				c if c == '.' => match self.line_chars.get(self.line_pos + 1) {
-					None => return Err(Error {}),
-					Some(c) if !c.is_numeric() => return Err(Error {}),
-					Some(_) => {
-						value.push(c);
-						self.line_pos += 1;
-						break;
-					}
-				},
-				_ => return Err(Error {}),
+
+		match self.line_chars.get(self.line_pos) {
+			None => return Err(()),
+			Some(&c) if !c.is_numeric() => return Err(()),
+			Some(&c) => {
+				value.push(c);
+				self.line_pos += 1;
 			}
+		}
+
+		while let Some(&c) = self.line_chars.get(self.line_pos) {
+			if !c.is_numeric() && c != '.' {
+				break;
+			}
+			value.push(c);
 			self.line_pos += 1;
 		}
-		while self.line_pos < self.line_chars.len() {
-			if !self.line_chars[self.line_pos].is_numeric() {
-				return Err(Error {});
+
+		while let Some(&c) = self.line_chars.get(self.line_pos) {
+			if c == '=' {
+				break;
+			} else if c.is_whitespace() {
+				self.line_pos += 1;
+				continue;
+			} else if !c.is_numeric() {
+				return Err(());
 			}
-			value.push(self.line_chars[self.line_pos]);
+			value.push(c);
 			self.line_pos += 1;
 		}
+
 		self
 			.tokens
 			.push(Token::PostingAmount(self.line_index, value));
+
 		Ok(())
 	}
 }

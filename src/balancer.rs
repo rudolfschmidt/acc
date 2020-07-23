@@ -1,5 +1,7 @@
 extern crate num;
 
+use super::errors::Error;
+
 use super::model::BalancedPosting;
 use super::model::Comment;
 use super::model::Transaction;
@@ -9,10 +11,9 @@ use std::collections::HashSet;
 use std::ops::Neg;
 
 pub fn balance_transactions(
-	file: &str,
 	unbalanced_transactions: &[Transaction<UnbalancedPosting>],
 	balanced_transactions: &mut Vec<Transaction<BalancedPosting>>,
-) -> Result<(), String> {
+) -> Result<(), Error> {
 	for unbalanced_transaction in unbalanced_transactions {
 		let mut blanaced_postings = Vec::with_capacity(unbalanced_transaction.postings.len());
 		let mut balanced_empty_posting = false;
@@ -34,17 +35,19 @@ pub fn balance_transactions(
 				})
 			} else {
 				if balanced_empty_posting {
-					return Err(format!("While parsing file {:?}, line {}:\nOnly one posting with null amount allowed per transaction",
-					file,
-						unbalanced_posting.line + 1
-					));
+					return Err(Error {
+						line: unbalanced_posting.line + 1,
+						message: format!("Only one posting with null amount allowed per transaction",),
+					});
 				}
 				let total_commodities = total_commodities(&unbalanced_transaction);
 				if total_commodities.len() > 1 {
-					return Err(format!("While parsing file {:?}, line {}:\nMultiple commodities in transaction with a null amount posting not allowed",
-					file,
-						unbalanced_posting.line + 1
-					));
+					return Err(Error {
+						line: unbalanced_posting.line + 1,
+						message: format!(
+							"Multiple commodities in transaction with a null amount posting not allowed"
+						),
+					});
 				}
 				blanaced_postings.push(BalancedPosting {
 					account: unbalanced_posting.account.to_owned(),

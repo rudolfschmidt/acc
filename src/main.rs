@@ -8,14 +8,14 @@ mod cmd_printer_bal_struc;
 mod cmd_printer_print;
 mod cmd_printer_register;
 mod debuger;
+mod errors;
 mod lexer;
 mod model;
 mod parser;
-mod reader;
 
 use std::env;
 
-enum Command {
+pub enum Command {
 	Print,
 	Balance,
 	Register,
@@ -25,11 +25,11 @@ enum Command {
 }
 
 #[derive(PartialEq)]
-enum Argument {
+pub enum Argument {
 	Flat,
 	Tree,
 	Raw,
-	Evaluate,
+	Explicit,
 	DebugLexer,
 	DebugUnbalancedTransactions,
 	DebugBalancedTransactions,
@@ -57,7 +57,7 @@ fn start() -> Result<(), String> {
 			"--flat" => arguments.push(Argument::Flat),
 			"--tree" => arguments.push(Argument::Tree),
 			"--raw" => arguments.push(Argument::Raw),
-			"--evaluate" | "--eval" => arguments.push(Argument::Evaluate),
+			"--explicit" | "-x" => arguments.push(Argument::Explicit),
 			"--lexer" => arguments.push(Argument::DebugLexer),
 			"--unbalanced-transactions" => arguments.push(Argument::DebugUnbalancedTransactions),
 			"--balanced-transactions" => arguments.push(Argument::DebugBalancedTransactions),
@@ -79,12 +79,23 @@ fn start() -> Result<(), String> {
 					"Error : No file(s) reselected. Try --file <file> to select a file",
 				));
 			}
+
 			let mut ledger = model::Ledger {
 				journals: Vec::new(),
 			};
+
 			for file in files {
-				let journal = read_file(&command, &arguments, file)?;
-				ledger.journals.push(journal);
+				let mut journal = model::Journal {
+					file,
+					content: String::new(),
+					lexer_tokens: Vec::new(),
+					unbalanced_transactions: Vec::new(),
+					balanced_transactions: Vec::new(),
+				};
+				match read_file(&mut journal, &command, &arguments) {
+					Err(err) => return Err(err),
+					Ok(()) => ledger.journals.push(journal),
+				}
 			}
 			execute_command(ledger, command, arguments)
 		}
@@ -92,21 +103,39 @@ fn start() -> Result<(), String> {
 }
 
 fn read_file(
+	journal: &mut model::Journal,
 	command: &Command,
 	arguments: &[Argument],
-	file: String,
-) -> Result<model::Journal, String> {
-	let mut journal = model::Journal {
-		file,
-		content: String::new(),
-		lexer_tokens: Vec::new(),
-		unbalanced_transactions: Vec::new(),
-		balanced_transactions: Vec::new(),
-	};
+) -> Result<(), String> {
+	match std::fs::read_to_string(&journal.file) {
+		Err(err) => {
+			return Err(format!(
+				"While parsing \"{}\"\nError: {}",
+				&journal.file, err
+			))
+		}
+		Ok(data) => {
+			journal.content = data;
+		}
+	}
 
-	reader::read_file(&journal.file, &mut journal.content)?;
+	match parse_file(journal, command, arguments) {
+		Err(err) => {
+			return Err(format!(
+				"While parsing file \"{}\" at line {}\n{}",
+				journal.file, err.line, err.message
+			))
+		}
+		Ok(()) => Ok(()),
+	}
+}
 
-	lexer::read_lines(&journal.file, &journal.content, &mut journal.lexer_tokens)?;
+fn parse_file(
+	journal: &mut model::Journal,
+	command: &Command,
+	arguments: &[Argument],
+) -> Result<(), errors::Error> {
+	lexer::read_lines(&journal.content, &mut journal.lexer_tokens)?;
 
 	if let Command::Debug = command {
 		if arguments.contains(&Argument::DebugLexer) {
@@ -126,7 +155,6 @@ fn read_file(
 	}
 
 	balancer::balance_transactions(
-		&journal.file,
 		&journal.unbalanced_transactions,
 		&mut journal.balanced_transactions,
 	)?;
@@ -137,7 +165,7 @@ fn read_file(
 		}
 	}
 
-	Ok(journal)
+	Ok(())
 }
 
 fn execute_command(
@@ -173,26 +201,26 @@ fn execute_command(
 			cmd_printer_register::print(&ledger)?;
 		}
 		Command::Print => {
-			if !arguments.contains(&Argument::Raw) {
-				arguments.push(Argument::Evaluate);
-			}
 			if arguments.contains(&Argument::Raw) {
-				cmd_printer_print::print_raw(&ledger)?
+				return cmd_printer_print::print_raw(&ledger);
 			}
-			if arguments.contains(&Argument::Evaluate) {
-				cmd_printer_print::print(&ledger)?
+			if arguments.contains(&Argument::Explicit) {
+				return cmd_printer_print::print(&ledger);
+			}
+			if !arguments.contains(&Argument::Explicit) {
+				return cmd_printer_print::print_raw(&ledger);
 			}
 		}
 		Command::Debug => {}
 		Command::Accounts => {
-			if !arguments.contains(&Argument::Flat) {
-				arguments.push(Argument::Tree);
-			}
 			if arguments.contains(&Argument::Flat) {
-				cmd_accounts::print_accounts_flat(&ledger)?
+				return cmd_accounts::print_accounts_flat(&ledger);
 			}
 			if arguments.contains(&Argument::Tree) {
-				cmd_accounts::print_accounts_tree(&ledger)?
+				return cmd_accounts::print_accounts_tree(&ledger);
+			}
+			if !arguments.contains(&Argument::Flat) {
+				return cmd_accounts::print_accounts_tree(&ledger);
 			}
 		}
 		Command::Codes => cmd_codes::print_codes(&ledger)?,

@@ -1,26 +1,13 @@
 extern crate num;
 
+use super::errors::Error;
+
 use super::model::Comment;
 use super::model::Token;
 use super::model::Transaction;
 use super::model::UnbalancedPosting;
 
-#[derive(Debug)]
-struct Error {
-	message: String,
-}
-
 pub fn parse_unbalanced_transactions(
-	tokens: &[Token],
-	transactions: &mut Vec<Transaction<UnbalancedPosting>>,
-) -> Result<(), String> {
-	match parse(tokens, transactions) {
-		Err(err) => Err(format!("Parse Error : {}", err.message)),
-		Ok(()) => Ok(()),
-	}
-}
-
-fn parse(
 	tokens: &[Token],
 	transactions: &mut Vec<Transaction<UnbalancedPosting>>,
 ) -> Result<(), Error> {
@@ -29,14 +16,26 @@ fn parse(
 		transactions,
 		index: 0,
 	};
-
-	while parser.index < tokens.len() {
-		parser.parse_transaction_header()?;
-		parser.parse_transaction_comment()?;
-		parser.parse_posting()?;
+	match parser.parse() {
+		Err(message) => Err(Error {
+			line: match parser.tokens.get(parser.index) {
+				None => parser.index + 1,
+				Some(token) => match token {
+					Token::TransactionDate(line, _value) => *line,
+					Token::TransactionState(line, _value) => *line,
+					Token::TransactionCode(line, _value) => *line,
+					Token::TransactionDescription(line, _value) => *line,
+					Token::TransactionComment(line, _value) => *line,
+					Token::PostingAccount(line, _value) => *line,
+					Token::PostingCommodity(line, _value) => *line,
+					Token::PostingAmount(line, _value) => *line,
+					Token::BalanceAssertion(line) => *line,
+				},
+			},
+			message: format!("Parse Error : {}", message),
+		}),
+		Ok(()) => Ok(()),
 	}
-
-	Ok(())
 }
 
 struct Parser<'a> {
@@ -46,57 +45,69 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-	fn parse_transaction_header(&mut self) -> Result<(), Error> {
-		let date;
-		let line;
-
-		match self.tokens.get(self.index).unwrap() {
-			Token::TransactionDate(file_line, value) => {
-				self.index += 1;
-				line = file_line;
-				date = value.to_owned();
-			}
-			_ => return Ok(()),
-		}
-
-		let state;
-		match self.tokens.get(self.index).unwrap() {
-			Token::TransactionState(_, value) => {
-				self.index += 1;
-				state = value.clone();
-			}
-			_ => panic!("transaction state expected"),
-		}
-
-		let mut code: Option<String> = None;
-		if let Token::TransactionCode(_, value) = self.tokens.get(self.index).unwrap() {
+	fn parse(&mut self) -> Result<(), String> {
+		while self.index < self.tokens.len() {
+			self.parse_transaction_header()?;
+			self.parse_transaction_comment()?;
+			self.parse_posting()?;
 			self.index += 1;
-			code = Some(value.to_owned());
 		}
-
-		let description;
-		match self.tokens.get(self.index).unwrap() {
-			Token::TransactionDescription(_, value) => {
-				self.index += 1;
-				description = value.to_owned();
-			}
-			_ => panic!("transaction description expected"),
-		}
-
-		self.transactions.push(Transaction {
-			line: *line,
-			date: date,
-			state: state,
-			code: code,
-			description: description,
-			comments: Vec::new(),
-			postings: Vec::new(),
-		});
-
 		Ok(())
 	}
 
-	fn parse_transaction_comment(&mut self) -> Result<(), Error> {
+	fn parse_transaction_header(&mut self) -> Result<(), String> {
+		if let Some(token) = self.tokens.get(self.index) {
+			if let Token::TransactionDate(line, date) = token {
+				self.index += 1;
+
+				let state = if let Some(token) = self.tokens.get(self.index) {
+					if let Token::TransactionState(_, state) = token {
+						self.index += 1;
+						state.to_owned()
+					} else {
+						Err(format!(""))?
+					}
+				} else {
+					Err(format!(""))?
+				};
+
+				let code = if let Some(token) = self.tokens.get(self.index) {
+					if let Token::TransactionCode(_, code) = token {
+						self.index += 1;
+						Some(code.to_owned())
+					} else {
+						None
+					}
+				} else {
+					Err(format!(""))?
+				};
+
+				let description = if let Some(token) = self.tokens.get(self.index) {
+					if let Token::TransactionDescription(_, description) = token {
+						self.index += 1;
+						description.to_owned()
+					} else {
+						Err(format!(""))?
+					}
+				} else {
+					Err(format!(""))?
+				};
+
+				self.transactions.push(Transaction {
+					line: *line,
+					date: date.to_owned(),
+					state: state,
+					code: code,
+					description: description,
+					comments: Vec::new(),
+					postings: Vec::new(),
+				});
+			}
+		}
+		Ok(())
+	}
+
+	fn parse_transaction_comment(&mut self) -> Result<(), String> {
 		if let Some(token) = self.tokens.get(self.index) {
 			if let Token::TransactionComment(line, value) = token {
 				self
@@ -114,24 +125,33 @@ impl<'a> Parser<'a> {
 		Ok(())
 	}
 
-	fn parse_posting(&mut self) -> Result<(), Error> {
-		let line;
-		let account;
+	fn parse_posting(&mut self) -> Result<(), String> {
+		if let Some(token) = self.tokens.get(self.index) {
+			if let Token::PostingAccount(line, account) = token {
+				self.index += 1;
 
-		match self.tokens.get(self.index) {
-			None => return Ok(()),
-			Some(token) => match token {
-				Token::PostingAccount(file_line, value) => {
-					self.index += 1;
-					line = file_line;
-					account = value;
-				}
-				_ => return Ok(()),
-			},
-		};
+				let commodity = if let Some(token) = self.tokens.get(self.index) {
+					if let Token::PostingCommodity(_line, commodity) = token {
+						self.index += 1;
+						Some(commodity.to_owned())
+					} else {
+						None
+					}
+				} else {
+					None
+				};
 
-		match self.tokens.get(self.index) {
-			None => {
+				let amount = if let Some(token) = self.tokens.get(self.index) {
+					if let Token::PostingAmount(_line, amount) = token {
+						self.index += 1;
+						Some(create_rational(&amount)?)
+					} else {
+						None
+					}
+				} else {
+					None
+				};
+
 				self
 					.transactions
 					.last_mut()
@@ -140,72 +160,17 @@ impl<'a> Parser<'a> {
 					.push(UnbalancedPosting {
 						line: *line,
 						account: account.to_owned(),
-						commodity: None,
-						amount: None,
+						commodity: commodity,
+						amount: amount,
 						comments: Vec::new(),
 					});
-				return Ok(());
 			}
-			Some(token) => match token {
-				Token::PostingCommodity(_value, _line) => {}
-				_ => {
-					self
-						.transactions
-						.last_mut()
-						.unwrap()
-						.postings
-						.push(UnbalancedPosting {
-							line: *line,
-							account: account.to_owned(),
-							commodity: None,
-							amount: None,
-							comments: Vec::new(),
-						});
-					return Ok(());
-				}
-			},
 		}
-
-		let commodity = match self.tokens.get(self.index) {
-			None => panic!("posting commodity not found"),
-			Some(token) => match token {
-				Token::PostingCommodity(_line, value) => {
-					self.index += 1;
-					value
-				}
-				_ => panic!("not a posting commodity"),
-			},
-		};
-
-		let amount = match self.tokens.get(self.index) {
-			None => panic!("posting amount not found"),
-			Some(token) => match token {
-				Token::PostingAmount(_line, value) => {
-					self.index += 1;
-					value
-				}
-				_ => panic!("not a posting amount"),
-			},
-		};
-
-		self
-			.transactions
-			.last_mut()
-			.unwrap()
-			.postings
-			.push(UnbalancedPosting {
-				line: *line,
-				account: account.to_owned(),
-				commodity: Some(commodity.to_owned()),
-				amount: Some(create_rational(&amount)?),
-				comments: Vec::new(),
-			});
-
 		Ok(())
 	}
 }
 
-fn create_rational(value: &str) -> Result<num::rational::Rational64, Error> {
+fn create_rational(value: &str) -> Result<num::rational::Rational64, String> {
 	let (_, right) = if let Some(index) = value.find('.') {
 		let (left, right) = value.split_at(index);
 		let right = right.chars().skip(1).collect::<String>();

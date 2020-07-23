@@ -20,6 +20,7 @@ pub enum Token {
 	PostingAccount(usize, String),
 	PostingCommodity(usize, String),
 	PostingAmount(usize, String),
+	BalanceAssertion(usize),
 }
 
 #[derive(Debug, Clone)]
