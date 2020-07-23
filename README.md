@@ -19,8 +19,19 @@ The order of the command line arguments does not matter. They are parsed first a
 
 With [cargo](https://github.com/rust-lang/cargo):
 
+Stable:
+
 ```
 cargo install acc
+```
+
+Dev:
+
+```
+git clone https://github.com/rudolfschmidt/acc
+cd acc
+cargo build --release 
+./target/release/acc -f demo.ledger print
 ```
 
 #### Create Ledger File
