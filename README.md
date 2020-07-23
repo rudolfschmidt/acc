@@ -119,10 +119,33 @@ $ acc -f demo.ledger reg
 ##### Syntax
 
 ```
-$ acc -f [file] [print] [--eval|--raw]
+$ acc -f [file] [print] [--raw|--explicit]
 ```
 
-##### Evaluated Print Report
+##### Raw Print Report
+
+It prints the data how it is but just formated. Useful when you want to format your ledger files. (Default choice)
+
+```
+$ acc -f demo.ledger print --raw
+```
+
+```
+2020-01-01 opening balances
+	assets:checking            $ 1234.00
+	equity
+
+2020-03-15 client payment
+	assets:checking            $ 2000.00
+	income:consulting
+
+2020-03-20 Sprouts
+	expenses:food:groceries    $ 100.00
+	assets:cash                $ 40.00
+	assets:checking
+```
+
+##### Explicit Print Report
 
 It interprets the posting amounts and fill them with useful numbers
 
@@ -143,29 +166,6 @@ $ acc -f demo.ledger print --eval
 	expenses:food:groceries    $ 100.00
 	assets:cash                $ 40.00
 	assets:checking            $-140.00
-```
-
-##### Raw Print Report
-
-It prints the data how it is but just formated. Useful when you want to format your ledger files.
-
-```
-$ acc -f demo.ledger print --raw
-```
-
-```
-2020-01-01 opening balances
-	assets:checking            $ 1234.00
-	equity
-
-2020-03-15 client payment
-	assets:checking            $ 2000.00
-	income:consulting
-
-2020-03-20 Sprouts
-	expenses:food:groceries    $ 100.00
-	assets:cash                $ 40.00
-	assets:checking
 ```
 
 #### Accounts Report
