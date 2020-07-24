@@ -25,15 +25,13 @@ pub fn print(transactions: Vec<&Transaction<BalancedPosting>>) -> Result<(), Str
 			},
 		);
 
-	let width = postings
-		.values()
-		.flat_map(|a| a.iter())
-		.map(|(k, v)| k.chars().count() + format_amount(&v).chars().count())
-		.max()
-		.unwrap_or(0);
-
 	let width = std::cmp::max(
-		width,
+		postings
+			.values()
+			.flat_map(|a| a.iter())
+			.map(|(k, v)| k.chars().count() + format_amount(&v).chars().count())
+			.max()
+			.unwrap_or(0),
 		total
 			.iter()
 			.map(|(c, a)| c.chars().count() + format_amount(&a).chars().count())
