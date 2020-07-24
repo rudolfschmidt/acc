@@ -183,7 +183,7 @@ $ acc -f demo.ledger print --raw
 It interprets the posting amounts and fill them with useful numbers
 
 ```
-$ acc -f demo.ledger print --eval
+$ acc -f demo.ledger print --explicit
 ```
 
 ```
