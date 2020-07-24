@@ -88,6 +88,8 @@ $ acc -f demo.ledger bal --flat
 $-1234.00 equity
   $100.00 expenses:food:groceries
 $-2000.00 income:consulting
+---------
+        0
 ```
 
 #### Register Report

@@ -55,40 +55,6 @@ impl<'a> Parser<'a> {
 		Ok(())
 	}
 
-	fn handle_balance_assertion(&mut self) -> Result<(), String> {
-		if let Some(token) = self.tokens.get(self.index) {
-			if let Token::BalanceAssertion(_line) = token {
-				self.index += 1;
-
-				let commodity = match self.tokens.get(self.index) {
-					None => None,
-					Some(token) => match token {
-						Token::PostingCommodity(_, commodity) => {
-							self.index += 1;
-							Some(commodity.to_owned())
-						}
-						_ => None,
-					},
-				};
-
-				let amount = match self.tokens.get(self.index) {
-					None => None,
-					Some(token) => match token {
-						Token::PostingAmount(_, amount) => {
-							self.index += 1;
-							Some(create_rational(&amount)?)
-						}
-						_ => None,
-					},
-				};
-
-				println!("{:?}", commodity);
-				println!("{:?}", amount);
-			}
-		}
-		Ok(())
-	}
-
 	fn parse_transaction_header(&mut self) -> Result<(), String> {
 		if let Some(token) = self.tokens.get(self.index) {
 			if let Token::TransactionDate(line, date) = token {
@@ -198,6 +164,40 @@ impl<'a> Parser<'a> {
 						amount: amount,
 						comments: Vec::new(),
 					});
+			}
+		}
+		Ok(())
+	}
+
+	fn handle_balance_assertion(&mut self) -> Result<(), String> {
+		if let Some(token) = self.tokens.get(self.index) {
+			if let Token::BalanceAssertion(_line) = token {
+				self.index += 1;
+
+				let commodity = match self.tokens.get(self.index) {
+					None => None,
+					Some(token) => match token {
+						Token::PostingCommodity(_, commodity) => {
+							self.index += 1;
+							Some(commodity.to_owned())
+						}
+						_ => None,
+					},
+				};
+
+				let amount = match self.tokens.get(self.index) {
+					None => None,
+					Some(token) => match token {
+						Token::PostingAmount(_, amount) => {
+							self.index += 1;
+							Some(create_rational(&amount)?)
+						}
+						_ => None,
+					},
+				};
+
+				println!("{:?}", commodity);
+				println!("{:?}", amount);
 			}
 		}
 		Ok(())
