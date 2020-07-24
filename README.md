@@ -255,11 +255,11 @@ acc -f demo.ledger codes
 
 ## FAQ
 ### Why should you track your money?
-Whatever you do not respect your life, you will lose it. If you do not respect your money, you will not have any, simple as that. Money needs care and attention. Another reason is to have control over your life. Which cost exist, why they exist, and is the amount correct. You cannot believe how many times institutions charged me wrong and I only found out because of a careful track of my numbers. 
+* Whatever you respect in your life, stays; whatever you do not respect, goes. If you do not respect your money, you will have a hard time to keep it. It will run away in direction you do not know. Money needs care and attention like everything valuable else. The best way to care is by knowing your finances.
 
-Another important reason is to become able to make decisions based on financial data instead of feelings.
+* Another reason is to have control over your life. Which cost exist, why they exist, and the most important question, is the amount correct. You cannot believe how many times I got invoices with different numbers that I had to complain for. If the time difference are some days, you can do it manually, but try to remember which number you got if the difference are months or even one year. Some institutions hope that you forget them and they can trick you by sending invoices with different amounts to look like that they just sent you a copy.
 
-A simple real-life scenario is to decide if you can afford to eat outside or you should cook at home because it seems simple. Track your groceries and see how much you "eat" on a daily base on average, then you may find out that going out to eat is not that expensive that you might think.
+* Another important reasons, maybe the most important, is to be able to take decisions based on financial data rather than on temporary feelings. A simple real-life scenario could be the question if you spent your money to go out and eat food at a restaurant or save some bucks by eating at home. Track your grocery costs and calculate the daily average and you get suprised how much you "eat at home". Eating outside will not look expensive anymore I bet.
 
 ## ToDo
 * Add support for expressions
