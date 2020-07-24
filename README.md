@@ -1,9 +1,6 @@
 # acc
 acc(ounting) is a plaintext double-entry accounting command line tool. 
 
-## Warning
-acc is currently in beta and not for production ready
-
 ## About
 acc tracks commodities like fiat money or crypto currencies using a strict following of the double-entry accounting principles. It is inspired by ledger(1) and hledger(2) and uses the ledger file format.
 
@@ -224,7 +221,6 @@ acc -f demo.ledger codes
 ```
 
 ## ToDo
-* Add transaction balance check
 * Add support for expressions
 * Add support for periodic transactions
 * Add support for the yaml file format
