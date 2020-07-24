@@ -24,5 +24,18 @@ pub fn print(transactions: Vec<&Transaction<BalancedPosting>>) -> Result<(), Str
 		}
 		println!("{}", account.blue());
 	}
+	for _ in 0..width {
+		print!("-");
+	}
+	println!();
+
+	// if account.amounts.iter().all(|(_, a)| a.is_zero()) {
+	// 	println!("{:>w$} ", 0, w = amount_width);
+	// 	return;
+	// }
+	// account.amounts.iter().for_each(|(commodity, amount)| {
+	// 	print_commodity_amount(commodity, amount, amount_width);
+	// 	println!();
+	// });
 	Ok(())
 }

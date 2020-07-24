@@ -50,7 +50,41 @@ impl<'a> Parser<'a> {
 			self.parse_transaction_header()?;
 			self.parse_transaction_comment()?;
 			self.parse_posting()?;
-			self.index += 1;
+			self.handle_balance_assertion()?;
+		}
+		Ok(())
+	}
+
+	fn handle_balance_assertion(&mut self) -> Result<(), String> {
+		if let Some(token) = self.tokens.get(self.index) {
+			if let Token::BalanceAssertion(_line) = token {
+				self.index += 1;
+
+				let commodity = match self.tokens.get(self.index) {
+					None => None,
+					Some(token) => match token {
+						Token::PostingCommodity(_, commodity) => {
+							self.index += 1;
+							Some(commodity.to_owned())
+						}
+						_ => None,
+					},
+				};
+
+				let amount = match self.tokens.get(self.index) {
+					None => None,
+					Some(token) => match token {
+						Token::PostingAmount(_, amount) => {
+							self.index += 1;
+							Some(create_rational(&amount)?)
+						}
+						_ => None,
+					},
+				};
+
+				println!("{:?}", commodity);
+				println!("{:?}", amount);
+			}
 		}
 		Ok(())
 	}
@@ -60,37 +94,37 @@ impl<'a> Parser<'a> {
 			if let Token::TransactionDate(line, date) = token {
 				self.index += 1;
 
-				let state = if let Some(token) = self.tokens.get(self.index) {
-					if let Token::TransactionState(_, state) = token {
-						self.index += 1;
-						state.to_owned()
-					} else {
-						Err(format!(""))?
-					}
-				} else {
-					Err(format!(""))?
+				let state = match self.tokens.get(self.index) {
+					None => return Err(format!("")),
+					Some(token) => match token {
+						Token::TransactionState(_, state) => {
+							self.index += 1;
+							state.to_owned()
+						}
+						_ => return Err(format!("")),
+					},
 				};
 
-				let code = if let Some(token) = self.tokens.get(self.index) {
-					if let Token::TransactionCode(_, code) = token {
-						self.index += 1;
-						Some(code.to_owned())
-					} else {
-						None
-					}
-				} else {
-					Err(format!(""))?
+				let code = match self.tokens.get(self.index) {
+					None => return Err(format!("")),
+					Some(token) => match token {
+						Token::TransactionCode(_, code) => {
+							self.index += 1;
+							Some(code.to_owned())
+						}
+						_ => None,
+					},
 				};
 
-				let description = if let Some(token) = self.tokens.get(self.index) {
-					if let Token::TransactionDescription(_, description) = token {
-						self.index += 1;
-						description.to_owned()
-					} else {
-						Err(format!(""))?
-					}
-				} else {
-					Err(format!(""))?
+				let description = match self.tokens.get(self.index) {
+					None => return Err(format!("")),
+					Some(token) => match token {
+						Token::TransactionDescription(_, description) => {
+							self.index += 1;
+							description.to_owned()
+						}
+						_ => return Err(format!("")),
+					},
 				};
 
 				self.transactions.push(Transaction {
@@ -130,26 +164,26 @@ impl<'a> Parser<'a> {
 			if let Token::PostingAccount(line, account) = token {
 				self.index += 1;
 
-				let commodity = if let Some(token) = self.tokens.get(self.index) {
-					if let Token::PostingCommodity(_line, commodity) = token {
-						self.index += 1;
-						Some(commodity.to_owned())
-					} else {
-						None
-					}
-				} else {
-					None
+				let commodity = match self.tokens.get(self.index) {
+					None => None,
+					Some(token) => match token {
+						Token::PostingCommodity(_, commodity) => {
+							self.index += 1;
+							Some(commodity.to_owned())
+						}
+						_ => None,
+					},
 				};
 
-				let amount = if let Some(token) = self.tokens.get(self.index) {
-					if let Token::PostingAmount(_line, amount) = token {
-						self.index += 1;
-						Some(create_rational(&amount)?)
-					} else {
-						None
-					}
-				} else {
-					None
+				let amount = match self.tokens.get(self.index) {
+					None => None,
+					Some(token) => match token {
+						Token::PostingAmount(_, amount) => {
+							self.index += 1;
+							Some(create_rational(&amount)?)
+						}
+						_ => None,
+					},
 				};
 
 				self
