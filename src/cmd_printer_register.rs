@@ -1,4 +1,3 @@
-use super::model::BalancedPosting;
 use super::model::Ledger;
 use super::model::State;
 use super::model::Transaction;
@@ -35,8 +34,8 @@ pub fn print(ledger: &Ledger) -> Result<(), String> {
 	let transactions = ledger
 		.journals
 		.iter()
-		.flat_map(|j| j.balanced_transactions.iter())
-		.collect::<Vec<&Transaction<BalancedPosting>>>();
+		.flat_map(|j| j.transactions.iter())
+		.collect::<Vec<&Transaction>>();
 
 	for transaction in transactions {
 		let mut row = Row {
@@ -54,9 +53,28 @@ pub fn print(ledger: &Ledger) -> Result<(), String> {
 		};
 		for posting in &transaction.postings {
 			total
-				.entry(posting.commodity.to_owned())
-				.and_modify(|a| *a += posting.amount)
-				.or_insert(posting.amount);
+				.entry(
+					posting
+						.balanced_amount
+						.as_ref()
+						.expect("null commodity not allowed")
+						.commodity
+						.to_owned(),
+				)
+				.and_modify(|a| {
+					*a += posting
+						.balanced_amount
+						.as_ref()
+						.expect("null amount not allowed")
+						.amount
+				})
+				.or_insert(
+					posting
+						.balanced_amount
+						.as_ref()
+						.expect("null amount not allowed")
+						.amount,
+				);
 			let mut total_format = BTreeMap::new();
 			for (commoity, amount) in &total {
 				total_format.insert(
@@ -66,8 +84,19 @@ pub fn print(ledger: &Ledger) -> Result<(), String> {
 			}
 			row.accounts.push(Account {
 				name: posting.account.to_owned(),
-				commodity: posting.commodity.to_owned(),
-				amount: super::cmd_printer::format_amount(&posting.amount),
+				commodity: posting
+					.balanced_amount
+					.as_ref()
+					.expect("null commodity not allowed")
+					.commodity
+					.to_owned(),
+				amount: super::cmd_printer::format_amount(
+					&posting
+						.balanced_amount
+						.as_ref()
+						.expect("null amount not allowed")
+						.amount,
+				),
 				total: total_format,
 			});
 		}

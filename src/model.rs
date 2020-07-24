@@ -6,8 +6,7 @@ pub struct Journal {
 	pub file: String,
 	pub content: String,
 	pub lexer_tokens: Vec<Token>,
-	pub unbalanced_transactions: Vec<Transaction<UnbalancedPosting>>,
-	pub balanced_transactions: Vec<Transaction<BalancedPosting>>,
+	pub transactions: Vec<Transaction>,
 }
 
 #[derive(Debug)]
@@ -31,31 +30,30 @@ pub enum State {
 }
 
 #[derive(Debug)]
-pub struct Transaction<T> {
+pub struct Transaction {
 	pub line: usize,
 	pub date: String,
 	pub state: State,
 	pub code: Option<String>,
 	pub description: String,
 	pub comments: Vec<Comment>,
-	pub postings: Vec<T>,
+	pub postings: Vec<Posting>,
 }
 
 #[derive(Debug)]
-pub struct UnbalancedPosting {
+pub struct Posting {
 	pub line: usize,
-	pub account: String,
-	pub commodity: Option<String>,
-	pub amount: Option<num::rational::Rational64>,
 	pub comments: Vec<Comment>,
+	pub account: String,
+	pub unbalanced_amount: Option<MixedAmount>,
+	pub balanced_amount: Option<MixedAmount>,
+	pub balance_assertion: Option<MixedAmount>,
 }
 
 #[derive(Debug)]
-pub struct BalancedPosting {
-	pub account: String,
+pub struct MixedAmount {
 	pub commodity: String,
 	pub amount: num::rational::Rational64,
-	pub comments: Vec<Comment>,
 }
 
 #[derive(Debug)]
