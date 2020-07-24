@@ -1,7 +1,5 @@
 # acc
-acc(ounting) is a plaintext double-entry accounting command line tool. 
-
-acc is an open source and free alternative to properary accounting software. 
+acc(ounting) is a plaintext double-entry accounting command line tool. It is open source and a free alternative to properary accounting software. 
 
 acc tracks commodities like fiat money or crypto currencies using a strict following of the double-entry accounting principles. It is inspired by [ledger](https://github.com/ledger/ledger) and [hledger](https://github.com/simonmichael/hledger) and uses the ledger file format.
 
