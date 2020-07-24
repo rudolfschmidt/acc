@@ -1,28 +1,52 @@
 # acc
 acc(ounting) is a plaintext double-entry accounting command line tool. 
 
-## About
+acc is an open source and free alternative to properary accounting software. 
+
 acc tracks commodities like fiat money or crypto currencies using a strict following of the double-entry accounting principles. It is inspired by ledger(1) and hledger(2) and uses the ledger file format.
 
-```
-acc [-f FILE] [command] [arguments]
-```
+## Why should you not use properary software, specially for accounting?
 
-The order of the command line arguments does not matter. They are parsed first and handled after.
+It is ok to make money with software that costs time and effort to create it.
 
-### Quick Start
+We ignore the fact that using proprietary software is a bad idea most of the time, there are situations in life that make it even much worse to use proprietary software and accounting and money are one of them.
 
-#### Installation
+The nature of accounting is that you organize the most sensitive data about yourself, your financial data.
+
+Most proprietary accounting software will ask you to go online to connect to their server. At the moment you do so, they will store your data on their servers to "maintain" it. 
+
+Your data is on a machine of a profit-oriented company that is interested to make money out of you.
+
+If they decide to sell your data, how can you know about it or stop them?
+
+You cannot, because everything is closed, their software, their server.
+
+You traded comfort against freedom and in most cases paid even for it.
+
+Have you ever tried to buy something per invoice? 
+
+Most of the time you will be forwarded to another company that checks your credit rating. Have you ever made the experience to get rejected? If so, did they tell you the reason for it? Most of the time they do not, and there is a reason for it. They do not want you to know what they know about you and what the sources of the information are.
+
+There is probably nothing more sensitive and private than financial data. 
+
+If freedom and privacy matter anything to you, care about your finances or others will do!
+
+
+## Quick Start
+
+Start tracking every cent without trusting anybody
+
+### Installation
 
 With [cargo](https://github.com/rust-lang/cargo):
 
-##### Stable
+#### Stable
 
 ```
 cargo install acc
 ```
 
-##### Testing
+#### Testing
 
 ```
 git clone https://github.com/rudolfschmidt/acc
@@ -31,7 +55,7 @@ cargo build --release
 ./target/release/acc -f demo.ledger print
 ```
 
-#### Create Ledger File
+### Create Ledger File
 
 Record transactions in a plain text file using your favorite texteditor
 
@@ -52,15 +76,24 @@ Record transactions in a plain text file using your favorite texteditor
 
 Use one of the listed commands below.
 
-### Commands
+## Commands
 
-#### Balance Report
+### Syntax
+
+```
+acc [-f FILE] [command] [arguments]
+```
+
+The order of the command line arguments does not matter. They are parsed first and handled after.
+
+
+### Balance Report
 
 ```
 $ acc -f [file] [bal|balance] [--flat|--tree]
 ```
 
-##### Tree Balance Report
+#### Tree Balance Report
 
 ```
 $ acc -f demo.ledger bal --tree
@@ -77,7 +110,7 @@ $-2000.00   consulting
         0
 ```
 
-##### Flat Balance Report
+#### Flat Balance Report
 
 ```
 $ acc -f demo.ledger bal --flat
@@ -90,15 +123,15 @@ $-2000.00 income:consulting
         0
 ```
 
-#### Register Report
+### Register Report
 
-##### Syntax
+#### Syntax
 
 ```
 $ acc -f [file] [reg|register]
 ```
 
-##### Example
+#### Example
 
 ```
 $ acc -f demo.ledger reg 
@@ -114,15 +147,15 @@ $ acc -f demo.ledger reg
                                assets:checking            $ -140.001       $   0.00
 ```
 
-#### Print Report
+### Print Report
 
-##### Syntax
+#### Syntax
 
 ```
 $ acc -f [file] [print] [--raw|--explicit]
 ```
 
-##### Raw Print Report
+#### Raw Print Report
 
 It prints the data how it is but just formated. Useful when you want to format your ledger files. (Default choice)
 
@@ -145,7 +178,7 @@ $ acc -f demo.ledger print --raw
 	assets:checking
 ```
 
-##### Explicit Print Report
+#### Explicit Print Report
 
 It interprets the posting amounts and fill them with useful numbers
 
@@ -168,17 +201,17 @@ $ acc -f demo.ledger print --eval
 	assets:checking            $-140.00
 ```
 
-#### Accounts Report
+### Accounts Report
 
 Print the accounts in alphabetical order.
 
-##### Syntax
+#### Syntax
 
 ```
 $ acc -f demo.ledger accounts [--tree|--flat]
 ```
 
-##### Tree Output
+#### Tree Output
 
 ```
 $ acc -f demo.ledger accounts --tree
@@ -192,7 +225,7 @@ expenses
     groceries
 ```
 
-##### Flat Output
+#### Flat Output
 
 ```
 $ acc -f demo.ledger accounts --flat
@@ -206,7 +239,7 @@ expenses:food:groceries
 income:consulting
 ```
 
-#### Codes Report
+### Codes Report
 
 Print the codes in natural order.
 
@@ -219,6 +252,8 @@ acc -f demo.ledger codes
 456
 789
 ```
+
+
 
 ## ToDo
 * Add support for expressions
