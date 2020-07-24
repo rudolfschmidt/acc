@@ -1,4 +1,3 @@
-mod balancer;
 mod cmd_accounts;
 mod cmd_codes;
 mod cmd_printer;
@@ -9,9 +8,10 @@ mod cmd_printer_print;
 mod cmd_printer_register;
 mod debuger;
 mod errors;
-mod lexer;
 mod model;
-mod parser;
+mod parser_balancer;
+mod parser_lexer;
+mod parser_logic;
 
 use std::env;
 
@@ -135,7 +135,7 @@ fn parse_file(
 	command: &Command,
 	arguments: &[Argument],
 ) -> Result<(), errors::Error> {
-	lexer::read_lines(&journal.content, &mut journal.lexer_tokens)?;
+	parser_lexer::read_lines(&journal.content, &mut journal.lexer_tokens)?;
 
 	if let Command::Debug = command {
 		if arguments.contains(&Argument::DebugLexer) {
@@ -143,7 +143,7 @@ fn parse_file(
 		}
 	}
 
-	parser::parse_unbalanced_transactions(
+	parser_logic::parse_unbalanced_transactions(
 		&journal.lexer_tokens,
 		&mut journal.unbalanced_transactions,
 	)?;
@@ -154,7 +154,7 @@ fn parse_file(
 		}
 	}
 
-	balancer::balance_transactions(
+	parser_balancer::balance_transactions(
 		&journal.unbalanced_transactions,
 		&mut journal.balanced_transactions,
 	)?;
