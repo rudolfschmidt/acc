@@ -3,7 +3,7 @@ acc(ounting) is a plaintext double-entry accounting command line tool.
 
 acc is an open source and free alternative to properary accounting software. 
 
-acc tracks commodities like fiat money or crypto currencies using a strict following of the double-entry accounting principles. It is inspired by ledger(1) and hledger(2) and uses the ledger file format.
+acc tracks commodities like fiat money or crypto currencies using a strict following of the double-entry accounting principles. It is inspired by [ledger](https://github.com/ledger/ledger) and [hledger](https://github.com/simonmichael/hledger) and uses the ledger file format.
 
 ## Why should you not use properary software, specially for accounting?
 
@@ -253,14 +253,17 @@ acc -f demo.ledger codes
 789
 ```
 
+## FAQ
+### Why should you track your money?
+Whatever you do not respect your life, you will lose it. If you do not respect your money, you will not have any, simple as that. Money needs care and attention. Another reason is to have control over your life. Which cost exist, why they exist, and is the amount correct. You cannot believe how many times institutions charged me wrong and I only found out because of a careful track of my numbers. 
 
+Another important reason is to become able to make decisions based on financial data instead of feelings.
+
+A simple real-life scenario is to decide if you can afford to eat outside or you should cook at home because it seems simple. Track your groceries and see how much you "eat" on a daily base on average, then you may find out that going out to eat is not that expensive that you might think.
 
 ## ToDo
 * Add support for expressions
 * Add support for periodic transactions
-* Add support for the yaml file format
+* Add experimental support for other file formats like yaml
 
 ## References
-1: https://github.com/ledger/ledger
-
-2: https://github.com/simonmichael/hledger
