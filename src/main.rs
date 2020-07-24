@@ -11,7 +11,7 @@ mod errors;
 mod model;
 mod parser_balancer;
 mod parser_lexer;
-mod parser_logic;
+mod parser_model;
 
 use std::env;
 
@@ -89,8 +89,7 @@ fn start() -> Result<(), String> {
 					file,
 					content: String::new(),
 					lexer_tokens: Vec::new(),
-					unbalanced_transactions: Vec::new(),
-					balanced_transactions: Vec::new(),
+					transactions: Vec::new(),
 				};
 				match read_file(&mut journal, &command, &arguments) {
 					Err(err) => return Err(err),
@@ -143,25 +142,19 @@ fn parse_file(
 		}
 	}
 
-	parser_logic::parse_unbalanced_transactions(
-		&journal.lexer_tokens,
-		&mut journal.unbalanced_transactions,
-	)?;
+	parser_model::parse_unbalanced_transactions(&journal.lexer_tokens, &mut journal.transactions)?;
 
 	if let Command::Debug = command {
 		if arguments.contains(&Argument::DebugUnbalancedTransactions) {
-			debuger::print_unbalanced_transactions(&journal.unbalanced_transactions);
+			debuger::print_transactions(&journal.transactions);
 		}
 	}
 
-	parser_balancer::balance_transactions(
-		&journal.unbalanced_transactions,
-		&mut journal.balanced_transactions,
-	)?;
+	parser_balancer::balance_transactions(&mut journal.transactions)?;
 
 	if let Command::Debug = command {
 		if arguments.contains(&Argument::DebugBalancedTransactions) {
-			debuger::print_balanced_transactions(&journal.balanced_transactions);
+			debuger::print_transactions(&journal.transactions);
 		}
 	}
 
@@ -183,7 +176,7 @@ fn execute_command(
 					ledger
 						.journals
 						.iter()
-						.flat_map(|j| j.balanced_transactions.iter())
+						.flat_map(|j| j.transactions.iter())
 						.collect(),
 				)?
 			}
@@ -192,7 +185,7 @@ fn execute_command(
 					ledger
 						.journals
 						.iter()
-						.flat_map(|j| j.balanced_transactions.iter())
+						.flat_map(|j| j.transactions.iter())
 						.collect(),
 				)?
 			}

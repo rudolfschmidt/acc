@@ -1,7 +1,6 @@
 use super::cmd_printer::format_amount;
 use super::cmd_printer_bal::group_postings_by_account;
 use super::cmd_printer_bal::print_commodity_amount;
-use super::model::BalancedPosting;
 use super::model::Transaction;
 
 use colored::Colorize;
@@ -16,7 +15,7 @@ struct BalanceAccount {
 	children: Vec<BalanceAccount>,
 }
 
-pub fn print(transactions: Vec<&Transaction<BalancedPosting>>) -> Result<(), String> {
+pub fn print(transactions: Vec<&Transaction>) -> Result<(), String> {
 	let grouped_postings = group_postings_by_account(transactions)?;
 	let accounts = make_balance_accounts(&grouped_postings);
 	let root_account = make_root_balance_account(&accounts);

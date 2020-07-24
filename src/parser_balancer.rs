@@ -2,127 +2,139 @@ extern crate num;
 
 use super::errors::Error;
 
-use super::model::BalancedPosting;
-use super::model::Comment;
+use super::model::MixedAmount;
 use super::model::Transaction;
-use super::model::UnbalancedPosting;
 
 use num::Zero;
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 use std::ops::Neg;
 
-pub fn balance_transactions(
-	unbalanced_transactions: &[Transaction<UnbalancedPosting>],
-	balanced_transactions: &mut Vec<Transaction<BalancedPosting>>,
-) -> Result<(), Error> {
-	for unbalanced_transaction in unbalanced_transactions {
-		let mut blanaced_postings = Vec::with_capacity(unbalanced_transaction.postings.len());
-		let mut balanced_empty_posting = false;
+pub fn balance_transactions(transactions: &mut Vec<Transaction>) -> Result<(), Error> {
+	for transaction in transactions.iter_mut() {
+		disallow_multiple_empty_posts(transaction)?;
+		disallow_multiple_commodites_with_empty_posts(transaction)?;
+		balance_empty_posts(transaction);
+		disallow_unbalanced_transaction(transaction)?;
+	}
+	Ok(())
+}
 
-		for unbalanced_posting in &unbalanced_transaction.postings {
-			if unbalanced_posting.commodity.is_some() && unbalanced_posting.amount.is_some() {
-				blanaced_postings.push(BalancedPosting {
-					account: unbalanced_posting.account.to_owned(),
-					commodity: unbalanced_posting.commodity.as_ref().unwrap().to_owned(),
-					amount: unbalanced_posting.amount.unwrap(),
-					comments: unbalanced_posting
-						.comments
-						.iter()
-						.map(|c| Comment {
-							line: c.line,
-							comment: c.comment.to_owned(),
-						})
-						.collect(),
-				})
-			} else {
-				if balanced_empty_posting {
+fn disallow_multiple_empty_posts(transaction: &Transaction) -> Result<(), Error> {
+	let mut balanced_previous_posting = false;
+	for posting in transaction
+		.postings
+		.iter()
+		.filter(|p| p.unbalanced_amount.is_none())
+	{
+		if balanced_previous_posting {
+			return Err(Error {
+				line: posting.line + 1,
+				message: format!("Only one posting with null amount allowed per transaction",),
+			});
+		}
+		balanced_previous_posting = true;
+	}
+	Ok(())
+}
+
+fn disallow_multiple_commodites_with_empty_posts(transaction: &Transaction) -> Result<(), Error> {
+	if transaction
+		.postings
+		.iter()
+		.filter(|p| p.unbalanced_amount.is_none())
+		.next()
+		.is_none()
+	{
+		return Ok(());
+	}
+	let mut prev_commodity = None;
+	for posting in &transaction.postings {
+		if let Some(ma) = &posting.unbalanced_amount {
+			if let Some(prev) = prev_commodity {
+				if prev != ma.commodity {
 					return Err(Error {
-						line: unbalanced_posting.line + 1,
-						message: format!("Only one posting with null amount allowed per transaction",),
-					});
-				}
-				let total_commodities = total_commodities(&unbalanced_transaction);
-				if total_commodities.len() > 1 {
-					return Err(Error {
-						line: unbalanced_posting.line + 1,
+						line: posting.line + 1,
 						message: format!(
 							"Multiple commodities in transaction with a null amount posting not allowed"
 						),
 					});
 				}
-				blanaced_postings.push(BalancedPosting {
-					account: unbalanced_posting.account.to_owned(),
-					commodity: total_commodities.iter().next().unwrap().to_string(),
-					amount: total_amount(&unbalanced_transaction).neg(),
-					comments: unbalanced_posting
-						.comments
-						.iter()
-						.map(|c| Comment {
-							line: c.line,
-							comment: c.comment.to_owned(),
-						})
-						.collect(),
-				});
-				balanced_empty_posting = true;
 			}
+			prev_commodity = Some(ma.commodity.to_owned());
 		}
-		let transaction = Transaction {
-			line: unbalanced_transaction.line,
-			date: unbalanced_transaction.date.to_owned(),
-			state: unbalanced_transaction.state.clone(),
-			code: unbalanced_transaction.code.clone(),
-			description: unbalanced_transaction.description.to_owned(),
-			comments: unbalanced_transaction
-				.comments
-				.iter()
-				.map(|c| Comment {
-					line: c.line,
-					comment: c.comment.to_owned(),
-				})
-				.collect(),
-			postings: blanaced_postings,
-		};
-
-		let total = transaction.postings.iter().fold(
-			BTreeMap::<String, num::rational::Rational64>::new(),
-			|mut total, posting| {
-				total
-					.entry(posting.commodity.to_owned())
-					.and_modify(|a| *a += posting.amount)
-					.or_insert(posting.amount);
-				total
-			},
-		);
-
-		if !total.iter().all(|(_, a)| a.is_zero()) {
-			return Err(Error {
-				line: transaction.line + 1,
-				message: format!("Transaction does not balance"),
-			});
-		}
-
-		balanced_transactions.push(transaction);
 	}
 	Ok(())
 }
 
-fn total_commodities(unbalanced_transaction: &Transaction<UnbalancedPosting>) -> HashSet<String> {
-	unbalanced_transaction
+fn balance_empty_posts(transaction: &mut Transaction) {
+	let commodity: String = transaction
 		.postings
 		.iter()
-		.flat_map(|p| p.commodity.to_owned())
-		.collect::<HashSet<String>>()
+		.flat_map(|p| p.unbalanced_amount.as_ref())
+		.map(|a| a.commodity.to_owned())
+		.next()
+		.expect("no commodity found");
+
+	let transaction_total_amount = transaction
+		.postings
+		.iter()
+		.flat_map(|p| p.unbalanced_amount.as_ref())
+		.map(|ma| ma.amount)
+		.fold(num::rational::Rational64::from_integer(0), |acc, val| {
+			acc + val
+		});
+
+	for posting in transaction.postings.iter_mut() {
+		posting.balanced_amount = match &posting.unbalanced_amount {
+			None => Some(MixedAmount {
+				commodity: commodity.to_owned(),
+				amount: transaction_total_amount.neg(),
+			}),
+			Some(unbalanced_amount) => Some(MixedAmount {
+				commodity: unbalanced_amount.commodity.to_owned(),
+				amount: unbalanced_amount.amount,
+			}),
+		}
+	}
 }
 
-fn total_amount(
-	unbalanced_transaction: &Transaction<UnbalancedPosting>,
-) -> num::rational::Rational64 {
-	unbalanced_transaction
-		.postings
-		.iter()
-		.map(|p| p.amount)
-		.fold(num::rational::Rational64::from_integer(0), |acc, val| {
-			acc + val.unwrap_or_else(|| num::rational::Rational64::from_integer(0))
-		})
+fn disallow_unbalanced_transaction(transaction: &Transaction) -> Result<(), Error> {
+	let total = transaction.postings.iter().fold(
+		BTreeMap::<String, num::rational::Rational64>::new(),
+		|mut total, posting| {
+			total
+				.entry(
+					posting
+						.balanced_amount
+						.as_ref()
+						.expect("null commodity not allowed")
+						.commodity
+						.to_owned(),
+				)
+				.and_modify(|a| {
+					*a += posting
+						.balanced_amount
+						.as_ref()
+						.expect("null amount not allowed")
+						.amount
+				})
+				.or_insert(
+					posting
+						.balanced_amount
+						.as_ref()
+						.expect("null amount not allowed")
+						.amount,
+				);
+			total
+		},
+	);
+
+	if !total.iter().all(|(_, a)| a.is_zero()) {
+		return Err(Error {
+			line: transaction.line + 1,
+			message: format!("Transaction does not balance"),
+		});
+	}
+
+	Ok(())
 }

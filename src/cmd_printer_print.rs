@@ -1,8 +1,6 @@
-use super::model::BalancedPosting;
 use super::model::Ledger;
 use super::model::State;
 use super::model::Transaction;
-use super::model::UnbalancedPosting;
 
 const INDENT: &str = "\t";
 const WIDTH_OFFSET: usize = 4;
@@ -11,7 +9,7 @@ pub fn print(ledger: &Ledger) -> Result<(), String> {
 	let account_width = ledger
 		.journals
 		.iter()
-		.flat_map(|j| j.balanced_transactions.iter())
+		.flat_map(|j| j.transactions.iter())
 		.flat_map(|t| t.postings.iter())
 		.map(|p| p.account.chars().count())
 		.max()
@@ -19,17 +17,18 @@ pub fn print(ledger: &Ledger) -> Result<(), String> {
 	for transaction in ledger
 		.journals
 		.iter()
-		.flat_map(|j| j.balanced_transactions.iter())
-		.collect::<Vec<&Transaction<BalancedPosting>>>()
+		.flat_map(|j| j.transactions.iter())
+		.collect::<Vec<&Transaction>>()
 	{
 		print_head(&transaction);
 		print_comments(&transaction);
 		for posting in &transaction.postings {
 			print_posting_amount(account_width, &posting.account);
-			let formatted_amount = super::cmd_printer::format_amount(&posting.amount);
+			let formatted_amount =
+				super::cmd_printer::format_amount(&posting.balanced_amount.as_ref().unwrap().amount);
 			print!(
 				"{}{}",
-				posting.commodity,
+				posting.balanced_amount.as_ref().unwrap().commodity,
 				if formatted_amount.starts_with('-') {
 					formatted_amount
 				} else {
@@ -50,7 +49,7 @@ pub fn print_raw(ledger: &Ledger) -> Result<(), String> {
 	let account_width = ledger
 		.journals
 		.iter()
-		.flat_map(|j| j.unbalanced_transactions.iter())
+		.flat_map(|j| j.transactions.iter())
 		.flat_map(|t| t.postings.iter())
 		.map(|p| p.account.chars().count())
 		.max()
@@ -58,18 +57,18 @@ pub fn print_raw(ledger: &Ledger) -> Result<(), String> {
 	for transaction in ledger
 		.journals
 		.iter()
-		.flat_map(|j| j.unbalanced_transactions.iter())
-		.collect::<Vec<&Transaction<UnbalancedPosting>>>()
+		.flat_map(|j| j.transactions.iter())
+		.collect::<Vec<&Transaction>>()
 	{
 		print_head(&transaction);
 		print_comments(&transaction);
 		for posting in &transaction.postings {
 			print_posting_amount(account_width, &posting.account);
-			if let Some(amount) = posting.amount {
-				let formatted_amount = super::cmd_printer::format_amount(&amount);
+			if let Some(unbalanced_amount) = &posting.unbalanced_amount {
+				let formatted_amount = super::cmd_printer::format_amount(&unbalanced_amount.amount);
 				print!(
 					"{}{}",
-					posting.commodity.as_ref().unwrap(),
+					unbalanced_amount.commodity,
 					if formatted_amount.starts_with('-') {
 						formatted_amount
 					} else {
@@ -87,7 +86,7 @@ pub fn print_raw(ledger: &Ledger) -> Result<(), String> {
 	Ok(())
 }
 
-fn print_head<T>(transaction: &Transaction<T>) {
+fn print_head(transaction: &Transaction) {
 	println!(
 		"{}{}{}{}",
 		transaction.date,
@@ -112,7 +111,7 @@ fn print_head<T>(transaction: &Transaction<T>) {
 	);
 }
 
-fn print_comments<T>(transaction: &Transaction<T>) {
+fn print_comments(transaction: &Transaction) {
 	for comment in &transaction.comments {
 		println!("{}; {}", INDENT, comment.comment);
 	}

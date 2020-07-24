@@ -1,5 +1,5 @@
 use super::cmd_printer;
-use super::model::BalancedPosting;
+use super::model::Posting;
 use super::model::Transaction;
 
 use colored::Colorize;
@@ -7,29 +7,37 @@ use num::Signed;
 use std::collections::BTreeMap;
 
 pub fn group_postings_by_account(
-	transactions: Vec<&Transaction<BalancedPosting>>,
+	transactions: Vec<&Transaction>,
 ) -> Result<BTreeMap<String, BTreeMap<String, num::rational::Rational64>>, String> {
 	let mut result = BTreeMap::<String, BTreeMap<String, num::rational::Rational64>>::new();
 
 	for post in transactions
 		.iter()
 		.flat_map(|t| t.postings.iter())
-		.collect::<Vec<&BalancedPosting>>()
+		.collect::<Vec<&Posting>>()
 	{
 		match result.get_mut(&post.account) {
 			Some(result_account) => {
-				if result_account.contains_key(&post.commodity) {
+				if result_account.contains_key(&post.balanced_amount.as_ref().unwrap().commodity) {
 					result_account.insert(
-						post.commodity.to_owned(),
-						result_account.get(&post.commodity).unwrap() + post.amount,
+						post.balanced_amount.as_ref().unwrap().commodity.to_owned(),
+						result_account
+							.get(&post.balanced_amount.as_ref().unwrap().commodity)
+							.unwrap() + post.balanced_amount.as_ref().unwrap().amount,
 					);
 				} else {
-					result_account.insert(post.commodity.to_string(), post.amount);
+					result_account.insert(
+						post.balanced_amount.as_ref().unwrap().commodity.to_string(),
+						post.balanced_amount.as_ref().unwrap().amount,
+					);
 				}
 			}
 			None => {
 				let mut tree: BTreeMap<String, num::rational::Rational64> = BTreeMap::new();
-				tree.insert(post.commodity.to_string(), post.amount);
+				tree.insert(
+					post.balanced_amount.as_ref().unwrap().commodity.to_string(),
+					post.balanced_amount.as_ref().unwrap().amount,
+				);
 				result.insert(post.account.to_string(), tree);
 			}
 		}

@@ -1,7 +1,5 @@
-use super::model::BalancedPosting;
 use super::model::Token;
 use super::model::Transaction;
-use super::model::UnbalancedPosting;
 
 pub fn print_tokens(tokens: &[Token]) {
 	for token in tokens {
@@ -21,10 +19,6 @@ pub fn print_tokens(tokens: &[Token]) {
 	}
 }
 
-pub fn print_unbalanced_transactions(transactions: &[Transaction<UnbalancedPosting>]) {
-	transactions.iter().for_each(|t| println!("{:?}", t));
-}
-
-pub fn print_balanced_transactions(transactions: &[Transaction<BalancedPosting>]) {
+pub fn print_transactions(transactions: &[Transaction]) {
 	transactions.iter().for_each(|t| println!("{:?}", t));
 }

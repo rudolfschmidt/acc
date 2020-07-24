@@ -3,13 +3,14 @@ extern crate num;
 use super::errors::Error;
 
 use super::model::Comment;
+use super::model::MixedAmount;
+use super::model::Posting;
 use super::model::Token;
 use super::model::Transaction;
-use super::model::UnbalancedPosting;
 
 pub fn parse_unbalanced_transactions(
 	tokens: &[Token],
-	transactions: &mut Vec<Transaction<UnbalancedPosting>>,
+	transactions: &mut Vec<Transaction>,
 ) -> Result<(), Error> {
 	let mut parser = Parser {
 		tokens,
@@ -40,7 +41,7 @@ pub fn parse_unbalanced_transactions(
 
 struct Parser<'a> {
 	tokens: &'a [Token],
-	transactions: &'a mut Vec<Transaction<UnbalancedPosting>>,
+	transactions: &'a mut Vec<Transaction>,
 	index: usize,
 }
 
@@ -50,7 +51,7 @@ impl<'a> Parser<'a> {
 			self.parse_transaction_header()?;
 			self.parse_transaction_comment()?;
 			self.parse_posting()?;
-			self.handle_balance_assertion()?;
+			self.parse_balance_assertion()?;
 		}
 		Ok(())
 	}
@@ -131,22 +132,25 @@ impl<'a> Parser<'a> {
 				self.index += 1;
 
 				let commodity = match self.tokens.get(self.index) {
-					None => None,
+					None => format!(""),
 					Some(token) => match token {
 						Token::PostingCommodity(_, commodity) => {
 							self.index += 1;
-							Some(commodity.to_owned())
+							commodity.to_owned()
 						}
-						_ => None,
+						_ => format!(""),
 					},
 				};
 
-				let amount = match self.tokens.get(self.index) {
+				let unbalanced_amount = match self.tokens.get(self.index) {
 					None => None,
 					Some(token) => match token {
 						Token::PostingAmount(_, amount) => {
 							self.index += 1;
-							Some(create_rational(&amount)?)
+							Some(MixedAmount {
+								commodity: commodity,
+								amount: create_rational(&amount),
+							})
 						}
 						_ => None,
 					},
@@ -157,11 +161,12 @@ impl<'a> Parser<'a> {
 					.last_mut()
 					.unwrap()
 					.postings
-					.push(UnbalancedPosting {
+					.push(Posting {
 						line: *line,
 						account: account.to_owned(),
-						commodity: commodity,
-						amount: amount,
+						unbalanced_amount: unbalanced_amount,
+						balanced_amount: None,
+						balance_assertion: None,
 						comments: Vec::new(),
 					});
 			}
@@ -169,51 +174,53 @@ impl<'a> Parser<'a> {
 		Ok(())
 	}
 
-	fn handle_balance_assertion(&mut self) -> Result<(), String> {
+	fn parse_balance_assertion(&mut self) -> Result<(), String> {
 		if let Some(token) = self.tokens.get(self.index) {
 			if let Token::BalanceAssertion(_line) = token {
 				self.index += 1;
 
 				let commodity = match self.tokens.get(self.index) {
-					None => None,
+					None => format!(""),
 					Some(token) => match token {
 						Token::PostingCommodity(_, commodity) => {
 							self.index += 1;
-							Some(commodity.to_owned())
+							commodity.to_owned()
 						}
-						_ => None,
+						_ => format!(""),
 					},
 				};
 
 				let amount = match self.tokens.get(self.index) {
-					None => None,
+					None => return Err(format!("")),
 					Some(token) => match token {
 						Token::PostingAmount(_, amount) => {
 							self.index += 1;
-							Some(create_rational(&amount)?)
+							create_rational(&amount)
 						}
-						_ => None,
+						_ => return Err(format!("")),
 					},
 				};
 
-				println!("{:?}", commodity);
-				println!("{:?}", amount);
+				match self.transactions.last_mut().unwrap().postings.last_mut() {
+					None => return Err(format!("")),
+					Some(posting) => posting.balance_assertion = Some(MixedAmount { commodity, amount }),
+				}
 			}
 		}
 		Ok(())
 	}
 }
 
-fn create_rational(value: &str) -> Result<num::rational::Rational64, String> {
+fn create_rational(value: &str) -> num::rational::Rational64 {
 	let (_, right) = if let Some(index) = value.find('.') {
 		let (left, right) = value.split_at(index);
 		let right = right.chars().skip(1).collect::<String>();
 		(left, right)
 	} else {
-		(value, "".to_string())
+		(value, "".to_owned())
 	};
 	let exponent: usize = right.chars().count();
 	let numerator: i64 = value.replace('.', "").parse().unwrap();
 	let denominator: i64 = 10_usize.pow(exponent as u32) as i64;
-	Ok(num::rational::Rational64::new(numerator, denominator))
+	num::rational::Rational64::new(numerator, denominator)
 }
