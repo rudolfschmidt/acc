@@ -7,6 +7,8 @@ use super::model::Comment;
 use super::model::Transaction;
 use super::model::UnbalancedPosting;
 
+use num::Zero;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ops::Neg;
 
@@ -65,7 +67,7 @@ pub fn balance_transactions(
 				balanced_empty_posting = true;
 			}
 		}
-		balanced_transactions.push(Transaction {
+		let transaction = Transaction {
 			line: unbalanced_transaction.line,
 			date: unbalanced_transaction.date.to_owned(),
 			state: unbalanced_transaction.state.clone(),
@@ -80,7 +82,27 @@ pub fn balance_transactions(
 				})
 				.collect(),
 			postings: blanaced_postings,
-		})
+		};
+
+		let total = transaction.postings.iter().fold(
+			BTreeMap::<String, num::rational::Rational64>::new(),
+			|mut total, posting| {
+				total
+					.entry(posting.commodity.to_owned())
+					.and_modify(|a| *a += posting.amount)
+					.or_insert(posting.amount);
+				total
+			},
+		);
+
+		if !total.iter().all(|(_, a)| a.is_zero()) {
+			return Err(Error {
+				line: transaction.line + 1,
+				message: format!("Transaction does not balance"),
+			});
+		}
+
+		balanced_transactions.push(transaction);
 	}
 	Ok(())
 }

@@ -122,7 +122,7 @@ fn read_file(
 	match parse_file(journal, command, arguments) {
 		Err(err) => {
 			return Err(format!(
-				"While parsing file \"{}\" at line {}\n{}",
+				"While parsing file \"{}\" at line {}:\n{}",
 				journal.file, err.line, err.message
 			))
 		}
