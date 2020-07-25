@@ -190,10 +190,14 @@ $ acc -f demo.ledger accounts --tree
 
 ```
 assets
+  cash
   checking
+equity
 expenses
   food
     groceries
+income
+  consulting
 ```
 
 #### Flat Output
