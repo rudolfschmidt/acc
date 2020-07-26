@@ -13,27 +13,9 @@ mod parser_balancer;
 mod parser_lexer;
 mod parser_model;
 
+use model::Argument;
+use model::Command;
 use std::env;
-
-pub enum Command {
-	Print,
-	Balance,
-	Register,
-	Debug,
-	Accounts,
-	Codes,
-}
-
-#[derive(PartialEq)]
-pub enum Argument {
-	Flat,
-	Tree,
-	Raw,
-	Explicit,
-	DebugLexer,
-	DebugUnbalancedTransactions,
-	DebugBalancedTransactions,
-}
 
 fn main() {
 	if let Err(e) = start() {
@@ -51,7 +33,7 @@ fn start() -> Result<(), String> {
 	while let Some(arg) = args_it.next() {
 		match arg.as_str() {
 			"--file" | "-f" => match args_it.next() {
-				None => return Err(String::from("Error : No argument provided for --file")),
+				None => return Err(format!("Error : No argument provided for --file")),
 				Some(file_path) => files.push(file_path),
 			},
 			"--flat" => arguments.push(Argument::Flat),
@@ -75,7 +57,7 @@ fn start() -> Result<(), String> {
 		None => Err(String::from("Error : No command selected")),
 		Some(command) => {
 			if files.is_empty() {
-				return Err(String::from(
+				return Err(format!(
 					"Error : No file(s) reselected. Try --file <file> to select a file",
 				));
 			}
@@ -96,6 +78,7 @@ fn start() -> Result<(), String> {
 					Ok(()) => ledger.journals.push(journal),
 				}
 			}
+
 			execute_command(ledger, command, arguments)
 		}
 	}
@@ -194,11 +177,11 @@ fn execute_command(
 			cmd_printer_register::print(&ledger)?;
 		}
 		Command::Print => {
+			if arguments.contains(&Argument::Explicit) {
+				return cmd_printer_print::print_explicit(&ledger);
+			}
 			if arguments.contains(&Argument::Raw) {
 				return cmd_printer_print::print_raw(&ledger);
-			}
-			if arguments.contains(&Argument::Explicit) {
-				return cmd_printer_print::print(&ledger);
 			}
 			if !arguments.contains(&Argument::Explicit) {
 				return cmd_printer_print::print_raw(&ledger);

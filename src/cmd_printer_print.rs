@@ -1,51 +1,28 @@
 use super::model::Ledger;
+use super::model::MixedAmount;
+use super::model::Posting;
 use super::model::State;
 use super::model::Transaction;
 
 const INDENT: &str = "\t";
-const WIDTH_OFFSET: usize = 4;
+const OFFSET: usize = 4;
 
-pub fn print(ledger: &Ledger) -> Result<(), String> {
-	let account_width = ledger
-		.journals
-		.iter()
-		.flat_map(|j| j.transactions.iter())
-		.flat_map(|t| t.postings.iter())
-		.map(|p| p.account.chars().count())
-		.max()
-		.unwrap_or(0);
-	for transaction in ledger
-		.journals
-		.iter()
-		.flat_map(|j| j.transactions.iter())
-		.collect::<Vec<&Transaction>>()
-	{
-		print_head(&transaction);
-		print_comments(&transaction);
-		for posting in &transaction.postings {
-			print_posting_amount(account_width, &posting.account);
-			let formatted_amount =
-				super::cmd_printer::format_amount(&posting.balanced_amount.as_ref().unwrap().amount);
-			print!(
-				"{}{}",
-				posting.balanced_amount.as_ref().unwrap().commodity,
-				if formatted_amount.starts_with('-') {
-					formatted_amount
-				} else {
-					let mut buf = String::new();
-					buf.push(' ');
-					buf.push_str(&formatted_amount);
-					buf
-				}
-			);
-			println!();
-		}
-		println!();
-	}
+pub fn print_explicit(ledger: &Ledger) -> Result<(), String> {
+	let require_amount = true;
+	print(ledger, require_amount, |p| p.balanced_amount.as_ref())?;
 	Ok(())
 }
 
 pub fn print_raw(ledger: &Ledger) -> Result<(), String> {
+	let require_amount = false;
+	print(ledger, require_amount, |p| p.unbalanced_amount.as_ref())?;
+	Ok(())
+}
+
+fn print<F>(ledger: &Ledger, require_amount: bool, f: F) -> Result<(), String>
+where
+	F: Fn(&Posting) -> Option<&MixedAmount>,
+{
 	let account_width = ledger
 		.journals
 		.iter()
@@ -54,34 +31,25 @@ pub fn print_raw(ledger: &Ledger) -> Result<(), String> {
 		.map(|p| p.account.chars().count())
 		.max()
 		.unwrap_or(0);
-	for transaction in ledger
+
+	let mut transaction_iter = ledger
 		.journals
 		.iter()
 		.flat_map(|j| j.transactions.iter())
-		.collect::<Vec<&Transaction>>()
-	{
-		print_head(&transaction);
-		print_comments(&transaction);
+		.peekable();
+
+	while let Some(transaction) = transaction_iter.next() {
+		print_head(transaction);
+		print_comments(transaction);
+
 		for posting in &transaction.postings {
-			print_posting_amount(account_width, &posting.account);
-			if let Some(unbalanced_amount) = &posting.unbalanced_amount {
-				let formatted_amount = super::cmd_printer::format_amount(&unbalanced_amount.amount);
-				print!(
-					"{}{}",
-					unbalanced_amount.commodity,
-					if formatted_amount.starts_with('-') {
-						formatted_amount
-					} else {
-						let mut buf = String::new();
-						buf.push(' ');
-						buf.push_str(&formatted_amount);
-						buf
-					}
-				);
-			}
+			print_account(posting);
+			print_amount(posting, require_amount, account_width, &f)?;
+		}
+
+		if transaction_iter.peek().is_some() {
 			println!();
 		}
-		println!();
 	}
 	Ok(())
 }
@@ -106,7 +74,7 @@ fn print_head(transaction: &Transaction) {
 				ret.push(' ');
 				Some(ret)
 			})
-			.unwrap_or("".to_owned()),
+			.unwrap_or(String::from("")),
 		transaction.description
 	);
 }
@@ -117,9 +85,49 @@ fn print_comments(transaction: &Transaction) {
 	}
 }
 
-fn print_posting_amount(account_width: usize, account: &str) {
-	print!("{}{}", INDENT, account);
-	for _ in 0..(account_width + WIDTH_OFFSET - account.chars().count()) {
-		print!(" ");
+fn print_account(posting: &Posting) {
+	print!("{}{}", INDENT, posting.account);
+}
+
+fn print_amount<F>(
+	posting: &Posting,
+	require_amount: bool,
+	account_width: usize,
+	f: F,
+) -> Result<(), String>
+where
+	F: Fn(&Posting) -> Option<&MixedAmount>,
+{
+	let mixed_amount = Some(posting).and_then(|p| f(p));
+
+	match mixed_amount {
+		None => {
+			if require_amount {
+				return Err(String::from("Amount Required"));
+			}
+		}
+
+		Some(mixed_amount) => {
+			for _ in 0..(account_width + OFFSET - posting.account.chars().count()) {
+				print!(" ");
+			}
+
+			let formatted_amount = super::cmd_printer::format_amount(&mixed_amount.amount);
+
+			print!(
+				"{}{}",
+				mixed_amount.commodity,
+				if formatted_amount.starts_with('-') {
+					formatted_amount
+				} else {
+					let mut buf = String::new();
+					buf.push(' ');
+					buf.push_str(&formatted_amount);
+					buf
+				}
+			);
+		}
 	}
+	println!();
+	Ok(())
 }

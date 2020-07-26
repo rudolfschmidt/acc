@@ -26,11 +26,12 @@ pub fn parse_unbalanced_transactions(
 					Token::TransactionState(line, _value) => *line,
 					Token::TransactionCode(line, _value) => *line,
 					Token::TransactionDescription(line, _value) => *line,
-					Token::TransactionComment(line, _value) => *line,
+					Token::Comment(line, _value) => *line,
 					Token::PostingAccount(line, _value) => *line,
 					Token::PostingCommodity(line, _value) => *line,
 					Token::PostingAmount(line, _value) => *line,
 					Token::BalanceAssertion(line) => *line,
+					Token::Include(line, _value) => *line,
 				},
 			},
 			message: format!("Parse Error : {}", message),
@@ -110,7 +111,7 @@ impl<'a> Parser<'a> {
 
 	fn parse_transaction_comment(&mut self) -> Result<(), String> {
 		if let Some(token) = self.tokens.get(self.index) {
-			if let Token::TransactionComment(line, value) = token {
+			if let Token::Comment(line, value) = token {
 				self
 					.transactions
 					.last_mut()
