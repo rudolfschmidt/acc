@@ -270,4 +270,4 @@ If freedom and privacy matter anything to you, care about your finances or other
 * Add support for suffix currency
 
 ## Known Bugs
-* Issues with formating numbers in reports due to https://github.com/rust-num/num-rational/issues/10. Solution is to find a workaround or to replace the used library by another extern library or something custom developed.
+* Issues with formating numbers in reports due to https://github.com/rust-num/num-rational/issues/10. Solution is to find a workaround or to replace the used library by another extern library or something custom developed. Calculations are not affected, only the display of numbers.
