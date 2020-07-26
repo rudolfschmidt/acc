@@ -20,6 +20,8 @@ pub enum Argument {
 
 pub struct Ledger {
 	pub journals: Vec<Journal>,
+	pub command: Command,
+	pub arguments: Vec<Argument>,
 }
 
 pub struct Journal {
