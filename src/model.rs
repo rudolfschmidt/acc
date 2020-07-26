@@ -1,3 +1,23 @@
+pub enum Command {
+	Print,
+	Balance,
+	Register,
+	Debug,
+	Accounts,
+	Codes,
+}
+
+#[derive(PartialEq)]
+pub enum Argument {
+	Flat,
+	Tree,
+	Raw,
+	Explicit,
+	DebugLexer,
+	DebugUnbalancedTransactions,
+	DebugBalancedTransactions,
+}
+
 pub struct Ledger {
 	pub journals: Vec<Journal>,
 }
@@ -15,11 +35,12 @@ pub enum Token {
 	TransactionState(usize, State),
 	TransactionCode(usize, String),
 	TransactionDescription(usize, String),
-	TransactionComment(usize, String),
+	Comment(usize, String),
 	PostingAccount(usize, String),
 	PostingCommodity(usize, String),
 	PostingAmount(usize, String),
 	BalanceAssertion(usize),
+	Include(usize, String),
 }
 
 #[derive(Debug, Clone)]

@@ -13,7 +13,7 @@ pub fn read_lines(content: &str, tokens: &mut Vec<Token>) -> Result<(), Error> {
 	};
 	match lexer.create_tokens() {
 		Ok(()) => Ok(()),
-		Err(_) => {
+		Err(reason) => {
 			let mut msg = String::new();
 
 			msg.push_str(&format!(
@@ -38,6 +38,10 @@ pub fn read_lines(content: &str, tokens: &mut Vec<Token>) -> Result<(), Error> {
 
 			msg.push('^');
 
+			if !reason.is_empty() {
+				msg.push_str(&format!("\nError : {}", reason));
+			}
+
 			Err(Error {
 				line: lexer.line_index + 1,
 				message: msg,
@@ -56,7 +60,7 @@ struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-	fn create_tokens(&mut self) -> Result<(), ()> {
+	fn create_tokens(&mut self) -> Result<(), String> {
 		for (line_index, line_str) in self.content.lines().enumerate() {
 			self.line_str = line_str;
 			self.line_chars = line_str.chars().collect();
@@ -67,7 +71,7 @@ impl<'a> Lexer<'a> {
 		Ok(())
 	}
 
-	fn toknize_transaction_header(&mut self) -> Result<(), ()> {
+	fn toknize_transaction_header(&mut self) -> Result<(), String> {
 		match self.line_chars.get(self.line_pos) {
 			None => {
 				return Ok(());
@@ -77,13 +81,15 @@ impl<'a> Lexer<'a> {
 					|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
 				{
 					self.consume_whitespaces();
-					self.toknize_transaction_comment()?;
+					self.toknize_comment()?;
 					self.toknize_transaction_posting()?;
 				} else {
 					self.toknize_transaction_date()?;
-					self.toknize_transaction_state()?;
-					self.toknize_transaction_code()?;
-					self.toknize_transaction_description()?;
+					self.toknize_comment()?;
+					self.toknize_include()?;
+				}
+				if let Some(c) = self.line_chars.get(self.line_pos) {
+					return Err(format!("Unexpected character {}", c));
 				}
 			}
 		}
@@ -115,289 +121,357 @@ impl<'a> Lexer<'a> {
 		}
 	}
 
-	fn toknize_transaction_date(&mut self) -> Result<(), ()> {
-		let mut value = String::new();
-		self.is_numeric(&mut value)?;
-		self.is_numeric(&mut value)?;
-		self.is_numeric(&mut value)?;
-		self.is_numeric(&mut value)?;
-		self.is_dash(&mut value)?;
-		self.is_numeric(&mut value)?;
-		self.is_numeric(&mut value)?;
-		self.is_dash(&mut value)?;
-		self.is_numeric(&mut value)?;
-		self.is_numeric(&mut value)?;
-		self
-			.tokens
-			.push(Token::TransactionDate(self.line_index, value));
+	fn toknize_transaction_date(&mut self) -> Result<(), String> {
+		if let Some(&c) = self.line_chars.get(self.line_pos) {
+			if c.is_numeric() {
+				let mut value = String::new();
+
+				self.parse_number(&mut value)?;
+				self.parse_number(&mut value)?;
+				self.parse_number(&mut value)?;
+				self.parse_number(&mut value)?;
+				self.parse_dash(&mut value)?;
+				self.parse_number(&mut value)?;
+				self.parse_number(&mut value)?;
+				self.parse_dash(&mut value)?;
+				self.parse_number(&mut value)?;
+				self.parse_number(&mut value)?;
+				self.expect_whitespace()?;
+
+				self
+					.tokens
+					.push(Token::TransactionDate(self.line_index, value));
+
+				self.toknize_transaction_state()?;
+				self.toknize_transaction_code()?;
+				self.toknize_transaction_description()?;
+			}
+		}
+
 		Ok(())
 	}
 
-	fn is_numeric(&mut self, value: &mut String) -> Result<(), ()> {
+	fn parse_number(&mut self, value: &mut String) -> Result<(), String> {
 		match self.line_chars.get(self.line_pos) {
-			None => return Err(()),
+			None => Err(format!("Unexpected end of line. Expected number instead")),
 			Some(c) => {
 				if !c.is_numeric() {
-					return Err(());
+					Err(format!(
+						"Unexpected character {}. Expected number instead",
+						c
+					))
 				} else {
 					value.push(*c);
 					self.line_pos += 1;
+					Ok(())
 				}
 			}
 		}
-		Ok(())
 	}
 
-	fn is_dash(&mut self, value: &mut String) -> Result<(), ()> {
+	fn parse_dash(&mut self, value: &mut String) -> Result<(), String> {
 		match self.line_chars.get(self.line_pos) {
-			None => {
-				return Err(());
-			}
+			None => Err(format!("Unexpected end of line. Expected \"-\" instead")),
 			Some(c) => {
 				if '-' != *c {
-					return Err(());
+					Err(format!(
+						"Unexpected character {}. Expected \"-\" instead",
+						c
+					))
 				} else {
 					value.push(*c);
 					self.line_pos += 1;
+					Ok(())
 				}
 			}
 		}
-		Ok(())
 	}
 
-	fn toknize_transaction_state(&mut self) -> Result<(), ()> {
+	fn expect_whitespace(&mut self) -> Result<(), String> {
 		match self.line_chars.get(self.line_pos) {
-			None => {
-				return Err(());
-			}
-			Some(c) => {
+			None => Err(format!("Unexpected end of line. Expected \"-\" instead")),
+			Some(&c) => {
 				if !c.is_whitespace() {
-					return Err(());
-				} else {
-					self.line_pos += 1;
+					return Err(format!(
+						"Unexpected character {}. Expected \"-\" instead",
+						c
+					));
 				}
+				self.line_pos += 1;
+				Ok(())
 			}
 		}
-		match self.line_chars.get(self.line_pos) {
-			None => {
-				return Err(());
-			}
-			Some(c) => match c {
-				'*' => {
-					self
-						.tokens
-						.push(Token::TransactionState(self.line_index, State::Cleared));
-					self.line_pos += 1;
-				}
-				'!' => {
-					self
-						.tokens
-						.push(Token::TransactionState(self.line_index, State::Pending));
-					self.line_pos += 1;
-				}
-				_ => {
-					self
-						.tokens
-						.push(Token::TransactionState(self.line_index, State::Uncleared));
-				}
-			},
-		}
-		Ok(())
 	}
 
-	fn toknize_transaction_code(&mut self) -> Result<(), ()> {
+	fn toknize_transaction_state(&mut self) -> Result<(), String> {
 		match self.line_chars.get(self.line_pos) {
-			None => {
-				return Ok(());
-			}
-			Some(_) => {
+			None => Err(format!("Unexpected end of line")),
+			Some(&c) => {
 				self.consume_whitespaces();
+				match c {
+					'*' => {
+						self
+							.tokens
+							.push(Token::TransactionState(self.line_index, State::Cleared));
+						self.line_pos += 1;
+					}
+					'!' => {
+						self
+							.tokens
+							.push(Token::TransactionState(self.line_index, State::Pending));
+						self.line_pos += 1;
+					}
+					_ => {
+						self
+							.tokens
+							.push(Token::TransactionState(self.line_index, State::Uncleared));
+					}
+				}
+				Ok(())
 			}
 		}
-		if let Some(&c) = self.line_chars.get(self.line_pos) {
-			if c == '(' {
-				self.line_pos += 1;
-				let mut value = String::new();
-				match self.line_chars.get(self.line_pos) {
-					None => {
-						return Err(());
+	}
+
+	fn toknize_transaction_code(&mut self) -> Result<(), String> {
+		match self.line_chars.get(self.line_pos) {
+			None => Ok(()),
+			Some(&c) => {
+				self.consume_whitespaces();
+				if c == '(' {
+					self.line_pos += 1;
+
+					let mut value = String::new();
+
+					match self.line_chars.get(self.line_pos) {
+						None => {
+							return Err(String::from(""));
+						}
+						Some(&c) => {
+							value.push(c);
+							self.line_pos += 1;
+						}
 					}
-					Some(&c) => {
+
+					while let Some(&c) = self.line_chars.get(self.line_pos) {
+						if c == ')' {
+							self.line_pos += 1;
+							break;
+						}
 						value.push(c);
 						self.line_pos += 1;
 					}
+
+					self
+						.tokens
+						.push(Token::TransactionCode(self.line_index, value));
 				}
-				while let Some(&c) = self.line_chars.get(self.line_pos) {
-					if c == ')' {
-						self.line_pos += 1;
-						break;
-					}
-					value.push(c);
-					self.line_pos += 1;
-				}
-				self
-					.tokens
-					.push(Token::TransactionCode(self.line_index, value));
+				Ok(())
 			}
 		}
-		Ok(())
 	}
 
-	fn toknize_transaction_description(&mut self) -> Result<(), ()> {
+	fn toknize_transaction_description(&mut self) -> Result<(), String> {
 		match self.line_chars.get(self.line_pos) {
-			None => {
-				return Err(());
-			}
+			None => Err(format!("Unexpected end of line")),
 			Some(_) => {
 				self.consume_whitespaces();
-			}
-		}
-		let mut value = String::new();
-		while let Some(&c) = self.line_chars.get(self.line_pos) {
-			value.push(c);
-			self.line_pos += 1;
-		}
-		self
-			.tokens
-			.push(Token::TransactionDescription(self.line_index, value));
-		Ok(())
-	}
 
-	fn toknize_transaction_comment(&mut self) -> Result<(), ()> {
-		if let Some(&c) = self.line_chars.get(self.line_pos) {
-			if c == ';' {
-				self.line_pos += 1;
-				self.consume_whitespaces();
 				let mut value = String::new();
+
 				while let Some(&c) = self.line_chars.get(self.line_pos) {
 					value.push(c);
 					self.line_pos += 1;
 				}
+
 				self
 					.tokens
-					.push(Token::TransactionComment(self.line_index, value));
+					.push(Token::TransactionDescription(self.line_index, value));
+				Ok(())
 			}
 		}
-		Ok(())
 	}
 
-	fn toknize_transaction_posting(&mut self) -> Result<(), ()> {
-		if self.line_chars.get(self.line_pos).is_none() {
-			return Ok(());
+	fn toknize_comment(&mut self) -> Result<(), String> {
+		match self.line_chars.get(self.line_pos) {
+			None => Ok(()),
+			Some(&c) => {
+				if c == ';' {
+					self.line_pos += 1;
+
+					self.consume_whitespaces();
+
+					let mut value = String::new();
+
+					while let Some(&c) = self.line_chars.get(self.line_pos) {
+						value.push(c);
+						self.line_pos += 1;
+					}
+
+					self.tokens.push(Token::Comment(self.line_index, value));
+				}
+				Ok(())
+			}
 		}
+	}
 
-		let mut value = String::new();
+	fn toknize_include(&mut self) -> Result<(), String> {
+		match self.line_chars.get(self.line_pos) {
+			None => Ok(()),
+			Some(_) => {
+				let directive = "include";
 
-		while let Some(&c) = self.line_chars.get(self.line_pos) {
-			if self.is_tab(self.line_pos)
-				|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
-			{
+				if self
+					.line_chars
+					.iter()
+					.collect::<String>()
+					.starts_with(directive)
+				{
+					println!(
+						"{:?}",
+						self
+							.line_chars
+							.iter()
+							.skip(directive.len() + 1)
+							.collect::<String>()
+					);
+				}
+
+				Ok(())
+			}
+		}
+	}
+
+	fn toknize_transaction_posting(&mut self) -> Result<(), String> {
+		match self.line_chars.get(self.line_pos) {
+			None => Ok(()),
+			Some(_) => {
+				let mut value = String::new();
+
+				while let Some(&c) = self.line_chars.get(self.line_pos) {
+					if self.is_tab(self.line_pos)
+						|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
+					{
+						self
+							.tokens
+							.push(Token::PostingAccount(self.line_index, value));
+
+						self.consume_whitespaces();
+						self.posting_commodity()?;
+
+						return self.balance_assertion();
+					}
+
+					value.push(c);
+					self.line_pos += 1;
+				}
+
 				self
 					.tokens
 					.push(Token::PostingAccount(self.line_index, value));
-				self.posting_commodity()?;
-				return self.balance_assertion();
+
+				Ok(())
 			}
-			value.push(c);
-			self.line_pos += 1;
 		}
-
-		self
-			.tokens
-			.push(Token::PostingAccount(self.line_index, value));
-
-		Ok(())
 	}
 
-	fn balance_assertion(&mut self) -> Result<(), ()> {
+	fn balance_assertion(&mut self) -> Result<(), String> {
 		if let Some(&c) = self.line_chars.get(self.line_pos) {
 			if c == '=' {
 				self.line_pos += 1;
+
 				self.tokens.push(Token::BalanceAssertion(self.line_index));
-				return if self.line_chars.get(self.line_pos).is_none() {
-					Err(())
+
+				if self.line_chars.get(self.line_pos).is_none() {
+					return Err(String::from(""));
 				} else {
-					self.posting_commodity()
+					self.consume_whitespaces();
+					return self.posting_commodity();
 				};
 			}
 		}
 		Ok(())
 	}
 
-	fn posting_commodity(&mut self) -> Result<(), ()> {
-		if self.line_chars.get(self.line_pos).is_none() {
-			return Ok(());
-		}
+	fn posting_commodity(&mut self) -> Result<(), String> {
+		match self.line_chars.get(self.line_pos) {
+			None => Ok(()),
+			Some(_) => {
+				let mut value = String::new();
 
-		self.consume_whitespaces();
+				while let Some(&c) = self.line_chars.get(self.line_pos) {
+					if c == '-' || c.is_numeric() {
+						break;
+					}
 
-		let mut value = String::new();
+					if c.is_whitespace() {
+						self.line_pos += 1;
+						continue;
+					}
 
-		while let Some(&c) = self.line_chars.get(self.line_pos) {
-			if c == '-' || c.is_numeric() {
-				break;
+					value.push(c);
+					self.line_pos += 1;
+				}
+
+				if !value.is_empty() {
+					self
+						.tokens
+						.push(Token::PostingCommodity(self.line_index, value));
+				}
+
+				self.posting_amount()
 			}
-			value.push(c);
-			self.line_pos += 1;
 		}
-
-		if !value.is_empty() {
-			self
-				.tokens
-				.push(Token::PostingCommodity(self.line_index, value));
-		}
-
-		self.posting_amount()
 	}
 
-	fn posting_amount(&mut self) -> Result<(), ()> {
-		if self.line_chars.get(self.line_pos).is_none() {
-			return Err(());
-		}
-
-		let mut value = String::new();
-
-		if let Some(&c) = self.line_chars.get(self.line_pos) {
-			if c == '-' {
-				value.push(c);
-				self.line_pos += 1;
-			}
-		}
-
+	fn posting_amount(&mut self) -> Result<(), String> {
 		match self.line_chars.get(self.line_pos) {
-			None => return Err(()),
-			Some(&c) if !c.is_numeric() => return Err(()),
-			Some(&c) => {
-				value.push(c);
-				self.line_pos += 1;
+			None => Err(format!("Unexpected end of line")),
+			Some(_) => {
+				let mut value = String::new();
+
+				if let Some(&c) = self.line_chars.get(self.line_pos) {
+					if c == '-' {
+						value.push(c);
+						self.line_pos += 1;
+					}
+				}
+
+				match self.line_chars.get(self.line_pos) {
+					None => return Err(format!("Unexpected end of line")),
+					Some(c) if !c.is_numeric() => return Err(format!("Expected number, got {}", c)),
+					Some(&c) => {
+						value.push(c);
+						self.line_pos += 1;
+					}
+				}
+
+				while let Some(&c) = self.line_chars.get(self.line_pos) {
+					if !c.is_numeric() && c != '.' {
+						break;
+					}
+					value.push(c);
+					self.line_pos += 1;
+				}
+
+				while let Some(&c) = self.line_chars.get(self.line_pos) {
+					if c == '=' {
+						break;
+					} else if c.is_whitespace() {
+						self.line_pos += 1;
+						continue;
+					} else if !c.is_numeric() {
+						return Err(format!("Expected number, got {}", c));
+					}
+					value.push(c);
+					self.line_pos += 1;
+				}
+
+				self
+					.tokens
+					.push(Token::PostingAmount(self.line_index, value));
+
+				Ok(())
 			}
 		}
-
-		while let Some(&c) = self.line_chars.get(self.line_pos) {
-			if !c.is_numeric() && c != '.' {
-				break;
-			}
-			value.push(c);
-			self.line_pos += 1;
-		}
-
-		while let Some(&c) = self.line_chars.get(self.line_pos) {
-			if c == '=' {
-				break;
-			} else if c.is_whitespace() {
-				self.line_pos += 1;
-				continue;
-			} else if !c.is_numeric() {
-				return Err(());
-			}
-			value.push(c);
-			self.line_pos += 1;
-		}
-
-		self
-			.tokens
-			.push(Token::PostingAmount(self.line_index, value));
-
-		Ok(())
 	}
 }
