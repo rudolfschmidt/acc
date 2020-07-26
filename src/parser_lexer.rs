@@ -1,9 +1,16 @@
 use super::errors::Error;
+use super::model::Journal;
+use super::model::Ledger;
 use super::model::State;
 use super::model::Token;
 
-pub fn read_lines(content: &str, tokens: &mut Vec<Token>) -> Result<(), Error> {
+pub fn read_lines(
+	ledger: &mut Ledger,
+	content: &str,
+	tokens: &mut Vec<Token>,
+) -> Result<(), Error> {
 	let mut lexer = Lexer {
+		ledger,
 		tokens,
 		content,
 		line_chars: Vec::new(),
@@ -51,6 +58,7 @@ pub fn read_lines(content: &str, tokens: &mut Vec<Token>) -> Result<(), Error> {
 }
 
 struct Lexer<'a> {
+	ledger: &'a mut Ledger,
 	tokens: &'a mut Vec<Token>,
 	content: &'a str,
 	line_str: &'a str,
@@ -66,30 +74,25 @@ impl<'a> Lexer<'a> {
 			self.line_chars = line_str.chars().collect();
 			self.line_index = line_index;
 			self.line_pos = 0;
-			self.toknize_transaction_header()?;
-		}
-		Ok(())
-	}
-
-	fn toknize_transaction_header(&mut self) -> Result<(), String> {
-		match self.line_chars.get(self.line_pos) {
-			None => {
-				return Ok(());
-			}
-			Some(_) => {
-				if self.is_tab(self.line_pos)
-					|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
-				{
-					self.consume_whitespaces();
-					self.toknize_comment()?;
-					self.toknize_transaction_posting()?;
-				} else {
-					self.toknize_transaction_date()?;
-					self.toknize_comment()?;
-					self.toknize_include()?;
+			match self.line_chars.get(self.line_pos) {
+				None => {
+					return Ok(());
 				}
-				if let Some(c) = self.line_chars.get(self.line_pos) {
-					return Err(format!("Unexpected character {}", c));
+				Some(_) => {
+					if self.is_tab(self.line_pos)
+						|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
+					{
+						self.consume_whitespaces();
+						self.toknize_comment()?;
+						self.toknize_posting()?;
+					} else {
+						self.toknize_transaction_head()?;
+						self.toknize_comment()?;
+						self.toknize_directive_include()?;
+					}
+					if let Some(c) = self.line_chars.get(self.line_pos) {
+						return Err(format!("Unexpected character \"{}\"", c));
+					}
 				}
 			}
 		}
@@ -121,7 +124,7 @@ impl<'a> Lexer<'a> {
 		}
 	}
 
-	fn toknize_transaction_date(&mut self) -> Result<(), String> {
+	fn toknize_transaction_head(&mut self) -> Result<(), String> {
 		if let Some(&c) = self.line_chars.get(self.line_pos) {
 			if c.is_numeric() {
 				let mut value = String::new();
@@ -157,7 +160,7 @@ impl<'a> Lexer<'a> {
 			Some(c) => {
 				if !c.is_numeric() {
 					Err(format!(
-						"Unexpected character {}. Expected number instead",
+						"Unexpected character \"{}\". Expected number instead",
 						c
 					))
 				} else {
@@ -175,7 +178,7 @@ impl<'a> Lexer<'a> {
 			Some(c) => {
 				if '-' != *c {
 					Err(format!(
-						"Unexpected character {}. Expected \"-\" instead",
+						"Unexpected character \"{}\". Expected \"-\" instead",
 						c
 					))
 				} else {
@@ -193,7 +196,7 @@ impl<'a> Lexer<'a> {
 			Some(&c) => {
 				if !c.is_whitespace() {
 					return Err(format!(
-						"Unexpected character {}. Expected \"-\" instead",
+						"Unexpected character \"{}\". Expected \"-\" instead",
 						c
 					));
 				}
@@ -314,26 +317,30 @@ impl<'a> Lexer<'a> {
 		}
 	}
 
-	fn toknize_include(&mut self) -> Result<(), String> {
+	fn toknize_directive_include(&mut self) -> Result<(), String> {
 		match self.line_chars.get(self.line_pos) {
 			None => Ok(()),
 			Some(_) => {
 				let directive = "include";
-
+				let directive_len = directive.chars().count();
 				if self
 					.line_chars
 					.iter()
 					.collect::<String>()
 					.starts_with(directive)
 				{
-					println!(
-						"{:?}",
-						self
-							.line_chars
-							.iter()
-							.skip(directive.len() + 1)
-							.collect::<String>()
-					);
+					let file = self
+						.line_chars
+						.iter()
+						.skip(directive_len + 1)
+						.collect::<String>();
+					match super::read(file, self.ledger) {
+						Err(err) => return Err(err),
+						Ok(journal) => {
+							self.line_pos += directive_len + 1 + journal.file.chars().count();
+							self.ledger.journals.insert(0, journal);
+						}
+					}
 				}
 
 				Ok(())
@@ -341,7 +348,7 @@ impl<'a> Lexer<'a> {
 		}
 	}
 
-	fn toknize_transaction_posting(&mut self) -> Result<(), String> {
+	fn toknize_posting(&mut self) -> Result<(), String> {
 		match self.line_chars.get(self.line_pos) {
 			None => Ok(()),
 			Some(_) => {
