@@ -190,10 +190,14 @@ $ acc -f demo.ledger accounts --tree
 
 ```
 assets
+  cash
   checking
+equity
 expenses
   food
     groceries
+income
+  consulting
 ```
 
 #### Flat Output
@@ -262,5 +266,5 @@ If freedom and privacy matter anything to you, care about your finances or other
 * Add support for expressions
 * Add support for periodic transactions
 * Add experimental support for other file formats like yaml
-
-## References
+* Add support for slash separated dates
+* Add support for suffix currency
