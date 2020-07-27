@@ -65,8 +65,8 @@ fn start() -> Result<(), String> {
 			}
 
 			let mut ledger = Ledger {
-				command: command,
-				arguments: arguments,
+				command,
+				arguments,
 				tokens: Vec::new(),
 				transactions: Vec::new(),
 			};

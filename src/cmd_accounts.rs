@@ -26,7 +26,7 @@ pub fn print_accounts_tree(transactions: &[Transaction]) -> Result<(), String> {
 
 	let mut list: Vec<Account> = Vec::new();
 	for account in accounts {
-		let mut it = account.split(':').into_iter();
+		let mut it = account.split(':');
 		build_accounts_tree(&mut list, &mut it);
 	}
 	print_accounts_tree_list(0, list);
@@ -50,7 +50,7 @@ fn build_accounts_tree(list: &mut Vec<Account>, it: &mut core::str::Split<char>)
 				build_accounts_tree(&mut children, it);
 				list.push(Account {
 					name: token.to_owned(),
-					children: children,
+					children,
 				});
 			}
 		}

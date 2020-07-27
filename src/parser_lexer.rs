@@ -339,7 +339,7 @@ impl<'a> Lexer<'a> {
 
 					match self.ledger.read_tokens(&file) {
 						Err(err) => return Err(err),
-						Ok(()) => self.line_pos += directive_len + 1 + &file.chars().count(),
+						Ok(()) => self.line_pos += directive_len + 1 + file.chars().count(),
 					}
 				}
 
