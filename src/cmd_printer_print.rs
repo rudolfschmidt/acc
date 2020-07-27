@@ -1,4 +1,3 @@
-use super::model::Ledger;
 use super::model::MixedAmount;
 use super::model::Posting;
 use super::model::State;
@@ -7,36 +6,30 @@ use super::model::Transaction;
 const INDENT: &str = "\t";
 const OFFSET: usize = 4;
 
-pub fn print_explicit(ledger: &Ledger) -> Result<(), String> {
+pub fn print_explicit(transactions: &[Transaction]) -> Result<(), String> {
 	let require_amount = true;
-	print(ledger, require_amount, |p| p.balanced_amount.as_ref())?;
-	Ok(())
+	print(transactions, require_amount, |p| p.balanced_amount.as_ref())
 }
 
-pub fn print_raw(ledger: &Ledger) -> Result<(), String> {
+pub fn print_raw(transactions: &[Transaction]) -> Result<(), String> {
 	let require_amount = false;
-	print(ledger, require_amount, |p| p.unbalanced_amount.as_ref())?;
-	Ok(())
+	print(transactions, require_amount, |p| {
+		p.unbalanced_amount.as_ref()
+	})
 }
 
-fn print<F>(ledger: &Ledger, require_amount: bool, f: F) -> Result<(), String>
+fn print<F>(transactions: &[Transaction], require_amount: bool, f: F) -> Result<(), String>
 where
 	F: Fn(&Posting) -> Option<&MixedAmount>,
 {
-	let account_width = ledger
-		.journals
+	let account_width = transactions
 		.iter()
-		.flat_map(|j| j.transactions.iter())
 		.flat_map(|t| t.postings.iter())
 		.map(|p| p.account.chars().count())
 		.max()
 		.unwrap_or(0);
 
-	let mut transaction_iter = ledger
-		.journals
-		.iter()
-		.flat_map(|j| j.transactions.iter())
-		.peekable();
+	let mut transaction_iter = transactions.iter().peekable();
 
 	while let Some(transaction) = transaction_iter.next() {
 		print_head(transaction);

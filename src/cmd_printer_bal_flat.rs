@@ -7,7 +7,7 @@ use colored::Colorize;
 use num::Zero;
 use std::collections::BTreeMap;
 
-pub fn print(transactions: Vec<&Transaction>) -> Result<(), String> {
+pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 	let postings = group_postings_by_account(transactions)?;
 
 	let total = postings

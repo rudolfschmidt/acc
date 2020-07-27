@@ -7,7 +7,7 @@ use num::Signed;
 use std::collections::BTreeMap;
 
 pub fn group_postings_by_account(
-	transactions: Vec<&Transaction>,
+	transactions: &[Transaction],
 ) -> Result<BTreeMap<String, BTreeMap<String, num::rational::Rational64>>, String> {
 	let mut result = BTreeMap::<String, BTreeMap<String, num::rational::Rational64>>::new();
 

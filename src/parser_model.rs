@@ -31,7 +31,6 @@ pub fn parse_unbalanced_transactions(
 					Token::PostingCommodity(line, _value) => *line,
 					Token::PostingAmount(line, _value) => *line,
 					Token::BalanceAssertion(line) => *line,
-					Token::Include(line, _value) => *line,
 				},
 			},
 			message: format!("Parse Error : {}", message),
