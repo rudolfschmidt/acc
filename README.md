@@ -228,6 +228,17 @@ acc -f demo.ledger codes
 789
 ```
 
+## Directives
+
+### Include
+
+parses the file filename.ledger in the place where include is set.
+
+```
+include filename.ledger
+```
+
+
 ## FAQ
 ### Why should you not use properary software, specially for accounting?
 
