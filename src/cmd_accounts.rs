@@ -1,10 +1,8 @@
-use super::model::Ledger;
+use super::model::Transaction;
 
-pub fn print_accounts_flat(ledger: &Ledger) -> Result<(), String> {
-	for account in ledger
-		.journals
+pub fn print_accounts_flat(transactions: &[Transaction]) -> Result<(), String> {
+	for account in transactions
 		.iter()
-		.flat_map(|j| j.transactions.iter())
 		.flat_map(|t| t.postings.iter())
 		.map(|p| &p.account)
 		.collect::<std::collections::BTreeSet<&String>>()
@@ -19,11 +17,9 @@ struct Account {
 	children: Vec<Account>,
 }
 
-pub fn print_accounts_tree(ledger: &Ledger) -> Result<(), String> {
-	let accounts = ledger
-		.journals
+pub fn print_accounts_tree(transactions: &[Transaction]) -> Result<(), String> {
+	let accounts = transactions
 		.iter()
-		.flat_map(|j| j.transactions.iter())
 		.flat_map(|t| t.postings.iter())
 		.map(|p| &p.account)
 		.collect::<std::collections::BTreeSet<&String>>();

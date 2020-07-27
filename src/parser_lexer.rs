@@ -1,17 +1,11 @@
 use super::errors::Error;
-use super::model::Journal;
-use super::model::Ledger;
+use super::ledger::Ledger;
 use super::model::State;
 use super::model::Token;
 
-pub fn read_lines(
-	ledger: &mut Ledger,
-	content: &str,
-	tokens: &mut Vec<Token>,
-) -> Result<(), Error> {
+pub fn read_lines(ledger: &mut Ledger, content: &str) -> Result<(), Error> {
 	let mut lexer = Lexer {
 		ledger,
-		tokens,
 		content,
 		line_chars: Vec::new(),
 		line_index: 0,
@@ -59,7 +53,6 @@ pub fn read_lines(
 
 struct Lexer<'a> {
 	ledger: &'a mut Ledger,
-	tokens: &'a mut Vec<Token>,
 	content: &'a str,
 	line_str: &'a str,
 	line_chars: Vec<char>,
@@ -142,6 +135,7 @@ impl<'a> Lexer<'a> {
 				self.expect_whitespace()?;
 
 				self
+					.ledger
 					.tokens
 					.push(Token::TransactionDate(self.line_index, value));
 
@@ -214,18 +208,21 @@ impl<'a> Lexer<'a> {
 				match c {
 					'*' => {
 						self
+							.ledger
 							.tokens
 							.push(Token::TransactionState(self.line_index, State::Cleared));
 						self.line_pos += 1;
 					}
 					'!' => {
 						self
+							.ledger
 							.tokens
 							.push(Token::TransactionState(self.line_index, State::Pending));
 						self.line_pos += 1;
 					}
 					_ => {
 						self
+							.ledger
 							.tokens
 							.push(Token::TransactionState(self.line_index, State::Uncleared));
 					}
@@ -265,6 +262,7 @@ impl<'a> Lexer<'a> {
 					}
 
 					self
+						.ledger
 						.tokens
 						.push(Token::TransactionCode(self.line_index, value));
 				}
@@ -287,6 +285,7 @@ impl<'a> Lexer<'a> {
 				}
 
 				self
+					.ledger
 					.tokens
 					.push(Token::TransactionDescription(self.line_index, value));
 				Ok(())
@@ -310,7 +309,10 @@ impl<'a> Lexer<'a> {
 						self.line_pos += 1;
 					}
 
-					self.tokens.push(Token::Comment(self.line_index, value));
+					self
+						.ledger
+						.tokens
+						.push(Token::Comment(self.line_index, value));
 				}
 				Ok(())
 			}
@@ -334,12 +336,10 @@ impl<'a> Lexer<'a> {
 						.iter()
 						.skip(directive_len + 1)
 						.collect::<String>();
-					match super::read(file, self.ledger) {
+
+					match self.ledger.read_tokens(&file) {
 						Err(err) => return Err(err),
-						Ok(journal) => {
-							self.line_pos += directive_len + 1 + journal.file.chars().count();
-							self.ledger.journals.insert(0, journal);
-						}
+						Ok(()) => self.line_pos += directive_len + 1 + &file.chars().count(),
 					}
 				}
 
@@ -359,6 +359,7 @@ impl<'a> Lexer<'a> {
 						|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
 					{
 						self
+							.ledger
 							.tokens
 							.push(Token::PostingAccount(self.line_index, value));
 
@@ -373,6 +374,7 @@ impl<'a> Lexer<'a> {
 				}
 
 				self
+					.ledger
 					.tokens
 					.push(Token::PostingAccount(self.line_index, value));
 
@@ -386,7 +388,10 @@ impl<'a> Lexer<'a> {
 			if c == '=' {
 				self.line_pos += 1;
 
-				self.tokens.push(Token::BalanceAssertion(self.line_index));
+				self
+					.ledger
+					.tokens
+					.push(Token::BalanceAssertion(self.line_index));
 
 				if self.line_chars.get(self.line_pos).is_none() {
 					return Err(String::from(""));
@@ -421,6 +426,7 @@ impl<'a> Lexer<'a> {
 
 				if !value.is_empty() {
 					self
+						.ledger
 						.tokens
 						.push(Token::PostingCommodity(self.line_index, value));
 				}
@@ -474,6 +480,7 @@ impl<'a> Lexer<'a> {
 				}
 
 				self
+					.ledger
 					.tokens
 					.push(Token::PostingAmount(self.line_index, value));
 

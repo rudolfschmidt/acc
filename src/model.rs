@@ -1,36 +1,3 @@
-pub enum Command {
-	Print,
-	Balance,
-	Register,
-	Debug,
-	Accounts,
-	Codes,
-}
-
-#[derive(PartialEq)]
-pub enum Argument {
-	Flat,
-	Tree,
-	Raw,
-	Explicit,
-	DebugLexer,
-	DebugUnbalancedTransactions,
-	DebugBalancedTransactions,
-}
-
-pub struct Ledger {
-	pub journals: Vec<Journal>,
-	pub command: Command,
-	pub arguments: Vec<Argument>,
-}
-
-pub struct Journal {
-	pub file: String,
-	pub content: String,
-	pub lexer_tokens: Vec<Token>,
-	pub transactions: Vec<Transaction>,
-}
-
 #[derive(Debug)]
 pub enum Token {
 	TransactionDate(usize, String),
@@ -42,7 +9,6 @@ pub enum Token {
 	PostingCommodity(usize, String),
 	PostingAmount(usize, String),
 	BalanceAssertion(usize),
-	Include(usize, String),
 }
 
 #[derive(Debug, Clone)]

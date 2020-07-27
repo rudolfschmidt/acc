@@ -15,7 +15,6 @@ pub fn print_tokens(tokens: &[Token]) {
 			Token::PostingCommodity(_line, value) => println!("PostingCommodity({:?})", value),
 			Token::PostingAmount(_line, value) => println!("PostingAmount({:?})", value),
 			Token::BalanceAssertion(_line) => println!("BalanceAssertion"),
-			Token::Include(_line, value) => println!("Include({:?})", value),
 		}
 	}
 }

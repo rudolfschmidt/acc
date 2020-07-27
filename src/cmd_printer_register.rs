@@ -1,4 +1,3 @@
-use super::model::Ledger;
 use super::model::State;
 use super::model::Transaction;
 
@@ -26,16 +25,10 @@ struct Row {
 // .output()
 // .expect("failed to fetch terminal width");
 
-pub fn print(ledger: &Ledger) -> Result<(), String> {
+pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 	let mut rows = Vec::new();
 
 	let mut total = BTreeMap::new();
-
-	let transactions = ledger
-		.journals
-		.iter()
-		.flat_map(|j| j.transactions.iter())
-		.collect::<Vec<&Transaction>>();
 
 	for transaction in transactions {
 		let mut row = Row {

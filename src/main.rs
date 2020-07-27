@@ -8,15 +8,15 @@ mod cmd_printer_print;
 mod cmd_printer_register;
 mod debuger;
 mod errors;
+mod ledger;
 mod model;
 mod parser_balancer;
 mod parser_lexer;
 mod parser_model;
 
-use model::Argument;
-use model::Command;
-use model::Journal;
-use model::Ledger;
+use ledger::Argument;
+use ledger::Command;
+use ledger::Ledger;
 use std::env;
 
 fn main() {
@@ -65,136 +65,17 @@ fn start() -> Result<(), String> {
 			}
 
 			let mut ledger = Ledger {
-				journals: Vec::new(),
 				command: command,
 				arguments: arguments,
+				tokens: Vec::new(),
+				transactions: Vec::new(),
 			};
 
 			for file in files {
-				match read(file, &mut ledger) {
-					Err(err) => return Err(err),
-					Ok(journal) => ledger.journals.insert(0, journal),
-				}
+				ledger.read_content(&file)?;
 			}
 
-			execute_command(ledger)
+			ledger.execute_command()
 		}
 	}
-}
-
-fn read(file: String, ledger: &mut Ledger) -> Result<Journal, String> {
-	let mut journal = model::Journal {
-		file,
-		content: String::new(),
-		lexer_tokens: Vec::new(),
-		transactions: Vec::new(),
-	};
-	match std::fs::read_to_string(&journal.file) {
-		Err(err) => {
-			return Err(format!(
-				"While parsing \"{}\"\nError: {}",
-				&journal.file, err
-			))
-		}
-		Ok(data) => {
-			journal.content = data;
-		}
-	}
-	if let Err(err) = parse_file(ledger, &mut journal) {
-		return Err(format!(
-			"While parsing file \"{}\" at line {}:\n{}",
-			journal.file, err.line, err.message
-		));
-	}
-	Ok(journal)
-}
-
-fn parse_file(ledger: &mut Ledger, journal: &mut Journal) -> Result<(), errors::Error> {
-	parser_lexer::read_lines(ledger, &journal.content, &mut journal.lexer_tokens)?;
-
-	if let Command::Debug = ledger.command {
-		if ledger.arguments.contains(&Argument::DebugLexer) {
-			debuger::print_tokens(&journal.lexer_tokens);
-		}
-	}
-
-	parser_model::parse_unbalanced_transactions(&journal.lexer_tokens, &mut journal.transactions)?;
-
-	if let Command::Debug = ledger.command {
-		if ledger
-			.arguments
-			.contains(&Argument::DebugUnbalancedTransactions)
-		{
-			debuger::print_transactions(&journal.transactions);
-		}
-	}
-
-	parser_balancer::balance_transactions(&mut journal.transactions)?;
-
-	if let Command::Debug = ledger.command {
-		if ledger
-			.arguments
-			.contains(&Argument::DebugBalancedTransactions)
-		{
-			debuger::print_transactions(&journal.transactions);
-		}
-	}
-
-	Ok(())
-}
-
-fn execute_command(ledger: model::Ledger) -> Result<(), String> {
-	match ledger.command {
-		Command::Balance => {
-			if ledger.arguments.contains(&Argument::Flat) {
-				return cmd_printer_bal_flat::print(
-					ledger
-						.journals
-						.iter()
-						.flat_map(|j| j.transactions.iter())
-						.collect(),
-				);
-			}
-			if ledger.arguments.contains(&Argument::Tree) {
-				return cmd_printer_bal_struc::print(
-					ledger
-						.journals
-						.iter()
-						.flat_map(|j| j.transactions.iter())
-						.collect(),
-				);
-			}
-			return cmd_printer_bal_struc::print(
-				ledger
-					.journals
-					.iter()
-					.flat_map(|j| j.transactions.iter())
-					.collect(),
-			);
-		}
-		Command::Register => {
-			cmd_printer_register::print(&ledger)?;
-		}
-		Command::Print => {
-			if ledger.arguments.contains(&Argument::Explicit) {
-				return cmd_printer_print::print_explicit(&ledger);
-			}
-			if ledger.arguments.contains(&Argument::Raw) {
-				return cmd_printer_print::print_raw(&ledger);
-			}
-			return cmd_printer_print::print_raw(&ledger);
-		}
-		Command::Debug => {}
-		Command::Accounts => {
-			if ledger.arguments.contains(&Argument::Flat) {
-				return cmd_accounts::print_accounts_flat(&ledger);
-			}
-			if ledger.arguments.contains(&Argument::Tree) {
-				return cmd_accounts::print_accounts_tree(&ledger);
-			}
-			return cmd_accounts::print_accounts_tree(&ledger);
-		}
-		Command::Codes => cmd_codes::print_codes(&ledger)?,
-	}
-	Ok(())
 }
