@@ -97,9 +97,9 @@ impl<'a> Parser<'a> {
 				self.transactions.push(Transaction {
 					line: *line,
 					date: date.to_owned(),
-					state: state,
-					code: code,
-					description: description,
+					state,
+					code,
+					description,
 					comments: Vec::new(),
 					postings: Vec::new(),
 				});
@@ -148,7 +148,7 @@ impl<'a> Parser<'a> {
 						Token::PostingAmount(_, amount) => {
 							self.index += 1;
 							Some(MixedAmount {
-								commodity: commodity,
+								commodity,
 								amount: create_rational(&amount),
 							})
 						}
@@ -164,7 +164,7 @@ impl<'a> Parser<'a> {
 					.push(Posting {
 						line: *line,
 						account: account.to_owned(),
-						unbalanced_amount: unbalanced_amount,
+						unbalanced_amount,
 						balanced_amount: None,
 						balance_assertion: None,
 						comments: Vec::new(),

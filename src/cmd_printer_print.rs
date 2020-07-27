@@ -67,7 +67,7 @@ fn print_head(transaction: &Transaction) {
 				ret.push(' ');
 				Some(ret)
 			})
-			.unwrap_or(String::from("")),
+			.unwrap_or_else(|| String::from("")),
 		transaction.description
 	);
 }

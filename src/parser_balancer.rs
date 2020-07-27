@@ -41,8 +41,7 @@ fn disallow_multiple_commodites_with_empty_posts(transaction: &Transaction) -> R
 	if transaction
 		.postings
 		.iter()
-		.filter(|p| p.unbalanced_amount.is_none())
-		.next()
+		.find(|p| p.unbalanced_amount.is_none())
 		.is_none()
 	{
 		return Ok(());
