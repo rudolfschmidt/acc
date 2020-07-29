@@ -1,3 +1,5 @@
+mod comment;
+mod directives;
 mod mixed_amount;
 mod transaction;
 
@@ -68,21 +70,26 @@ impl<'a> Tokenizer<'a> {
 			self.line_index = line_index;
 			self.line_pos = 0;
 			if self.line_chars.get(self.line_pos).is_some() {
-				if self.is_tab(self.line_pos)
-					|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
-				{
-					self.consume_whitespaces();
-					self.tokenize_comment()?;
-					self.tokenize_posting()?;
-				} else {
-					transaction::tokenize(self)?;
-					self.tokenize_comment()?;
-					self.tokenize_directive_include()?;
-				}
-				if let Some(c) = self.line_chars.get(self.line_pos) {
-					return Err(format!("Unexpected character \"{}\"", c));
-				}
+				self.parse()?;
 			}
+		}
+		Ok(())
+	}
+
+	fn parse(&mut self) -> Result<(), String> {
+		if self.is_tab(self.line_pos)
+			|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
+		{
+			self.consume_whitespaces();
+			comment::tokenize(self)?;
+			self.tokenize_posting()?;
+		} else {
+			transaction::tokenize(self)?;
+			comment::tokenize(self)?;
+			directives::is_include(self)?;
+		}
+		if let Some(c) = self.line_chars.get(self.line_pos) {
+			return Err(format!("Unexpected character \"{}\"", c));
 		}
 		Ok(())
 	}
@@ -109,61 +116,6 @@ impl<'a> Tokenizer<'a> {
 				break;
 			}
 			self.line_pos += 1;
-		}
-	}
-
-	fn tokenize_comment(&mut self) -> Result<(), String> {
-		match self.line_chars.get(self.line_pos) {
-			None => Ok(()),
-			Some(&c) => {
-				if c == ';' {
-					self.line_pos += 1;
-
-					self.consume_whitespaces();
-
-					let mut value = String::new();
-
-					while let Some(&c) = self.line_chars.get(self.line_pos) {
-						value.push(c);
-						self.line_pos += 1;
-					}
-
-					self
-						.ledger
-						.tokens
-						.push(Token::Comment(self.line_index, value));
-				}
-				Ok(())
-			}
-		}
-	}
-
-	fn tokenize_directive_include(&mut self) -> Result<(), String> {
-		match self.line_chars.get(self.line_pos) {
-			None => Ok(()),
-			Some(_) => {
-				let directive = "include";
-				let directive_len = directive.chars().count();
-				if self
-					.line_chars
-					.iter()
-					.collect::<String>()
-					.starts_with(directive)
-				{
-					let file = self
-						.line_chars
-						.iter()
-						.skip(directive_len + 1)
-						.collect::<String>();
-
-					match self.ledger.read_tokens(&file) {
-						Err(err) => return Err(err),
-						Ok(()) => self.line_pos += directive_len + 1 + file.chars().count(),
-					}
-				}
-
-				Ok(())
-			}
 		}
 	}
 
