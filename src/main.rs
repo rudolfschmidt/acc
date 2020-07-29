@@ -11,8 +11,8 @@ mod errors;
 mod ledger;
 mod model;
 mod parser_balancer;
-mod parser_lexer;
 mod parser_model;
+mod tokenizer;
 
 use ledger::Argument;
 use ledger::Command;

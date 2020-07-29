@@ -9,8 +9,8 @@ use super::errors::Error;
 use super::model::Token;
 use super::model::Transaction;
 use super::parser_balancer;
-use super::parser_lexer;
 use super::parser_model;
+use super::tokenizer;
 
 pub enum Command {
 	Print,
@@ -41,32 +41,19 @@ pub struct Ledger {
 
 impl Ledger {
 	pub fn read_content(&mut self, file: &str) -> Result<(), String> {
-		let content = self.read_file(file)?;
+		let content = read_file(file)?;
 		if let Err(err) = self.parse_content(&content) {
-			return Err(format!(
-				"While parsing file \"{}\" at line {}:\n{}",
-				&file, err.line, err.message
-			));
+			return cannot_parse_file(err, &file);
 		}
 		Ok(())
 	}
 
 	pub fn read_tokens(&mut self, file: &str) -> Result<(), String> {
-		let content = self.read_file(file)?;
-		if let Err(err) = parser_lexer::read_lines(self, &content) {
-			return Err(format!(
-				"While parsing file \"{}\" at line {}:\n{}",
-				&file, err.line, err.message
-			));
+		let content = read_file(file)?;
+		if let Err(err) = tokenizer::read_lines(self, &content) {
+			return cannot_parse_file(err, &file);
 		}
 		Ok(())
-	}
-
-	fn read_file(&self, file: &str) -> Result<String, String> {
-		match std::fs::read_to_string(file) {
-			Err(err) => Err(format!("While parsing \"{}\"\nError : {}", &file, err)),
-			Ok(content) => Ok(content),
-		}
 	}
 
 	fn parse_content(&mut self, content: &str) -> Result<(), Error> {
@@ -77,7 +64,7 @@ impl Ledger {
 	}
 
 	fn parse_tokens(&mut self, content: &str) -> Result<(), Error> {
-		parser_lexer::read_lines(self, content)?;
+		tokenizer::read_lines(self, content)?;
 		if let Command::Debug = self.command {
 			if self.arguments.contains(&Argument::DebugLexer) {
 				debuger::print_tokens(&self.tokens);
@@ -149,4 +136,18 @@ impl Ledger {
 		}
 		Ok(())
 	}
+}
+
+fn read_file(file: &str) -> Result<String, String> {
+	match std::fs::read_to_string(file) {
+		Err(err) => Err(format!("While parsing \"{}\"\nError : {}", &file, err)),
+		Ok(content) => Ok(content),
+	}
+}
+
+fn cannot_parse_file(err: Error, file: &str) -> Result<(), String> {
+	Err(format!(
+		"While parsing file \"{}\" at line {}:\n{}",
+		file, err.line, err.message
+	))
 }
