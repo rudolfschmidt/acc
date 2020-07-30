@@ -72,7 +72,7 @@ fn start() -> Result<(), String> {
 			};
 
 			for file in files {
-				ledger.read_content(&file)?;
+				ledger.read_content(std::path::Path::new(&file))?;
 			}
 
 			ledger.execute_command()

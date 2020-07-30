@@ -40,18 +40,18 @@ pub struct Ledger {
 }
 
 impl Ledger {
-	pub fn read_content(&mut self, file: &str) -> Result<(), String> {
+	pub fn read_content(&mut self, file: &std::path::Path) -> Result<(), String> {
 		let content = read_file(file)?;
 		if let Err(err) = self.parse_content(&content) {
-			return cannot_parse_file(err, &file);
+			return cannot_parse_file(err, file);
 		}
 		Ok(())
 	}
 
-	pub fn read_tokens(&mut self, file: &str) -> Result<(), String> {
+	pub fn read_tokens(&mut self, file: &std::path::Path) -> Result<(), String> {
 		let content = read_file(file)?;
 		if let Err(err) = tokenizer::read_lines(self, &content) {
-			return cannot_parse_file(err, &file);
+			return cannot_parse_file(err, file);
 		}
 		Ok(())
 	}
@@ -138,16 +138,22 @@ impl Ledger {
 	}
 }
 
-fn read_file(file: &str) -> Result<String, String> {
-	match std::fs::read_to_string(file) {
-		Err(err) => Err(format!("While parsing \"{}\"\nError : {}", &file, err)),
+fn read_file(path: &std::path::Path) -> Result<String, String> {
+	match std::fs::read_to_string(path) {
+		Err(err) => Err(format!(
+			"While parsing \"{}\"\nError : {}",
+			path.display(),
+			err
+		)),
 		Ok(content) => Ok(content),
 	}
 }
 
-fn cannot_parse_file(err: Error, file: &str) -> Result<(), String> {
+fn cannot_parse_file(err: Error, file: &std::path::Path) -> Result<(), String> {
 	Err(format!(
 		"While parsing file \"{}\" at line {}:\n{}",
-		file, err.line, err.message
+		file.display(),
+		err.line,
+		err.message
 	))
 }
