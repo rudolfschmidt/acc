@@ -307,4 +307,3 @@ If freedom and privacy matter anything to you, care about your finances or other
 * Add support for expressions
 * Add support for periodic transactions
 * Add experimental support for other file formats like yaml
-* Recursive version of the include directive
