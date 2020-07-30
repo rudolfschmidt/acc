@@ -235,7 +235,8 @@ acc -f demo.ledger codes
 Includes another ledger file within a ledger file
 
 ```
-include filename.ledger
+include file.ledger
+include files/file.ledger
 ```
 
 Includes all files with extension ```ledger```
