@@ -232,11 +232,41 @@ acc -f demo.ledger codes
 
 ### Include
 
-parses the file filename.ledger in the place where include is set.
+Includes another ledger file within a ledger file
 
 ```
 include filename.ledger
 ```
+
+Includes all files with extension ```ledger```
+
+```
+include *.ledger 
+include files/*.ledger 
+```
+
+Includes any file
+
+```
+include *.*
+include files/*.*
+```
+
+Include files from any directory inside directory ```files``` (first level)
+
+```
+include files/*/*.*
+include files/*/*.ledger
+```
+
+Includes all files from all directories under directory ```files``` (recursive)
+
+```
+include files/**/*.*
+include files/**/*.ledger
+```
+
+#### 
 
 
 ## FAQ
