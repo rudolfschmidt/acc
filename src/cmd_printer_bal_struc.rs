@@ -16,6 +16,9 @@ struct BalanceAccount {
 }
 
 pub fn print(transactions: &[Transaction]) -> Result<(), String> {
+	if transactions.iter().any(|t| t.postings.is_empty()) {
+		return Ok(());
+	}
 	let grouped_postings = group_postings_by_account(transactions)?;
 	let accounts = make_balance_accounts(&grouped_postings);
 	let root_account = make_root_balance_account(&accounts);

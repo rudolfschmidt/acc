@@ -7,21 +7,28 @@ const INDENT: &str = "\t";
 const OFFSET: usize = 4;
 
 pub fn print_explicit(transactions: &[Transaction]) -> Result<(), String> {
+	if transactions.iter().any(|t| t.postings.is_empty()) {
+		return Ok(());
+	}
 	let require_amount = true;
 	print(transactions, require_amount, |p| p.balanced_amount.as_ref())
 }
 
 pub fn print_raw(transactions: &[Transaction]) -> Result<(), String> {
+	if transactions.iter().any(|t| t.postings.is_empty()) {
+		return Ok(());
+	}
 	let require_amount = false;
 	print(transactions, require_amount, |p| {
 		p.unbalanced_amount.as_ref()
 	})
 }
 
-fn print<F>(transactions: &[Transaction], require_amount: bool, f: F) -> Result<(), String>
-where
-	F: Fn(&Posting) -> Option<&MixedAmount>,
-{
+fn print<F: Fn(&Posting) -> Option<&MixedAmount>>(
+	transactions: &[Transaction],
+	require_amount: bool,
+	f: F,
+) -> Result<(), String> {
 	let account_width = transactions
 		.iter()
 		.flat_map(|t| t.postings.iter())

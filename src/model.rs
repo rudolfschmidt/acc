@@ -1,6 +1,8 @@
 #[derive(Debug)]
 pub enum Token {
-	TransactionDate(usize, String),
+	TransactionDateYear(usize, String),
+	TransactionDateMonth(usize, String),
+	TransactionDateDay(usize, String),
 	TransactionState(usize, State),
 	TransactionCode(usize, String),
 	TransactionDescription(usize, String),
@@ -9,6 +11,7 @@ pub enum Token {
 	PostingCommodity(usize, String),
 	PostingAmount(usize, String),
 	BalanceAssertion(usize),
+	Alias(usize, String),
 }
 
 #[derive(Debug, Clone)]

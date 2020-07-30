@@ -1,98 +1,80 @@
 use super::super::model::State;
 use super::super::model::Token;
+use super::chars;
 use super::Tokenizer;
 
 pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	tokenize_date(tokenizer)
+	match tokenizer.line_chars.get(tokenizer.line_pos) {
+		None => Ok(()),
+		Some(c) if c.is_numeric() => tokenize_date(tokenizer),
+		Some(_) => Ok(()),
+	}
 }
 
 fn tokenize_date(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	if let Some(&c) = tokenizer.line_chars.get(tokenizer.line_pos) {
-		if c.is_numeric() {
-			let mut value = String::new();
+	let mut year = String::new();
+	let mut month = String::new();
+	let mut day = String::new();
 
-			parse_number(tokenizer, &mut value)?;
-			parse_number(tokenizer, &mut value)?;
-			parse_number(tokenizer, &mut value)?;
-			parse_number(tokenizer, &mut value)?;
-			parse_dash(tokenizer, &mut value)?;
-			parse_number(tokenizer, &mut value)?;
-			parse_number(tokenizer, &mut value)?;
-			parse_dash(tokenizer, &mut value)?;
-			parse_number(tokenizer, &mut value)?;
-			parse_number(tokenizer, &mut value)?;
-			expect_whitespace(tokenizer)?;
+	chars::parse_numeric(tokenizer, &mut year)?;
+	chars::parse_numeric(tokenizer, &mut year)?;
+	chars::parse_numeric(tokenizer, &mut year)?;
+	chars::parse_numeric(tokenizer, &mut year)?;
 
-			tokenizer
-				.ledger
-				.tokens
-				.push(Token::TransactionDate(tokenizer.line_index, value));
-
-			toknize_transaction_state(tokenizer)?;
-			toknize_transaction_code(tokenizer)?;
-			toknize_transaction_description(tokenizer)?;
-		}
+	if chars::is_char(tokenizer, '-') {
+		chars::expect_char(tokenizer, '-')?;
+		chars::parse_numeric(tokenizer, &mut month)?;
+		chars::parse_numeric(tokenizer, &mut month)?;
+		chars::expect_char(tokenizer, '-')?;
+		chars::parse_numeric(tokenizer, &mut day)?;
+		chars::parse_numeric(tokenizer, &mut day)?;
 	}
+
+	if chars::is_char(tokenizer, '/') {
+		chars::expect_char(tokenizer, '/')?;
+		chars::parse_numeric(tokenizer, &mut month)?;
+		chars::parse_numeric(tokenizer, &mut month)?;
+		chars::expect_char(tokenizer, '/')?;
+		chars::parse_numeric(tokenizer, &mut day)?;
+		chars::parse_numeric(tokenizer, &mut day)?;
+	}
+
+	if chars::is_char(tokenizer, '.') {
+		chars::expect_char(tokenizer, '.')?;
+		chars::parse_numeric(tokenizer, &mut month)?;
+		chars::parse_numeric(tokenizer, &mut month)?;
+		chars::expect_char(tokenizer, '.')?;
+		chars::parse_numeric(tokenizer, &mut day)?;
+		chars::parse_numeric(tokenizer, &mut day)?;
+	}
+
+	chars::expect_whitespace(tokenizer)?;
+
+	tokenizer
+		.ledger
+		.tokens
+		.push(Token::TransactionDateYear(tokenizer.line_index, year));
+	tokenizer
+		.ledger
+		.tokens
+		.push(Token::TransactionDateMonth(tokenizer.line_index, month));
+	tokenizer
+		.ledger
+		.tokens
+		.push(Token::TransactionDateDay(tokenizer.line_index, day));
+
+	tokenize_state(tokenizer)?;
+	tokenize_code(tokenizer)?;
+	tokenize_description(tokenizer)?;
+
 	Ok(())
 }
 
-fn parse_number(tokenizer: &mut Tokenizer, value: &mut String) -> Result<(), String> {
-	match tokenizer.line_chars.get(tokenizer.line_pos) {
-		None => Err(format!("Unexpected end of line. Expected number instead")),
-		Some(c) => {
-			if !c.is_numeric() {
-				Err(format!(
-					"Unexpected character \"{}\". Expected number instead",
-					c
-				))
-			} else {
-				value.push(*c);
-				tokenizer.line_pos += 1;
-				Ok(())
-			}
-		}
-	}
-}
-
-fn parse_dash(tokenizer: &mut Tokenizer, value: &mut String) -> Result<(), String> {
-	match tokenizer.line_chars.get(tokenizer.line_pos) {
-		None => Err(format!("Unexpected end of line. Expected \"-\" instead")),
-		Some(c) => {
-			if '-' != *c {
-				Err(format!(
-					"Unexpected character \"{}\". Expected \"-\" instead",
-					c
-				))
-			} else {
-				value.push(*c);
-				tokenizer.line_pos += 1;
-				Ok(())
-			}
-		}
-	}
-}
-
-fn expect_whitespace(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	match tokenizer.line_chars.get(tokenizer.line_pos) {
-		None => Err(format!("Unexpected end of line. Expected \"-\" instead")),
-		Some(&c) => {
-			if !c.is_whitespace() {
-				return Err(format!(
-					"Unexpected character \"{}\". Expected \"-\" instead",
-					c
-				));
-			}
-			tokenizer.line_pos += 1;
-			Ok(())
-		}
-	}
-}
-
-fn toknize_transaction_state(tokenizer: &mut Tokenizer) -> Result<(), String> {
+fn tokenize_state(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	match tokenizer.line_chars.get(tokenizer.line_pos) {
 		None => Err(format!("Unexpected end of line")),
 		Some(&c) => {
-			tokenizer.consume_whitespaces();
+			chars::consume_whitespaces(tokenizer);
 			match c {
 				'*' => {
 					let state = Token::TransactionState(tokenizer.line_index, State::Cleared);
@@ -114,11 +96,12 @@ fn toknize_transaction_state(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	}
 }
 
-fn toknize_transaction_code(tokenizer: &mut Tokenizer) -> Result<(), String> {
+fn tokenize_code(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	match tokenizer.line_chars.get(tokenizer.line_pos) {
 		None => Ok(()),
 		Some(&c) => {
-			tokenizer.consume_whitespaces();
+			chars::consume_whitespaces(tokenizer);
+
 			if c == '(' {
 				tokenizer.line_pos += 1;
 
@@ -148,25 +131,30 @@ fn toknize_transaction_code(tokenizer: &mut Tokenizer) -> Result<(), String> {
 					.tokens
 					.push(Token::TransactionCode(tokenizer.line_index, value));
 			}
+
 			Ok(())
 		}
 	}
 }
 
-fn toknize_transaction_description(tokenizer: &mut Tokenizer) -> Result<(), String> {
+fn tokenize_description(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	match tokenizer.line_chars.get(tokenizer.line_pos) {
 		None => Err(format!("Unexpected end of line")),
 		Some(_) => {
-			tokenizer.consume_whitespaces();
+			chars::consume_whitespaces(tokenizer);
+
 			let mut value = String::new();
+
 			while let Some(&c) = tokenizer.line_chars.get(tokenizer.line_pos) {
 				value.push(c);
 				tokenizer.line_pos += 1;
 			}
+
 			tokenizer
 				.ledger
 				.tokens
 				.push(Token::TransactionDescription(tokenizer.line_index, value));
+
 			Ok(())
 		}
 	}

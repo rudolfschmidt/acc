@@ -4,7 +4,9 @@ use super::model::Transaction;
 pub fn print_tokens(tokens: &[Token]) {
 	for token in tokens {
 		match token {
-			Token::TransactionDate(_line, value) => println!("TransactionDate({:?})", value),
+			Token::TransactionDateYear(_line, value) => println!("TransactionDateYear({:?})", value),
+			Token::TransactionDateMonth(_line, value) => println!("TransactionDateMonth({:?})", value),
+			Token::TransactionDateDay(_line, value) => println!("TransactionDateDay({:?})", value),
 			Token::TransactionState(_line, value) => println!("TransactionState({:?})", value),
 			Token::TransactionCode(_line, value) => println!("TransactionCode({:?})", value),
 			Token::TransactionDescription(_line, value) => {
@@ -15,6 +17,7 @@ pub fn print_tokens(tokens: &[Token]) {
 			Token::PostingCommodity(_line, value) => println!("PostingCommodity({:?})", value),
 			Token::PostingAmount(_line, value) => println!("PostingAmount({:?})", value),
 			Token::BalanceAssertion(_line) => println!("BalanceAssertion"),
+			Token::Alias(_line, value) => println!("Alias({:?})", value),
 		}
 	}
 }

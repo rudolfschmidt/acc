@@ -6,16 +6,16 @@ use std::collections::BTreeMap;
 
 const WIDTH_OFFSET: usize = 4;
 
+struct Row {
+	title: String,
+	accounts: Vec<Account>,
+}
+
 struct Account {
-	name: String,
+	account: String,
 	commodity: String,
 	amount: String,
 	total: BTreeMap<String, String>,
-}
-
-struct Row {
-	header: String,
-	accounts: Vec<Account>,
 }
 
 // Maybe I consider the terminal width in the future
@@ -31,8 +31,11 @@ pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 	let mut total = BTreeMap::new();
 
 	for transaction in transactions {
+		if transaction.postings.is_empty() {
+			continue;
+		}
 		let mut row = Row {
-			header: format!(
+			title: format!(
 				"{}{}{}",
 				transaction.date,
 				match transaction.state {
@@ -68,15 +71,8 @@ pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 						.expect("null amount not allowed")
 						.amount,
 				);
-			let mut total_format = BTreeMap::new();
-			for (commoity, amount) in &total {
-				total_format.insert(
-					commoity.to_owned(),
-					super::cmd_printer::format_amount(&amount),
-				);
-			}
 			row.accounts.push(Account {
-				name: posting.account.to_owned(),
+				account: posting.account.to_owned(),
 				commodity: posting
 					.balanced_amount
 					.as_ref()
@@ -90,7 +86,15 @@ pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 						.expect("null amount not allowed")
 						.amount,
 				),
-				total: total_format,
+				total: total
+					.iter()
+					.fold(BTreeMap::new(), |mut acc, (commodity, amount)| {
+						acc.insert(
+							commodity.to_owned(),
+							super::cmd_printer::format_amount(&amount),
+						);
+						acc
+					}),
 			});
 		}
 		rows.push(row);
@@ -98,14 +102,14 @@ pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 
 	let header_width = rows
 		.iter()
-		.map(|t| t.header.chars().count())
+		.map(|t| t.title.chars().count())
 		.max()
 		.unwrap_or(0);
 
 	let account_width = rows
 		.iter()
 		.flat_map(|t| t.accounts.iter())
-		.map(|a| a.name.chars().count())
+		.map(|a| a.account.chars().count())
 		.max()
 		.unwrap_or(0);
 
@@ -134,7 +138,7 @@ pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 	for row in rows {
 		print!(
 			"{:<header_width$}",
-			row.header,
+			row.title,
 			header_width = header_width + WIDTH_OFFSET
 		);
 
@@ -148,31 +152,23 @@ pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 
 			print!(
 				"{:<account_width$}",
-				account.name.blue(),
+				account.account.blue(),
 				account_width = account_width + WIDTH_OFFSET
 			);
 
-			if account.amount.starts_with('-') {
+			let commodity = &account.commodity;
+			let amount = &account.amount;
+
+			if amount.starts_with('-') {
 				print!(
 					"{}",
-					format_commodity_amount(
-						&account.commodity,
-						&account.amount,
-						commodity_width,
-						amount_width,
-					)
-					.red()
-				)
+					format_commodity_amount(&commodity, &amount, commodity_width, amount_width).red()
+				);
 			} else {
 				print!(
 					"{}",
-					format_commodity_amount(
-						&account.commodity,
-						&account.amount,
-						commodity_width,
-						amount_width,
-					)
-				)
+					format_commodity_amount(&commodity, &amount, commodity_width, amount_width)
+				);
 			}
 
 			let mut total_iter = account.total.iter();
@@ -248,6 +244,7 @@ fn format_commodity_amount(
 		"{:>commodity_width$}{:>amount_width$}{:<offset_width$}",
 		commodity,
 		amount,
+		"",
 		commodity_width = commodity_width,
 		amount_width = amount_width,
 		offset_width = WIDTH_OFFSET * 2

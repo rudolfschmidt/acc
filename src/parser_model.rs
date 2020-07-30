@@ -22,7 +22,9 @@ pub fn parse_unbalanced_transactions(
 			line: match parser.tokens.get(parser.index) {
 				None => parser.index + 1,
 				Some(token) => match token {
-					Token::TransactionDate(line, _value) => *line,
+					Token::TransactionDateYear(line, _value) => *line,
+					Token::TransactionDateMonth(line, _value) => *line,
+					Token::TransactionDateDay(line, _value) => *line,
 					Token::TransactionState(line, _value) => *line,
 					Token::TransactionCode(line, _value) => *line,
 					Token::TransactionDescription(line, _value) => *line,
@@ -31,6 +33,7 @@ pub fn parse_unbalanced_transactions(
 					Token::PostingCommodity(line, _value) => *line,
 					Token::PostingAmount(line, _value) => *line,
 					Token::BalanceAssertion(line) => *line,
+					Token::Alias(line, _value) => *line,
 				},
 			},
 			message: format!("Parse Error : {}", message),
@@ -48,18 +51,41 @@ struct Parser<'a> {
 impl<'a> Parser<'a> {
 	fn parse(&mut self) -> Result<(), String> {
 		while self.index < self.tokens.len() {
-			self.parse_transaction_header()?;
-			self.parse_transaction_comment()?;
+			self.parse_transaction()?;
+			self.parse_comment()?;
 			self.parse_posting()?;
 			self.parse_balance_assertion()?;
+			self.parse_alias()?;
 		}
 		Ok(())
 	}
 
-	fn parse_transaction_header(&mut self) -> Result<(), String> {
+	fn parse_transaction(&mut self) -> Result<(), String> {
 		if let Some(token) = self.tokens.get(self.index) {
-			if let Token::TransactionDate(line, date) = token {
+			if let Token::TransactionDateYear(line, year) = token {
 				self.index += 1;
+
+				let month = match self.tokens.get(self.index) {
+					None => return Err(format!("")),
+					Some(token) => match token {
+						Token::TransactionDateMonth(_, month) => {
+							self.index += 1;
+							month.to_owned()
+						}
+						_ => return Err(format!("")),
+					},
+				};
+
+				let day = match self.tokens.get(self.index) {
+					None => return Err(format!("")),
+					Some(token) => match token {
+						Token::TransactionDateDay(_, day) => {
+							self.index += 1;
+							day.to_owned()
+						}
+						_ => return Err(format!("")),
+					},
+				};
 
 				let state = match self.tokens.get(self.index) {
 					None => return Err(format!("")),
@@ -96,7 +122,12 @@ impl<'a> Parser<'a> {
 
 				self.transactions.push(Transaction {
 					line: *line,
-					date: date.to_owned(),
+					date: format!(
+						"{}-{}-{}",
+						year.to_owned(),
+						month.to_owned(),
+						day.to_owned()
+					),
 					state,
 					code,
 					description,
@@ -108,7 +139,7 @@ impl<'a> Parser<'a> {
 		Ok(())
 	}
 
-	fn parse_transaction_comment(&mut self) -> Result<(), String> {
+	fn parse_comment(&mut self) -> Result<(), String> {
 		if let Some(token) = self.tokens.get(self.index) {
 			if let Token::Comment(line, value) = token {
 				self
@@ -205,6 +236,15 @@ impl<'a> Parser<'a> {
 					None => return Err(format!("")),
 					Some(posting) => posting.balance_assertion = Some(MixedAmount { commodity, amount }),
 				}
+			}
+		}
+		Ok(())
+	}
+
+	fn parse_alias(&mut self) -> Result<(), String> {
+		if let Some(token) = self.tokens.get(self.index) {
+			if let Token::Alias(_line, _alias) = token {
+				self.index += 1;
 			}
 		}
 		Ok(())
