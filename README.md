@@ -277,5 +277,4 @@ If freedom and privacy matter anything to you, care about your finances or other
 * Add support for expressions
 * Add support for periodic transactions
 * Add experimental support for other file formats like yaml
-* Add support for slash separated dates
 * Recursive version of the include directive
