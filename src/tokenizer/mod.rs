@@ -1,3 +1,4 @@
+mod chars;
 mod comment;
 mod directives;
 mod mixed_amount;
@@ -77,46 +78,23 @@ impl<'a> Tokenizer<'a> {
 	}
 
 	fn parse(&mut self) -> Result<(), String> {
-		if self.is_tab(self.line_pos)
-			|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
+		if chars::is_tab(&self.line_chars, self.line_pos)
+			|| (chars::is_space(&self.line_chars, self.line_pos)
+				&& chars::is_space(&self.line_chars, self.line_pos + 1))
 		{
-			self.consume_whitespaces();
+			chars::consume_whitespaces(self);
 			comment::tokenize(self)?;
 			self.tokenize_posting()?;
 		} else {
 			transaction::tokenize(self)?;
 			comment::tokenize(self)?;
 			directives::is_include(self)?;
+			directives::is_alias(self)?;
 		}
 		if let Some(c) = self.line_chars.get(self.line_pos) {
 			return Err(format!("Unexpected character \"{}\"", c));
 		}
 		Ok(())
-	}
-
-	fn is_space(&mut self, pos: usize) -> bool {
-		match self.line_chars.get(pos) {
-			None => false,
-			Some(c) if *c == ' ' => true,
-			Some(_) => false,
-		}
-	}
-
-	fn is_tab(&mut self, pos: usize) -> bool {
-		match self.line_chars.get(pos) {
-			None => false,
-			Some(c) if *c == '\t' => true,
-			Some(_) => false,
-		}
-	}
-
-	fn consume_whitespaces(&mut self) {
-		while let Some(c) = self.line_chars.get(self.line_pos) {
-			if !c.is_whitespace() {
-				break;
-			}
-			self.line_pos += 1;
-		}
 	}
 
 	fn tokenize_posting(&mut self) -> Result<(), String> {
@@ -126,15 +104,16 @@ impl<'a> Tokenizer<'a> {
 				let mut value = String::new();
 
 				while let Some(&c) = self.line_chars.get(self.line_pos) {
-					if self.is_tab(self.line_pos)
-						|| (self.is_space(self.line_pos) && self.is_space(self.line_pos + 1))
+					if chars::is_tab(&self.line_chars, self.line_pos)
+						|| (chars::is_space(&self.line_chars, self.line_pos)
+							&& chars::is_space(&self.line_chars, self.line_pos + 1))
 					{
 						self
 							.ledger
 							.tokens
 							.push(Token::PostingAccount(self.line_index, value));
 
-						self.consume_whitespaces();
+						chars::consume_whitespaces(self);
 						mixed_amount::tokenize(self)?;
 
 						return self.balance_assertion();
@@ -167,7 +146,7 @@ impl<'a> Tokenizer<'a> {
 				if self.line_chars.get(self.line_pos).is_none() {
 					return Err(String::from(""));
 				} else {
-					self.consume_whitespaces();
+					chars::consume_whitespaces(self);
 					return mixed_amount::tokenize(self);
 				};
 			}

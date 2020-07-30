@@ -66,33 +66,33 @@ fn disallow_multiple_commodites_with_empty_posts(transaction: &Transaction) -> R
 }
 
 fn balance_empty_posts(transaction: &mut Transaction) {
-	let commodity: String = transaction
+	if let Some(commodity) = transaction
 		.postings
 		.iter()
 		.flat_map(|p| p.unbalanced_amount.as_ref())
 		.map(|a| a.commodity.to_owned())
 		.next()
-		.expect("no commodity found");
+	{
+		let transaction_total_amount = transaction
+			.postings
+			.iter()
+			.flat_map(|p| p.unbalanced_amount.as_ref())
+			.map(|ma| ma.amount)
+			.fold(num::rational::Rational64::from_integer(0), |acc, val| {
+				acc + val
+			});
 
-	let transaction_total_amount = transaction
-		.postings
-		.iter()
-		.flat_map(|p| p.unbalanced_amount.as_ref())
-		.map(|ma| ma.amount)
-		.fold(num::rational::Rational64::from_integer(0), |acc, val| {
-			acc + val
-		});
-
-	for posting in transaction.postings.iter_mut() {
-		posting.balanced_amount = match &posting.unbalanced_amount {
-			None => Some(MixedAmount {
-				commodity: commodity.to_owned(),
-				amount: transaction_total_amount.neg(),
-			}),
-			Some(unbalanced_amount) => Some(MixedAmount {
-				commodity: unbalanced_amount.commodity.to_owned(),
-				amount: unbalanced_amount.amount,
-			}),
+		for posting in transaction.postings.iter_mut() {
+			posting.balanced_amount = match &posting.unbalanced_amount {
+				None => Some(MixedAmount {
+					commodity: commodity.to_owned(),
+					amount: transaction_total_amount.neg(),
+				}),
+				Some(unbalanced_amount) => Some(MixedAmount {
+					commodity: unbalanced_amount.commodity.to_owned(),
+					amount: unbalanced_amount.amount,
+				}),
+			}
 		}
 	}
 }

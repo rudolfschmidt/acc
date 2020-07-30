@@ -1,4 +1,5 @@
 use super::super::model::Token;
+use super::chars;
 use super::Tokenizer;
 
 pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
@@ -8,7 +9,7 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
 			if c == ';' {
 				tokenizer.line_pos += 1;
 
-				tokenizer.consume_whitespaces();
+				chars::consume_whitespaces(tokenizer);
 
 				let mut value = String::new();
 

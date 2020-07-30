@@ -28,11 +28,13 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
 		}
 	}
 }
+
 fn tokenize_amount(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	parse_amount(tokenizer)?
 		.map(|(c, _)| Err(format!("received \"{}\", but expected number", c)))
 		.unwrap_or(Ok(()))
 }
+
 fn tokenize_amount_commodity(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	parse_amount(tokenizer)?
 		.map(|(_, amount)| {
@@ -45,6 +47,7 @@ fn tokenize_amount_commodity(tokenizer: &mut Tokenizer) -> Result<(), String> {
 		})
 		.unwrap_or(Ok(()))
 }
+
 fn parse_amount(tokenizer: &mut Tokenizer) -> Result<Option<(char, String)>, String> {
 	match tokenizer.line_chars.get(tokenizer.line_pos) {
 		None => Err(format!("Unexpected end of line")),
@@ -93,6 +96,7 @@ fn parse_amount(tokenizer: &mut Tokenizer) -> Result<Option<(char, String)>, Str
 		}
 	}
 }
+
 fn tokenize_commodity(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	match tokenizer.line_chars.get(tokenizer.line_pos) {
 		None => Ok(()),

@@ -8,6 +8,9 @@ use num::Zero;
 use std::collections::BTreeMap;
 
 pub fn print(transactions: &[Transaction]) -> Result<(), String> {
+	if transactions.iter().any(|t| t.postings.is_empty()) {
+		return Ok(());
+	}
 	let postings = group_postings_by_account(transactions)?;
 
 	let total = postings
