@@ -4,11 +4,11 @@ mod directives;
 mod mixed_amount;
 mod transaction;
 
-use super::errors::Error;
-use super::ledger::Ledger;
-use super::model::Token;
+use super::super::errors::Error;
+use super::super::ledger::Ledger;
+use super::super::model::Token;
 
-pub fn read_lines(ledger: &mut Ledger, content: &str) -> Result<(), Error> {
+pub(crate) fn read_lines(ledger: &mut Ledger, content: &str) -> Result<(), Error> {
 	let mut tokenizer = Tokenizer {
 		ledger,
 		line_chars: Vec::new(),

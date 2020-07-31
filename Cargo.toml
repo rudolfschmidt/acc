@@ -1,6 +1,6 @@
 [package]
 name = "acc"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Rudolf Schmidt <info@rudolfschmidt.com>"]
 edition = "2018"
 license = "GPL-3.0"
@@ -10,6 +10,10 @@ categories = ["command-line-utilities", "parsing", "text-processing"]
 repository = "https://github.com/rudolfschmidt/acc"
 readme = "README.md"
 include = [ "**/*.rs" ]
+
+[lib]
+name = "acc"
+path = "src/lib/mod.rs"
 
 [dependencies]
 colored = "1.9.3"

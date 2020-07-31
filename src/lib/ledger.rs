@@ -1,16 +1,8 @@
-use super::cmd_accounts;
-use super::cmd_codes;
-use super::cmd_printer_bal_flat;
-use super::cmd_printer_bal_struc;
-use super::cmd_printer_print;
-use super::cmd_printer_register;
-use super::debuger;
-use super::errors::Error;
+use super::commands;
+use super::errors;
 use super::model::Token;
 use super::model::Transaction;
-use super::parser_balancer;
-use super::parser_model;
-use super::tokenizer;
+use super::parsers;
 
 pub enum Command {
 	Print,
@@ -50,50 +42,50 @@ impl Ledger {
 
 	pub fn read_tokens(&mut self, file: &std::path::Path) -> Result<(), String> {
 		let content = read_file(file)?;
-		if let Err(err) = tokenizer::read_lines(self, &content) {
+		if let Err(err) = parsers::tokenizer::read_lines(self, &content) {
 			return cannot_parse_file(err, file);
 		}
 		Ok(())
 	}
 
-	fn parse_content(&mut self, content: &str) -> Result<(), Error> {
-		self.parse_tokens(content)?;
-		self.parse_unbalanced_transactions()?;
-		self.parse_balance_transactions()?;
+	fn parse_content(&mut self, content: &str) -> Result<(), errors::Error> {
+		self.build_tokens(content)?;
+		self.build_transactions()?;
+		self.balance_transactions()?;
 		Ok(())
 	}
 
-	fn parse_tokens(&mut self, content: &str) -> Result<(), Error> {
-		tokenizer::read_lines(self, content)?;
+	fn build_tokens(&mut self, content: &str) -> Result<(), errors::Error> {
+		parsers::tokenizer::read_lines(self, content)?;
 		if let Command::Debug = self.command {
 			if self.arguments.contains(&Argument::DebugLexer) {
-				debuger::print_tokens(&self.tokens);
+				commands::debuger::print_tokens(&self.tokens);
 			}
 		}
 		Ok(())
 	}
 
-	fn parse_unbalanced_transactions(&mut self) -> Result<(), Error> {
-		parser_model::parse_unbalanced_transactions(&self.tokens, &mut self.transactions)?;
+	fn build_transactions(&mut self) -> Result<(), errors::Error> {
+		parsers::modeler::build_transactions(&self.tokens, &mut self.transactions)?;
 		if let Command::Debug = self.command {
 			if self
 				.arguments
 				.contains(&Argument::DebugUnbalancedTransactions)
 			{
-				debuger::print_transactions(&self.transactions);
+				commands::debuger::print_transactions(&self.transactions);
 			}
 		}
 		Ok(())
 	}
 
-	fn parse_balance_transactions(&mut self) -> Result<(), Error> {
-		parser_balancer::balance_transactions(&mut self.transactions)?;
+	fn balance_transactions(&mut self) -> Result<(), errors::Error> {
+		parsers::balancer::balance_transactions(&mut self.transactions)?;
 		if let Command::Debug = self.command {
 			if self
 				.arguments
 				.contains(&Argument::DebugBalancedTransactions)
 			{
-				debuger::print_transactions(&self.transactions);
+				commands::debuger::print_transactions(&self.transactions);
 			}
 		}
 		Ok(())
@@ -103,36 +95,34 @@ impl Ledger {
 		match self.command {
 			Command::Balance => {
 				if self.arguments.contains(&Argument::Flat) {
-					return cmd_printer_bal_flat::print(&self.transactions);
+					return commands::balance::print_flat(&self.transactions);
 				}
 				if self.arguments.contains(&Argument::Tree) {
-					return cmd_printer_bal_struc::print(&self.transactions);
+					return commands::balance::print_tree(&self.transactions);
 				}
-				return cmd_printer_bal_struc::print(&self.transactions);
+				return commands::balance::print_tree(&self.transactions);
 			}
-			Command::Register => {
-				cmd_printer_register::print(&self.transactions)?;
-			}
+			Command::Register => commands::register::print(&self.transactions)?,
 			Command::Print => {
 				if self.arguments.contains(&Argument::Explicit) {
-					return cmd_printer_print::print_explicit(&self.transactions);
+					return commands::print::print_explicit(&self.transactions);
 				}
 				if self.arguments.contains(&Argument::Raw) {
-					return cmd_printer_print::print_raw(&self.transactions);
+					return commands::print::print_raw(&self.transactions);
 				}
-				return cmd_printer_print::print_raw(&self.transactions);
+				return commands::print::print_raw(&self.transactions);
 			}
 			Command::Debug => {}
 			Command::Accounts => {
 				if self.arguments.contains(&Argument::Flat) {
-					return cmd_accounts::print_accounts_flat(&self.transactions);
+					return commands::accounts::print_flat(&self.transactions);
 				}
 				if self.arguments.contains(&Argument::Tree) {
-					return cmd_accounts::print_accounts_tree(&self.transactions);
+					return commands::accounts::print_tree(&self.transactions);
 				}
-				return cmd_accounts::print_accounts_tree(&self.transactions);
+				return commands::accounts::print_tree(&self.transactions);
 			}
-			Command::Codes => cmd_codes::print_codes(&self.transactions)?,
+			Command::Codes => commands::codes::print(&self.transactions)?,
 		}
 		Ok(())
 	}
@@ -149,7 +139,7 @@ fn read_file(path: &std::path::Path) -> Result<String, String> {
 	}
 }
 
-fn cannot_parse_file(err: Error, file: &std::path::Path) -> Result<(), String> {
+fn cannot_parse_file(err: errors::Error, file: &std::path::Path) -> Result<(), String> {
 	Err(format!(
 		"While parsing file \"{}\" at line {}:\n{}",
 		file.display(),

@@ -1,4 +1,4 @@
-use super::super::model::Token;
+use super::super::super::model::Token;
 use super::chars;
 use super::Tokenizer;
 use std::fs;
@@ -17,7 +17,10 @@ pub(super) fn is_include(tokenizer: &mut Tokenizer) -> Result<(), String> {
 					tokenizer.line_pos += 1;
 				}
 				let mut files: Vec<PathBuf> = Vec::new();
-				for token in file.split("/") {
+				if file.starts_with("/") {
+					files.push(PathBuf::from("/"));
+				}
+				for token in file.split('/') {
 					if token == "*" {
 						let mut inc_dirs: Vec<PathBuf> = Vec::new();
 						for file in files {

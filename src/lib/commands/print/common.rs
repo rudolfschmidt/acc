@@ -1,30 +1,13 @@
-use super::model::MixedAmount;
-use super::model::Posting;
-use super::model::State;
-use super::model::Transaction;
+use super::super::super::model::MixedAmount;
+use super::super::super::model::Posting;
+use super::super::super::model::State;
+use super::super::super::model::Transaction;
+use super::super::format_amount;
 
 const INDENT: &str = "\t";
 const OFFSET: usize = 4;
 
-pub fn print_explicit(transactions: &[Transaction]) -> Result<(), String> {
-	if transactions.iter().any(|t| t.postings.is_empty()) {
-		return Ok(());
-	}
-	let require_amount = true;
-	print(transactions, require_amount, |p| p.balanced_amount.as_ref())
-}
-
-pub fn print_raw(transactions: &[Transaction]) -> Result<(), String> {
-	if transactions.iter().any(|t| t.postings.is_empty()) {
-		return Ok(());
-	}
-	let require_amount = false;
-	print(transactions, require_amount, |p| {
-		p.unbalanced_amount.as_ref()
-	})
-}
-
-fn print<F: Fn(&Posting) -> Option<&MixedAmount>>(
+pub(super) fn print<F: Fn(&Posting) -> Option<&MixedAmount>>(
 	transactions: &[Transaction],
 	require_amount: bool,
 	f: F,
@@ -112,7 +95,7 @@ where
 				print!(" ");
 			}
 
-			let formatted_amount = super::cmd_printer::format_amount(&mixed_amount.amount);
+			let formatted_amount = format_amount(&mixed_amount.amount);
 
 			print!(
 				"{}{}",

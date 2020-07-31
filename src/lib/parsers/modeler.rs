@@ -1,14 +1,13 @@
 extern crate num;
 
-use super::errors::Error;
+use super::super::errors::Error;
+use super::super::model::Comment;
+use super::super::model::MixedAmount;
+use super::super::model::Posting;
+use super::super::model::Token;
+use super::super::model::Transaction;
 
-use super::model::Comment;
-use super::model::MixedAmount;
-use super::model::Posting;
-use super::model::Token;
-use super::model::Transaction;
-
-pub fn parse_unbalanced_transactions(
+pub fn build_transactions(
 	tokens: &[Token],
 	transactions: &mut Vec<Transaction>,
 ) -> Result<(), Error> {

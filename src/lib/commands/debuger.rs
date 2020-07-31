@@ -1,5 +1,5 @@
-use super::model::Token;
-use super::model::Transaction;
+use super::super::model::Token;
+use super::super::model::Transaction;
 
 pub fn print_tokens(tokens: &[Token]) {
 	for token in tokens {

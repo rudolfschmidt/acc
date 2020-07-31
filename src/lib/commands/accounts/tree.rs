@@ -1,23 +1,6 @@
-use super::model::Transaction;
+use super::super::super::model::Transaction;
 
-pub fn print_accounts_flat(transactions: &[Transaction]) -> Result<(), String> {
-	for account in transactions
-		.iter()
-		.flat_map(|t| t.postings.iter())
-		.map(|p| &p.account)
-		.collect::<std::collections::BTreeSet<&String>>()
-	{
-		println!("{}", account);
-	}
-	Ok(())
-}
-
-struct Account {
-	name: String,
-	children: Vec<Account>,
-}
-
-pub fn print_accounts_tree(transactions: &[Transaction]) -> Result<(), String> {
+pub(super) fn print(transactions: &[Transaction]) -> Result<(), String> {
 	let accounts = transactions
 		.iter()
 		.flat_map(|t| t.postings.iter())
@@ -31,6 +14,11 @@ pub fn print_accounts_tree(transactions: &[Transaction]) -> Result<(), String> {
 	}
 	print_accounts_tree_list(0, list);
 	Ok(())
+}
+
+struct Account {
+	name: String,
+	children: Vec<Account>,
 }
 
 fn build_accounts_tree(list: &mut Vec<Account>, it: &mut core::str::Split<char>) {

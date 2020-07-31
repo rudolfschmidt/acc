@@ -1,7 +1,7 @@
-use super::cmd_printer::format_amount;
-use super::cmd_printer_bal::group_postings_by_account;
-use super::cmd_printer_bal::print_commodity_amount;
-use super::model::Transaction;
+use super::super::super::model::Transaction;
+use super::super::format_amount;
+use super::common::group_postings_by_account;
+use super::common::print_commodity_amount;
 
 use colored::Colorize;
 use num::Zero;
@@ -15,7 +15,7 @@ struct BalanceAccount {
 	children: Vec<BalanceAccount>,
 }
 
-pub fn print(transactions: &[Transaction]) -> Result<(), String> {
+pub(super) fn print(transactions: &[Transaction]) -> Result<(), String> {
 	if transactions.iter().any(|t| t.postings.is_empty()) {
 		return Ok(());
 	}

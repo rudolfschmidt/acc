@@ -1,6 +1,6 @@
-use super::model::Transaction;
+use super::super::model::Transaction;
 
-pub fn print_codes(transactions: &[Transaction]) -> Result<(), String> {
+pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 	for code in transactions
 		.iter()
 		.filter(|t| t.code.is_some())
