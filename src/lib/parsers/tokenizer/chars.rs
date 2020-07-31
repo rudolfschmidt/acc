@@ -85,7 +85,7 @@ pub(super) fn consume_whitespaces(tokenizer: &mut Tokenizer) {
 pub(super) fn is_string(tokenizer: &mut Tokenizer, str: &str) -> bool {
 	let mut pos = tokenizer.line_pos;
 	for c in str.chars() {
-		if let Err(_) = is_pos_char(tokenizer, c, &mut pos) {
+		if is_pos_char(tokenizer, c, &mut pos).is_err() {
 			return false;
 		}
 	}

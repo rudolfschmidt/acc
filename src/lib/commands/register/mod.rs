@@ -1,5 +1,5 @@
-use super::model::State;
-use super::model::Transaction;
+use super::super::model::State;
+use super::super::model::Transaction;
 
 use colored::Colorize;
 use std::collections::BTreeMap;
@@ -79,7 +79,7 @@ pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 					.expect("null commodity not allowed")
 					.commodity
 					.to_owned(),
-				amount: super::cmd_printer::format_amount(
+				amount: super::format_amount(
 					&posting
 						.balanced_amount
 						.as_ref()
@@ -89,10 +89,7 @@ pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 				total: total
 					.iter()
 					.fold(BTreeMap::new(), |mut acc, (commodity, amount)| {
-						acc.insert(
-							commodity.to_owned(),
-							super::cmd_printer::format_amount(&amount),
-						);
+						acc.insert(commodity.to_owned(), super::format_amount(&amount));
 						acc
 					}),
 			});

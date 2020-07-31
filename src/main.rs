@@ -1,22 +1,9 @@
-mod cmd_accounts;
-mod cmd_codes;
-mod cmd_printer;
-mod cmd_printer_bal;
-mod cmd_printer_bal_flat;
-mod cmd_printer_bal_struc;
-mod cmd_printer_print;
-mod cmd_printer_register;
-mod debuger;
-mod errors;
-mod ledger;
-mod model;
-mod parser_balancer;
-mod parser_model;
-mod tokenizer;
+mod lib;
 
-use ledger::Argument;
-use ledger::Command;
-use ledger::Ledger;
+use lib::ledger::Argument;
+use lib::ledger::Command;
+use lib::ledger::Ledger;
+
 use std::env;
 
 fn main() {
@@ -27,7 +14,6 @@ fn main() {
 
 fn start() -> Result<(), String> {
 	let mut args_it = env::args().skip(1);
-
 	let mut files: Vec<String> = Vec::new();
 	let mut command: Option<Command> = None;
 	let mut arguments: Vec<Argument> = Vec::new();

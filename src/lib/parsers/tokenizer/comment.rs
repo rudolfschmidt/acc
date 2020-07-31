@@ -1,4 +1,4 @@
-use super::super::model::Token;
+use super::super::super::model::Token;
 use super::chars;
 use super::Tokenizer;
 
