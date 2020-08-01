@@ -6,9 +6,26 @@ use super::Tokenizer;
 pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	match tokenizer.line_chars.get(tokenizer.line_pos) {
 		None => Ok(()),
-		Some(c) if c.is_numeric() => tokenize_date(tokenizer),
+		Some(c) if c.is_numeric() => tokenize_transaction(tokenizer),
 		Some(_) => Ok(()),
 	}
+}
+
+fn tokenize_transaction(tokenizer: &mut Tokenizer) -> Result<(), String> {
+	tokenize_date(tokenizer)?;
+	if chars::is_char(tokenizer, '=') {
+		chars::expect_char(tokenizer, '=')?;
+		let mut year = String::new();
+		let mut month = String::new();
+		let mut day = String::new();
+		parse_date(tokenizer, &mut year, &mut month, &mut day)?;
+	}
+	chars::expect_whitespace(tokenizer)?;
+	tokenize_state(tokenizer)?;
+	tokenize_code(tokenizer)?;
+	tokenize_description(tokenizer)?;
+
+	Ok(())
 }
 
 fn tokenize_date(tokenizer: &mut Tokenizer) -> Result<(), String> {
@@ -16,56 +33,58 @@ fn tokenize_date(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	let mut month = String::new();
 	let mut day = String::new();
 
-	chars::parse_numeric(tokenizer, &mut year)?;
-	chars::parse_numeric(tokenizer, &mut year)?;
-	chars::parse_numeric(tokenizer, &mut year)?;
-	chars::parse_numeric(tokenizer, &mut year)?;
+	parse_date(tokenizer, &mut year, &mut month, &mut day)?;
+
+	tokenizer
+		.tokens
+		.push(Token::TransactionDateYear(tokenizer.line_index, year));
+	tokenizer
+		.tokens
+		.push(Token::TransactionDateMonth(tokenizer.line_index, month));
+	tokenizer
+		.tokens
+		.push(Token::TransactionDateDay(tokenizer.line_index, day));
+
+	Ok(())
+}
+
+fn parse_date(
+	tokenizer: &mut Tokenizer,
+	year: &mut String,
+	month: &mut String,
+	day: &mut String,
+) -> Result<(), String> {
+	chars::parse_numeric(tokenizer, year)?;
+	chars::parse_numeric(tokenizer, year)?;
+	chars::parse_numeric(tokenizer, year)?;
+	chars::parse_numeric(tokenizer, year)?;
 
 	if chars::is_char(tokenizer, '-') {
 		chars::expect_char(tokenizer, '-')?;
-		chars::parse_numeric(tokenizer, &mut month)?;
-		chars::parse_numeric(tokenizer, &mut month)?;
+		chars::parse_numeric(tokenizer, month)?;
+		chars::parse_numeric(tokenizer, month)?;
 		chars::expect_char(tokenizer, '-')?;
-		chars::parse_numeric(tokenizer, &mut day)?;
-		chars::parse_numeric(tokenizer, &mut day)?;
+		chars::parse_numeric(tokenizer, day)?;
+		chars::parse_numeric(tokenizer, day)?;
 	}
 
 	if chars::is_char(tokenizer, '/') {
 		chars::expect_char(tokenizer, '/')?;
-		chars::parse_numeric(tokenizer, &mut month)?;
-		chars::parse_numeric(tokenizer, &mut month)?;
+		chars::parse_numeric(tokenizer, month)?;
+		chars::parse_numeric(tokenizer, month)?;
 		chars::expect_char(tokenizer, '/')?;
-		chars::parse_numeric(tokenizer, &mut day)?;
-		chars::parse_numeric(tokenizer, &mut day)?;
+		chars::parse_numeric(tokenizer, day)?;
+		chars::parse_numeric(tokenizer, day)?;
 	}
 
 	if chars::is_char(tokenizer, '.') {
 		chars::expect_char(tokenizer, '.')?;
-		chars::parse_numeric(tokenizer, &mut month)?;
-		chars::parse_numeric(tokenizer, &mut month)?;
+		chars::parse_numeric(tokenizer, month)?;
+		chars::parse_numeric(tokenizer, month)?;
 		chars::expect_char(tokenizer, '.')?;
-		chars::parse_numeric(tokenizer, &mut day)?;
-		chars::parse_numeric(tokenizer, &mut day)?;
+		chars::parse_numeric(tokenizer, day)?;
+		chars::parse_numeric(tokenizer, day)?;
 	}
-
-	chars::expect_whitespace(tokenizer)?;
-
-	tokenizer
-		.ledger
-		.tokens
-		.push(Token::TransactionDateYear(tokenizer.line_index, year));
-	tokenizer
-		.ledger
-		.tokens
-		.push(Token::TransactionDateMonth(tokenizer.line_index, month));
-	tokenizer
-		.ledger
-		.tokens
-		.push(Token::TransactionDateDay(tokenizer.line_index, day));
-
-	tokenize_state(tokenizer)?;
-	tokenize_code(tokenizer)?;
-	tokenize_description(tokenizer)?;
 
 	Ok(())
 }
@@ -78,17 +97,17 @@ fn tokenize_state(tokenizer: &mut Tokenizer) -> Result<(), String> {
 			match c {
 				'*' => {
 					let state = Token::TransactionState(tokenizer.line_index, State::Cleared);
-					tokenizer.ledger.tokens.push(state);
+					tokenizer.tokens.push(state);
 					tokenizer.line_pos += 1;
 				}
 				'!' => {
 					let state = Token::TransactionState(tokenizer.line_index, State::Pending);
-					tokenizer.ledger.tokens.push(state);
+					tokenizer.tokens.push(state);
 					tokenizer.line_pos += 1;
 				}
 				_ => {
 					let state = Token::TransactionState(tokenizer.line_index, State::Uncleared);
-					tokenizer.ledger.tokens.push(state);
+					tokenizer.tokens.push(state);
 				}
 			}
 			Ok(())
@@ -127,7 +146,6 @@ fn tokenize_code(tokenizer: &mut Tokenizer) -> Result<(), String> {
 				}
 
 				tokenizer
-					.ledger
 					.tokens
 					.push(Token::TransactionCode(tokenizer.line_index, value));
 			}
@@ -151,7 +169,6 @@ fn tokenize_description(tokenizer: &mut Tokenizer) -> Result<(), String> {
 			}
 
 			tokenizer
-				.ledger
 				.tokens
 				.push(Token::TransactionDescription(tokenizer.line_index, value));
 

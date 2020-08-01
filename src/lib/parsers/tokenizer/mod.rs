@@ -4,13 +4,31 @@ mod directives;
 mod mixed_amount;
 mod transaction;
 
-use super::super::errors::Error;
-use super::super::ledger::Ledger;
+use super::super::errors;
 use super::super::model::Token;
+use super::super::model::Transaction;
+use std::path::Path;
 
-pub(crate) fn read_lines(ledger: &mut Ledger, content: &str) -> Result<(), Error> {
+struct Tokenizer<'a> {
+	file: &'a Path,
+	tokens: &'a mut Vec<Token>,
+	transactions: &'a mut Vec<Transaction>,
+	line_str: &'a str,
+	line_chars: Vec<char>,
+	line_index: usize,
+	line_pos: usize,
+}
+
+pub fn tokenize(
+	file: &Path,
+	content: &str,
+	tokens: &mut Vec<Token>,
+	transactions: &mut Vec<Transaction>,
+) -> Result<(), errors::Error> {
 	let mut tokenizer = Tokenizer {
-		ledger,
+		file,
+		tokens,
+		transactions,
 		line_chars: Vec::new(),
 		line_index: 0,
 		line_str: "",
@@ -19,48 +37,33 @@ pub(crate) fn read_lines(ledger: &mut Ledger, content: &str) -> Result<(), Error
 	match tokenizer.create_tokens(content) {
 		Ok(()) => Ok(()),
 		Err(reason) => {
-			let mut msg = String::new();
-
-			msg.push_str(&format!(
+			let mut message = String::new();
+			message.push_str(&format!(
 				"{} : {}\n",
 				tokenizer.line_index + 1,
 				tokenizer.line_str.replace('\t', " ")
 			));
-
 			let mut num = tokenizer.line_index + 1;
 			while num != 0 {
 				num /= 10;
-				msg.push('-');
+				message.push('-');
 			}
-
-			msg.push('-');
-			msg.push('-');
-			msg.push('-');
-
+			message.push('-');
+			message.push('-');
+			message.push('-');
 			for _ in 0..tokenizer.line_pos {
-				msg.push('-');
+				message.push('-');
 			}
-
-			msg.push('^');
-
+			message.push('^');
 			if !reason.is_empty() {
-				msg.push_str(&format!("\nError : {}", reason));
+				message.push_str(&format!("\n{}", reason));
 			}
-
-			Err(Error {
+			Err(errors::Error {
 				line: tokenizer.line_index + 1,
-				message: msg,
+				message: message,
 			})
 		}
 	}
-}
-
-struct Tokenizer<'a> {
-	ledger: &'a mut Ledger,
-	line_str: &'a str,
-	line_chars: Vec<char>,
-	line_index: usize,
-	line_pos: usize,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -109,7 +112,6 @@ impl<'a> Tokenizer<'a> {
 							&& chars::is_space(&self.line_chars, self.line_pos + 1))
 					{
 						self
-							.ledger
 							.tokens
 							.push(Token::PostingAccount(self.line_index, value));
 
@@ -124,7 +126,6 @@ impl<'a> Tokenizer<'a> {
 				}
 
 				self
-					.ledger
 					.tokens
 					.push(Token::PostingAccount(self.line_index, value));
 
@@ -138,10 +139,7 @@ impl<'a> Tokenizer<'a> {
 			if c == '=' {
 				self.line_pos += 1;
 
-				self
-					.ledger
-					.tokens
-					.push(Token::BalanceAssertion(self.line_index));
+				self.tokens.push(Token::BalanceAssertion(self.line_index));
 
 				if self.line_chars.get(self.line_pos).is_none() {
 					return Err(String::from(""));

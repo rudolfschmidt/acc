@@ -19,7 +19,6 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
 			}
 			if !commodity.is_empty() {
 				tokenizer
-					.ledger
 					.tokens
 					.push(Token::PostingCommodity(tokenizer.line_index, commodity));
 				return tokenize_amount(tokenizer);
@@ -40,7 +39,6 @@ fn tokenize_amount_commodity(tokenizer: &mut Tokenizer) -> Result<(), String> {
 		.map(|(_, amount)| {
 			tokenize_commodity(tokenizer)?;
 			tokenizer
-				.ledger
 				.tokens
 				.push(Token::PostingAmount(tokenizer.line_index, amount));
 			Ok(())
@@ -89,7 +87,6 @@ fn parse_amount(tokenizer: &mut Tokenizer) -> Result<Option<(char, String)>, Str
 				tokenizer.line_pos += 1;
 			}
 			tokenizer
-				.ledger
 				.tokens
 				.push(Token::PostingAmount(tokenizer.line_index, amount));
 			Ok(None)
@@ -114,7 +111,6 @@ fn tokenize_commodity(tokenizer: &mut Tokenizer) -> Result<(), String> {
 				tokenizer.line_pos += 1;
 			}
 			tokenizer
-				.ledger
 				.tokens
 				.push(Token::PostingCommodity(tokenizer.line_index, commodity));
 			Ok(())
