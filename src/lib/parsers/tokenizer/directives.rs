@@ -17,7 +17,7 @@ pub(super) fn is_include(tokenizer: &mut Tokenizer) -> Result<(), String> {
 					tokenizer.line_pos += 1;
 				}
 				let mut files: Vec<PathBuf> = Vec::new();
-				if file.starts_with("/") {
+				if file.starts_with('/') {
 					files.push(PathBuf::from("/"));
 				}
 				for token in file.split('/') {
@@ -57,13 +57,23 @@ pub(super) fn is_include(tokenizer: &mut Tokenizer) -> Result<(), String> {
 						files = inc_files;
 					} else {
 						match files.last_mut() {
-							None => files.push(PathBuf::from(token)),
-							Some(p) => p.push(Path::new(token)),
+							None => {
+								let parent = tokenizer.file.parent().expect(&format!(
+									"file \"{}\" has no parent directory",
+									tokenizer.file.display()
+								));
+								let mut file = PathBuf::from(parent);
+								file.push(token);
+								files.push(file)
+							}
+							Some(file) => {
+								file.push(Path::new(token));
+							}
 						}
 					}
 				}
 				for file in files {
-					tokenizer.ledger.read_tokens(&file)?;
+					super::super::parse_file(&file, tokenizer.tokens, tokenizer.transactions)?;
 				}
 			}
 			Ok(())
@@ -118,7 +128,6 @@ pub(super) fn is_alias(tokenizer: &mut Tokenizer) -> Result<(), String> {
 					tokenizer.line_pos += 1;
 				}
 				tokenizer
-					.ledger
 					.tokens
 					.push(Token::Alias(tokenizer.line_index, alias));
 			}

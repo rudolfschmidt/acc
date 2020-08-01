@@ -19,7 +19,6 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
 				}
 
 				tokenizer
-					.ledger
 					.tokens
 					.push(Token::Comment(tokenizer.line_index, value));
 			}

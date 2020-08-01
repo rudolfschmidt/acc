@@ -7,10 +7,7 @@ use super::super::model::Posting;
 use super::super::model::Token;
 use super::super::model::Transaction;
 
-pub fn build_transactions(
-	tokens: &[Token],
-	transactions: &mut Vec<Transaction>,
-) -> Result<(), Error> {
+pub fn build(tokens: &[Token], transactions: &mut Vec<Transaction>) -> Result<(), Error> {
 	let mut parser = Parser {
 		tokens,
 		transactions,

@@ -8,7 +8,7 @@ use num::Zero;
 use std::collections::BTreeMap;
 use std::ops::Neg;
 
-pub fn balance_transactions(transactions: &mut Vec<Transaction>) -> Result<(), Error> {
+pub fn balance(transactions: &mut Vec<Transaction>) -> Result<(), Error> {
 	for transaction in transactions.iter_mut() {
 		disallow_multiple_empty_posts(transaction)?;
 		disallow_multiple_commodites_with_empty_posts(transaction)?;
