@@ -18,7 +18,9 @@ pub(super) fn is_tab(chars: &[char], pos: usize) -> bool {
 
 pub(super) fn parse_numeric(tokenizer: &mut Tokenizer, value: &mut String) -> Result<(), String> {
 	match tokenizer.line_chars.get(tokenizer.line_pos) {
-		None => Err(format!("Unexpected end of line. Expected number instead")),
+		None => Err(String::from(
+			"Unexpected end of line. Expected number instead",
+		)),
 		Some(c) if c.is_numeric() => {
 			value.push(*c);
 			tokenizer.line_pos += 1;

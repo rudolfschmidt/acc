@@ -62,29 +62,29 @@ impl<'a> Parser<'a> {
 				self.index += 1;
 
 				let month = match self.tokens.get(self.index) {
-					None => return Err(format!("")),
+					None => return Err(String::from("")),
 					Some(token) => match token {
 						Token::TransactionDateMonth(_, month) => {
 							self.index += 1;
-							month.to_owned()
+							month
 						}
 						_ => return Err(format!("")),
 					},
 				};
 
 				let day = match self.tokens.get(self.index) {
-					None => return Err(format!("")),
+					None => return Err(String::from("")),
 					Some(token) => match token {
 						Token::TransactionDateDay(_, day) => {
 							self.index += 1;
-							day.to_owned()
+							day
 						}
 						_ => return Err(format!("")),
 					},
 				};
 
 				let state = match self.tokens.get(self.index) {
-					None => return Err(format!("")),
+					None => return Err(String::from("")),
 					Some(token) => match token {
 						Token::TransactionState(_, state) => {
 							self.index += 1;
@@ -95,7 +95,7 @@ impl<'a> Parser<'a> {
 				};
 
 				let code = match self.tokens.get(self.index) {
-					None => return Err(format!("")),
+					None => return Err(String::from("")),
 					Some(token) => match token {
 						Token::TransactionCode(_, code) => {
 							self.index += 1;
@@ -106,7 +106,7 @@ impl<'a> Parser<'a> {
 				};
 
 				let description = match self.tokens.get(self.index) {
-					None => return Err(format!("")),
+					None => return Err(String::from("")),
 					Some(token) => match token {
 						Token::TransactionDescription(_, description) => {
 							self.index += 1;
@@ -159,13 +159,13 @@ impl<'a> Parser<'a> {
 				self.index += 1;
 
 				let commodity = match self.tokens.get(self.index) {
-					None => format!(""),
+					None => String::from(""),
 					Some(token) => match token {
 						Token::PostingCommodity(_, commodity) => {
 							self.index += 1;
 							commodity.to_owned()
 						}
-						_ => format!(""),
+						_ => String::from(""),
 					},
 				};
 
@@ -207,24 +207,24 @@ impl<'a> Parser<'a> {
 				self.index += 1;
 
 				let commodity = match self.tokens.get(self.index) {
-					None => format!(""),
+					None => String::from(""),
 					Some(token) => match token {
 						Token::PostingCommodity(_, commodity) => {
 							self.index += 1;
 							commodity.to_owned()
 						}
-						_ => format!(""),
+						_ => String::from(""),
 					},
 				};
 
 				let amount = match self.tokens.get(self.index) {
-					None => return Err(format!("")),
+					None => return Err(String::from("")),
 					Some(token) => match token {
 						Token::PostingAmount(_, amount) => {
 							self.index += 1;
 							create_rational(&amount)
 						}
-						_ => return Err(format!("")),
+						_ => return Err(String::from("")),
 					},
 				};
 

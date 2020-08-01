@@ -28,7 +28,7 @@ fn disallow_multiple_empty_posts(transaction: &Transaction) -> Result<(), Error>
 		if balanced_previous_posting {
 			return Err(Error {
 				line: posting.line + 1,
-				message: format!("Only one posting with null amount allowed per transaction",),
+				message: String::from("Only one posting with null amount allowed per transaction"),
 			});
 		}
 		balanced_previous_posting = true;
@@ -52,8 +52,8 @@ fn disallow_multiple_commodites_with_empty_posts(transaction: &Transaction) -> R
 				if prev != ma.commodity {
 					return Err(Error {
 						line: posting.line + 1,
-						message: format!(
-							"Multiple commodities in transaction with a null amount posting not allowed"
+						message: String::from(
+							"Multiple commodities in transaction with a null amount posting not allowed",
 						),
 					});
 				}
@@ -130,7 +130,7 @@ fn disallow_unbalanced_transaction(transaction: &Transaction) -> Result<(), Erro
 	if !total.iter().all(|(_, a)| a.is_zero()) {
 		return Err(Error {
 			line: transaction.line + 1,
-			message: format!("Transaction does not balance"),
+			message: String::from("Transaction does not balance"),
 		});
 	}
 

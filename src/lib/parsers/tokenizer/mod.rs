@@ -60,7 +60,7 @@ pub fn tokenize(
 			}
 			Err(errors::Error {
 				line: tokenizer.line_index + 1,
-				message: message,
+				message,
 			})
 		}
 	}

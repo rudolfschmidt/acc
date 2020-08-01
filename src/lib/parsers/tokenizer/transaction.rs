@@ -91,7 +91,7 @@ fn parse_date(
 
 fn tokenize_state(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	match tokenizer.line_chars.get(tokenizer.line_pos) {
-		None => Err(format!("Unexpected end of line")),
+		None => Err(String::from("Unexpected end of line")),
 		Some(&c) => {
 			chars::consume_whitespaces(tokenizer);
 			match c {
@@ -157,7 +157,7 @@ fn tokenize_code(tokenizer: &mut Tokenizer) -> Result<(), String> {
 
 fn tokenize_description(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	match tokenizer.line_chars.get(tokenizer.line_pos) {
-		None => Err(format!("Unexpected end of line")),
+		None => Err(String::from("Unexpected end of line")),
 		Some(_) => {
 			chars::consume_whitespaces(tokenizer);
 
