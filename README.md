@@ -308,3 +308,6 @@ If freedom and privacy matter anything to you, care about your finances or other
 * Add support for expressions
 * Add support for periodic transactions
 * Add experimental support for other file formats like yaml
+
+## Changelog
+*Sat 01 Aug 2020 10:38:14 PM CEST* - Make acc available as lib
