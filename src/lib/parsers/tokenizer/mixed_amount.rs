@@ -48,7 +48,7 @@ fn tokenize_amount_commodity(tokenizer: &mut Tokenizer) -> Result<(), String> {
 
 fn parse_amount(tokenizer: &mut Tokenizer) -> Result<Option<(char, String)>, String> {
 	match tokenizer.line_chars.get(tokenizer.line_pos) {
-		None => Err(format!("Unexpected end of line")),
+		None => Err(String::from("Unexpected end of line")),
 		Some(_) => {
 			let mut amount = String::new();
 			if let Some(&c) = tokenizer.line_chars.get(tokenizer.line_pos) {
@@ -58,7 +58,7 @@ fn parse_amount(tokenizer: &mut Tokenizer) -> Result<Option<(char, String)>, Str
 				}
 			}
 			match tokenizer.line_chars.get(tokenizer.line_pos) {
-				None => return Err(format!("Unexpected end of line")),
+				None => return Err(String::from("Unexpected end of line")),
 				Some(c) if !c.is_numeric() => {
 					return Err(format!("received \"{}\", but expected number", c))
 				}

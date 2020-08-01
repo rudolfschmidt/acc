@@ -41,7 +41,7 @@ fn start() -> Result<(), String> {
 		None => Err(String::from("Error : No command selected")),
 		Some(command) => {
 			if files.is_empty() {
-				return Err(format!(
+				return Err(String::from(
 					"Error : No file(s) reselected. Try --file <file> to select a file",
 				));
 			}
@@ -64,7 +64,7 @@ fn parse_arguments(
 	while let Some(arg) = it.next() {
 		match arg.as_str() {
 			"--file" | "-f" => match it.next() {
-				None => return Err(format!("Error : No argument provided for --file")),
+				None => return Err(String::from("Error : No argument provided for --file")),
 				Some(file_path) => files.push(file_path),
 			},
 			"--flat" => arguments.push(Argument::Flat),

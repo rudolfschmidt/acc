@@ -58,10 +58,12 @@ pub(super) fn is_include(tokenizer: &mut Tokenizer) -> Result<(), String> {
 					} else {
 						match files.last_mut() {
 							None => {
-								let parent = tokenizer.file.parent().expect(&format!(
-									"file \"{}\" has no parent directory",
-									tokenizer.file.display()
-								));
+								let parent = tokenizer.file.parent().unwrap_or_else(|| {
+									panic!(
+										"file \"{}\" has no parent directory",
+										tokenizer.file.display()
+									)
+								});
 								let mut file = PathBuf::from(parent);
 								file.push(token);
 								files.push(file)
