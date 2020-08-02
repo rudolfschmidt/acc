@@ -2,6 +2,7 @@ mod chars;
 mod comment;
 mod directives;
 mod mixed_amount;
+mod posting;
 mod transaction;
 
 use super::super::errors;
@@ -13,10 +14,10 @@ struct Tokenizer<'a> {
 	file: &'a Path,
 	tokens: &'a mut Vec<Token>,
 	transactions: &'a mut Vec<Transaction>,
-	line_str: &'a str,
-	line_chars: Vec<char>,
-	line_index: usize,
-	line_pos: usize,
+	line: &'a str,
+	chars: Vec<char>,
+	index: usize,
+	pos: usize,
 }
 
 pub fn tokenize(
@@ -29,10 +30,10 @@ pub fn tokenize(
 		file,
 		tokens,
 		transactions,
-		line_chars: Vec::new(),
-		line_index: 0,
-		line_str: "",
-		line_pos: 0,
+		chars: Vec::new(),
+		index: 0,
+		line: "",
+		pos: 0,
 	};
 	match tokenizer.create_tokens(content) {
 		Ok(()) => Ok(()),
@@ -40,10 +41,10 @@ pub fn tokenize(
 			let mut message = String::new();
 			message.push_str(&format!(
 				"{} : {}\n",
-				tokenizer.line_index + 1,
-				tokenizer.line_str.replace('\t', " ")
+				tokenizer.index + 1,
+				tokenizer.line.replace('\t', " ")
 			));
-			let mut num = tokenizer.line_index + 1;
+			let mut num = tokenizer.index + 1;
 			while num != 0 {
 				num /= 10;
 				message.push('-');
@@ -51,7 +52,7 @@ pub fn tokenize(
 			message.push('-');
 			message.push('-');
 			message.push('-');
-			for _ in 0..tokenizer.line_pos {
+			for _ in 0..tokenizer.pos {
 				message.push('-');
 			}
 			message.push('^');
@@ -59,7 +60,7 @@ pub fn tokenize(
 				message.push_str(&format!("\n{}", reason));
 			}
 			Err(errors::Error {
-				line: tokenizer.line_index + 1,
+				line: tokenizer.index + 1,
 				message,
 			})
 		}
@@ -68,12 +69,12 @@ pub fn tokenize(
 
 impl<'a> Tokenizer<'a> {
 	fn create_tokens(&mut self, content: &'a str) -> Result<(), String> {
-		for (line_index, line_str) in content.lines().enumerate() {
-			self.line_str = line_str;
-			self.line_chars = line_str.chars().collect();
-			self.line_index = line_index;
-			self.line_pos = 0;
-			if self.line_chars.get(self.line_pos).is_some() {
+		for (index, line) in content.lines().enumerate() {
+			self.line = line;
+			self.chars = line.chars().collect();
+			self.index = index;
+			self.pos = 0;
+			if self.chars.get(self.pos).is_some() {
 				self.parse()?;
 			}
 		}
@@ -81,73 +82,21 @@ impl<'a> Tokenizer<'a> {
 	}
 
 	fn parse(&mut self) -> Result<(), String> {
-		if chars::is_tab(&self.line_chars, self.line_pos)
-			|| (chars::is_space(&self.line_chars, self.line_pos)
-				&& chars::is_space(&self.line_chars, self.line_pos + 1))
+		if chars::is_char(self, '\t')
+			|| (chars::is_char_pos(&self.chars, self.pos, ' ')
+				&& chars::is_char_pos(&self.chars, self.pos + 1, ' '))
 		{
 			chars::consume_whitespaces(self);
 			comment::tokenize(self)?;
-			self.tokenize_posting()?;
+			posting::tokenize(self)?;
 		} else {
 			transaction::tokenize(self)?;
 			comment::tokenize(self)?;
 			directives::is_include(self)?;
 			directives::is_alias(self)?;
 		}
-		if let Some(c) = self.line_chars.get(self.line_pos) {
+		if let Some(c) = self.chars.get(self.pos) {
 			return Err(format!("Unexpected character \"{}\"", c));
-		}
-		Ok(())
-	}
-
-	fn tokenize_posting(&mut self) -> Result<(), String> {
-		match self.line_chars.get(self.line_pos) {
-			None => Ok(()),
-			Some(_) => {
-				let mut value = String::new();
-
-				while let Some(&c) = self.line_chars.get(self.line_pos) {
-					if chars::is_tab(&self.line_chars, self.line_pos)
-						|| (chars::is_space(&self.line_chars, self.line_pos)
-							&& chars::is_space(&self.line_chars, self.line_pos + 1))
-					{
-						self
-							.tokens
-							.push(Token::PostingAccount(self.line_index, value));
-
-						chars::consume_whitespaces(self);
-						mixed_amount::tokenize(self)?;
-
-						return self.balance_assertion();
-					}
-
-					value.push(c);
-					self.line_pos += 1;
-				}
-
-				self
-					.tokens
-					.push(Token::PostingAccount(self.line_index, value));
-
-				Ok(())
-			}
-		}
-	}
-
-	fn balance_assertion(&mut self) -> Result<(), String> {
-		if let Some(&c) = self.line_chars.get(self.line_pos) {
-			if c == '=' {
-				self.line_pos += 1;
-
-				self.tokens.push(Token::BalanceAssertion(self.line_index));
-
-				if self.line_chars.get(self.line_pos).is_none() {
-					return Err(String::from(""));
-				} else {
-					chars::consume_whitespaces(self);
-					return mixed_amount::tokenize(self);
-				};
-			}
 		}
 		Ok(())
 	}

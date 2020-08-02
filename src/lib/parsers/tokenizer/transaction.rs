@@ -4,7 +4,7 @@ use super::chars;
 use super::Tokenizer;
 
 pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	match tokenizer.line_chars.get(tokenizer.line_pos) {
+	match tokenizer.chars.get(tokenizer.pos) {
 		None => Ok(()),
 		Some(c) if c.is_numeric() => tokenize_transaction(tokenizer),
 		Some(_) => Ok(()),
@@ -37,13 +37,13 @@ fn tokenize_date(tokenizer: &mut Tokenizer) -> Result<(), String> {
 
 	tokenizer
 		.tokens
-		.push(Token::TransactionDateYear(tokenizer.line_index, year));
+		.push(Token::TransactionDateYear(tokenizer.index, year));
 	tokenizer
 		.tokens
-		.push(Token::TransactionDateMonth(tokenizer.line_index, month));
+		.push(Token::TransactionDateMonth(tokenizer.index, month));
 	tokenizer
 		.tokens
-		.push(Token::TransactionDateDay(tokenizer.line_index, day));
+		.push(Token::TransactionDateDay(tokenizer.index, day));
 
 	Ok(())
 }
@@ -90,23 +90,23 @@ fn parse_date(
 }
 
 fn tokenize_state(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	match tokenizer.line_chars.get(tokenizer.line_pos) {
+	match tokenizer.chars.get(tokenizer.pos) {
 		None => Err(String::from("Unexpected end of line")),
 		Some(&c) => {
 			chars::consume_whitespaces(tokenizer);
 			match c {
 				'*' => {
-					let state = Token::TransactionState(tokenizer.line_index, State::Cleared);
+					let state = Token::TransactionState(tokenizer.index, State::Cleared);
 					tokenizer.tokens.push(state);
-					tokenizer.line_pos += 1;
+					tokenizer.pos += 1;
 				}
 				'!' => {
-					let state = Token::TransactionState(tokenizer.line_index, State::Pending);
+					let state = Token::TransactionState(tokenizer.index, State::Pending);
 					tokenizer.tokens.push(state);
-					tokenizer.line_pos += 1;
+					tokenizer.pos += 1;
 				}
 				_ => {
-					let state = Token::TransactionState(tokenizer.line_index, State::Uncleared);
+					let state = Token::TransactionState(tokenizer.index, State::Uncleared);
 					tokenizer.tokens.push(state);
 				}
 			}
@@ -116,61 +116,56 @@ fn tokenize_state(tokenizer: &mut Tokenizer) -> Result<(), String> {
 }
 
 fn tokenize_code(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	match tokenizer.line_chars.get(tokenizer.line_pos) {
-		None => Ok(()),
-		Some(&c) => {
-			chars::consume_whitespaces(tokenizer);
+	chars::consume_whitespaces(tokenizer);
 
-			if c == '(' {
-				tokenizer.line_pos += 1;
+	if chars::is_char(tokenizer, '(') {
+		tokenizer.pos += 1;
 
-				let mut value = String::new();
+		let mut value = String::new();
 
-				match tokenizer.line_chars.get(tokenizer.line_pos) {
-					None => {
-						return Err(String::from(""));
-					}
-					Some(&c) => {
-						value.push(c);
-						tokenizer.line_pos += 1;
-					}
-				}
-
-				while let Some(&c) = tokenizer.line_chars.get(tokenizer.line_pos) {
-					if c == ')' {
-						tokenizer.line_pos += 1;
-						break;
-					}
-					value.push(c);
-					tokenizer.line_pos += 1;
-				}
-
-				tokenizer
-					.tokens
-					.push(Token::TransactionCode(tokenizer.line_index, value));
+		match tokenizer.chars.get(tokenizer.pos) {
+			None => {
+				return Err(String::from(""));
 			}
-
-			Ok(())
+			Some(&c) => {
+				value.push(c);
+				tokenizer.pos += 1;
+			}
 		}
+
+		while let Some(&c) = tokenizer.chars.get(tokenizer.pos) {
+			if c == ')' {
+				tokenizer.pos += 1;
+				break;
+			}
+			value.push(c);
+			tokenizer.pos += 1;
+		}
+
+		tokenizer
+			.tokens
+			.push(Token::TransactionCode(tokenizer.index, value));
 	}
+
+	Ok(())
 }
 
 fn tokenize_description(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	match tokenizer.line_chars.get(tokenizer.line_pos) {
+	match tokenizer.chars.get(tokenizer.pos) {
 		None => Err(String::from("Unexpected end of line")),
 		Some(_) => {
 			chars::consume_whitespaces(tokenizer);
 
 			let mut value = String::new();
 
-			while let Some(&c) = tokenizer.line_chars.get(tokenizer.line_pos) {
+			while let Some(&c) = tokenizer.chars.get(tokenizer.pos) {
 				value.push(c);
-				tokenizer.line_pos += 1;
+				tokenizer.pos += 1;
 			}
 
 			tokenizer
 				.tokens
-				.push(Token::TransactionDescription(tokenizer.line_index, value));
+				.push(Token::TransactionDescription(tokenizer.index, value));
 
 			Ok(())
 		}

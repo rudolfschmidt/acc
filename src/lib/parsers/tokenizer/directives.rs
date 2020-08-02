@@ -7,14 +7,14 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub(super) fn is_include(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	match tokenizer.line_chars.get(tokenizer.line_pos) {
+	match tokenizer.chars.get(tokenizer.pos) {
 		None => Ok(()),
 		Some(_) => {
-			if chars::is_string(tokenizer, "include ") {
+			if chars::consume_string(tokenizer, "include ") {
 				let mut file = String::new();
-				while let Some(&c) = tokenizer.line_chars.get(tokenizer.line_pos) {
+				while let Some(&c) = tokenizer.chars.get(tokenizer.pos) {
 					file.push(c);
-					tokenizer.line_pos += 1;
+					tokenizer.pos += 1;
 				}
 				let mut files: Vec<PathBuf> = Vec::new();
 				if file.starts_with('/') {
@@ -120,20 +120,16 @@ where
 }
 
 pub(super) fn is_alias(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	match tokenizer.line_chars.get(tokenizer.line_pos) {
-		None => Ok(()),
-		Some(_) => {
-			if chars::is_string(tokenizer, "alias ") {
-				let mut alias = String::new();
-				while let Some(&c) = tokenizer.line_chars.get(tokenizer.line_pos) {
-					alias.push(c);
-					tokenizer.line_pos += 1;
-				}
-				tokenizer
-					.tokens
-					.push(Token::Alias(tokenizer.line_index, alias));
+	// check if is some check removable
+	if tokenizer.chars.get(tokenizer.pos).is_some() {
+		if chars::consume_string(tokenizer, "alias ") {
+			let mut alias = String::new();
+			while let Some(&c) = tokenizer.chars.get(tokenizer.pos) {
+				alias.push(c);
+				tokenizer.pos += 1;
 			}
-			Ok(())
+			tokenizer.tokens.push(Token::Alias(tokenizer.index, alias));
 		}
 	}
+	Ok(())
 }

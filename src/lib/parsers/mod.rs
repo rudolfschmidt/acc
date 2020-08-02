@@ -1,4 +1,5 @@
 pub mod balancer;
+mod debug;
 pub mod modeler;
 pub mod tokenizer;
 
@@ -38,7 +39,9 @@ fn build_transactions(
 	transactions: &mut Vec<Transaction>,
 ) -> Result<(), errors::Error> {
 	tokenizer::tokenize(file, content, tokens, transactions)?;
+	// debug::print_tokens(&tokens);
 	modeler::build(tokens, transactions)?;
+	// debug::print_transactions(transactions);
 	balancer::balance(transactions)?;
 	Ok(())
 }

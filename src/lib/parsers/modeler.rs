@@ -26,6 +26,7 @@ pub fn build(tokens: &[Token], transactions: &mut Vec<Transaction>) -> Result<()
 					Token::TransactionDescription(line, _value) => *line,
 					Token::Comment(line, _value) => *line,
 					Token::PostingAccount(line, _value) => *line,
+					Token::PostingVirtualAccount(line, _value) => *line,
 					Token::PostingCommodity(line, _value) => *line,
 					Token::PostingAmount(line, _value) => *line,
 					Token::BalanceAssertion(line) => *line,
@@ -48,8 +49,8 @@ impl<'a> Parser<'a> {
 	fn parse(&mut self) -> Result<(), String> {
 		while self.index < self.tokens.len() {
 			self.parse_transaction()?;
-			self.parse_comment()?;
 			self.parse_posting()?;
+			self.parse_virtual_posting()?;
 			self.parse_balance_assertion()?;
 			self.parse_alias()?;
 		}
@@ -57,191 +58,204 @@ impl<'a> Parser<'a> {
 	}
 
 	fn parse_transaction(&mut self) -> Result<(), String> {
-		if let Some(token) = self.tokens.get(self.index) {
-			if let Token::TransactionDateYear(line, year) = token {
-				self.index += 1;
+		if let Some(Token::TransactionDateYear(line, year)) = self.tokens.get(self.index) {
+			self.index += 1;
 
-				let month = match self.tokens.get(self.index) {
-					None => return Err(String::from("")),
-					Some(token) => match token {
-						Token::TransactionDateMonth(_, month) => {
-							self.index += 1;
-							month
-						}
-						_ => return Err(format!("")),
-					},
-				};
+			let month = match self.tokens.get(self.index) {
+				Some(Token::TransactionDateMonth(_, month)) => {
+					self.index += 1;
+					month
+				}
+				_ => return Err(String::from("invalid date")),
+			};
 
-				let day = match self.tokens.get(self.index) {
-					None => return Err(String::from("")),
-					Some(token) => match token {
-						Token::TransactionDateDay(_, day) => {
-							self.index += 1;
-							day
-						}
-						_ => return Err(format!("")),
-					},
-				};
+			let day = match self.tokens.get(self.index) {
+				Some(Token::TransactionDateDay(_, day)) => {
+					self.index += 1;
+					day
+				}
+				_ => return Err(String::from("invalid date")),
+			};
 
-				let state = match self.tokens.get(self.index) {
-					None => return Err(String::from("")),
-					Some(token) => match token {
-						Token::TransactionState(_, state) => {
-							self.index += 1;
-							state.to_owned()
-						}
-						_ => return Err(format!("")),
-					},
-				};
+			let state = match self.tokens.get(self.index) {
+				Some(Token::TransactionState(_, state)) => {
+					self.index += 1;
+					state.to_owned()
+				}
+				_ => return Err(format!("Invalid state")),
+			};
 
-				let code = match self.tokens.get(self.index) {
-					None => return Err(String::from("")),
-					Some(token) => match token {
-						Token::TransactionCode(_, code) => {
-							self.index += 1;
-							Some(code.to_owned())
-						}
-						_ => None,
-					},
-				};
+			let code = match self.tokens.get(self.index) {
+				Some(Token::TransactionCode(_, code)) => {
+					self.index += 1;
+					Some(code.to_owned())
+				}
+				_ => None,
+			};
 
-				let description = match self.tokens.get(self.index) {
-					None => return Err(String::from("")),
-					Some(token) => match token {
-						Token::TransactionDescription(_, description) => {
-							self.index += 1;
-							description.to_owned()
-						}
-						_ => return Err(format!("")),
-					},
-				};
+			let description = match self.tokens.get(self.index) {
+				Some(Token::TransactionDescription(_, description)) => {
+					self.index += 1;
+					description.to_owned()
+				}
+				_ => return Err(String::from("No description found")),
+			};
 
-				self.transactions.push(Transaction {
+			let mut comments = Vec::new();
+			while let Some(Token::Comment(line, comment)) = self.tokens.get(self.index) {
+				comments.push(Comment {
 					line: *line,
-					date: format!(
-						"{}-{}-{}",
-						year.to_owned(),
-						month.to_owned(),
-						day.to_owned()
-					),
-					state,
-					code,
-					description,
-					comments: Vec::new(),
-					postings: Vec::new(),
+					comment: comment.to_owned(),
 				});
-			}
-		}
-		Ok(())
-	}
-
-	fn parse_comment(&mut self) -> Result<(), String> {
-		if let Some(token) = self.tokens.get(self.index) {
-			if let Token::Comment(line, value) = token {
-				self
-					.transactions
-					.last_mut()
-					.unwrap()
-					.comments
-					.push(Comment {
-						line: *line,
-						comment: value.to_owned(),
-					});
 				self.index += 1;
 			}
+
+			self.transactions.push(Transaction {
+				line: *line,
+				date: format!("{}-{}-{}", year, month, day),
+				state,
+				code,
+				description,
+				comments: comments,
+				postings: Vec::new(),
+			});
 		}
 		Ok(())
 	}
 
 	fn parse_posting(&mut self) -> Result<(), String> {
-		if let Some(token) = self.tokens.get(self.index) {
-			if let Token::PostingAccount(line, account) = token {
+		if let Some(Token::PostingAccount(line, account)) = self.tokens.get(self.index) {
+			self.index += 1;
+
+			let mut comments = Vec::new();
+			while let Some(Token::Comment(_, comment)) = self.tokens.get(self.index) {
 				self.index += 1;
-
-				let commodity = match self.tokens.get(self.index) {
-					None => String::from(""),
-					Some(token) => match token {
-						Token::PostingCommodity(_, commodity) => {
-							self.index += 1;
-							commodity.to_owned()
-						}
-						_ => String::from(""),
-					},
-				};
-
-				let unbalanced_amount = match self.tokens.get(self.index) {
-					None => None,
-					Some(token) => match token {
-						Token::PostingAmount(_, amount) => {
-							self.index += 1;
-							Some(MixedAmount {
-								commodity,
-								amount: create_rational(&amount),
-							})
-						}
-						_ => None,
-					},
-				};
-
-				self
-					.transactions
-					.last_mut()
-					.unwrap()
-					.postings
-					.push(Posting {
-						line: *line,
-						account: account.to_owned(),
-						unbalanced_amount,
-						balanced_amount: None,
-						balance_assertion: None,
-						comments: Vec::new(),
-					});
+				comments.push(Comment {
+					line: self.index + 1,
+					comment: comment.to_owned(),
+				});
 			}
+
+			let commodity = match self.tokens.get(self.index) {
+				Some(Token::PostingCommodity(_, commodity)) => {
+					self.index += 1;
+					commodity.to_owned()
+				}
+				_ => String::from("commodity expected"),
+			};
+
+			let unbalanced_amount = match self.tokens.get(self.index) {
+				Some(Token::PostingAmount(_, amount)) => {
+					self.index += 1;
+					Some(MixedAmount {
+						commodity,
+						amount: create_rational(&amount),
+					})
+				}
+				_ => None,
+			};
+
+			while let Some(Token::Comment(_, comment)) = self.tokens.get(self.index) {
+				self.index += 1;
+				comments.push(Comment {
+					line: self.index + 1,
+					comment: comment.to_owned(),
+				});
+			}
+
+			self
+				.transactions
+				.last_mut()
+				.unwrap()
+				.postings
+				.push(Posting {
+					line: *line,
+					account: account.to_owned(),
+					unbalanced_amount,
+					balanced_amount: None,
+					balance_assertion: None,
+					comments: comments,
+				});
+		}
+		Ok(())
+	}
+
+	fn parse_virtual_posting(&mut self) -> Result<(), String> {
+		if let Some(Token::PostingVirtualAccount(_line, _account)) = self.tokens.get(self.index) {
+			self.index += 1;
+
+			let mut comments = Vec::new();
+
+			while let Some(Token::Comment(_, comment)) = self.tokens.get(self.index) {
+				self.index += 1;
+				comments.push(Comment {
+					line: self.index + 1,
+					comment: comment.to_owned(),
+				});
+			}
+
+			let commodity = match self.tokens.get(self.index) {
+				Some(Token::PostingCommodity(_, commodity)) => {
+					self.index += 1;
+					commodity.to_owned()
+				}
+				_ => String::from("commodity expected"),
+			};
+
+			let unbalanced_amount = match self.tokens.get(self.index) {
+				Some(Token::PostingAmount(_, amount)) => {
+					self.index += 1;
+					Some(MixedAmount {
+						commodity,
+						amount: create_rational(&amount),
+					})
+				}
+				_ => None,
+			};
+
+			while let Some(Token::Comment(_, comment)) = self.tokens.get(self.index) {
+				self.index += 1;
+				comments.push(Comment {
+					line: self.index + 1,
+					comment: comment.to_owned(),
+				});
+			}
+			// handle virtual posts
 		}
 		Ok(())
 	}
 
 	fn parse_balance_assertion(&mut self) -> Result<(), String> {
-		if let Some(token) = self.tokens.get(self.index) {
-			if let Token::BalanceAssertion(_line) = token {
-				self.index += 1;
+		if let Some(Token::BalanceAssertion(_line)) = self.tokens.get(self.index) {
+			self.index += 1;
 
-				let commodity = match self.tokens.get(self.index) {
-					None => String::from(""),
-					Some(token) => match token {
-						Token::PostingCommodity(_, commodity) => {
-							self.index += 1;
-							commodity.to_owned()
-						}
-						_ => String::from(""),
-					},
-				};
-
-				let amount = match self.tokens.get(self.index) {
-					None => return Err(String::from("")),
-					Some(token) => match token {
-						Token::PostingAmount(_, amount) => {
-							self.index += 1;
-							create_rational(&amount)
-						}
-						_ => return Err(String::from("")),
-					},
-				};
-
-				match self.transactions.last_mut().unwrap().postings.last_mut() {
-					None => return Err(format!("")),
-					Some(posting) => posting.balance_assertion = Some(MixedAmount { commodity, amount }),
+			let commodity = match self.tokens.get(self.index) {
+				Some(Token::PostingCommodity(_, commodity)) => {
+					self.index += 1;
+					commodity.to_owned()
 				}
+				_ => String::from("commodity expected"),
+			};
+
+			let amount = match self.tokens.get(self.index) {
+				Some(Token::PostingAmount(_, amount)) => {
+					self.index += 1;
+					create_rational(&amount)
+				}
+				_ => return Err(String::from("amount expected")),
+			};
+
+			match self.transactions.last_mut().unwrap().postings.last_mut() {
+				None => return Err(format!("posting not found")),
+				Some(posting) => posting.balance_assertion = Some(MixedAmount { commodity, amount }),
 			}
 		}
 		Ok(())
 	}
 
 	fn parse_alias(&mut self) -> Result<(), String> {
-		if let Some(token) = self.tokens.get(self.index) {
-			if let Token::Alias(_line, _alias) = token {
-				self.index += 1;
-			}
+		if let Some(Token::Alias(_line, _alias)) = self.tokens.get(self.index) {
+			self.index += 1;
 		}
 		Ok(())
 	}
