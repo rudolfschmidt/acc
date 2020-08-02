@@ -311,4 +311,5 @@ If freedom and privacy matter anything to you, care about your finances or other
 
 ## Changelog
 *Sun 02 Aug 2020 09:18:50 PM CEST* - Removed debug command
+
 *Sat 01 Aug 2020 10:38:14 PM CEST* - Make acc available as lib
