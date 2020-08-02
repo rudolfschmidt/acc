@@ -305,6 +305,7 @@ If freedom and privacy matter anything to you, care about your finances or other
 3. Another important reasons, maybe the most important, is to be able to take decisions based on financial data rather than on temporary feelings. A simple real-life scenario could be the question if you spent your money to go out and eat food at a restaurant or save some bucks by eating at home. Track your grocery costs and calculate the daily average and you get suprised how much you "eat at home". Eating outside will not look expensive anymore I bet.
 
 ## ToDo
+* Add filter functionalities
 * Add support for expressions
 * Add support for periodic transactions
 * Add experimental support for other file formats like yaml
