@@ -1,7 +1,6 @@
 pub mod accounts;
 pub mod balance;
 pub mod codes;
-pub mod debug;
 pub mod print;
 pub mod register;
 

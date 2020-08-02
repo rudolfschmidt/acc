@@ -8,6 +8,7 @@ pub enum Token {
 	TransactionDescription(usize, String),
 	Comment(usize, String),
 	PostingAccount(usize, String),
+	PostingVirtualAccount(usize, String),
 	PostingCommodity(usize, String),
 	PostingAmount(usize, String),
 	BalanceAssertion(usize),
@@ -35,8 +36,8 @@ pub struct Transaction {
 #[derive(Debug)]
 pub struct Posting {
 	pub line: usize,
-	pub comments: Vec<Comment>,
 	pub account: String,
+	pub comments: Vec<Comment>,
 	pub unbalanced_amount: Option<MixedAmount>,
 	pub balanced_amount: Option<MixedAmount>,
 	pub balance_assertion: Option<MixedAmount>,

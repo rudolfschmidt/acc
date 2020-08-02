@@ -22,12 +22,13 @@ pub(super) fn print<F: Fn(&Posting) -> Option<&MixedAmount>>(
 	let mut transaction_iter = transactions.iter().peekable();
 
 	while let Some(transaction) = transaction_iter.next() {
-		print_head(transaction);
-		print_comments(transaction);
+		print_transaction_head(transaction);
+		print_transaction_comments(transaction);
 
 		for posting in &transaction.postings {
 			print_account(posting);
 			print_amount(posting, require_amount, account_width, &f)?;
+			print_posting_comments(posting);
 		}
 
 		if transaction_iter.peek().is_some() {
@@ -37,7 +38,7 @@ pub(super) fn print<F: Fn(&Posting) -> Option<&MixedAmount>>(
 	Ok(())
 }
 
-fn print_head(transaction: &Transaction) {
+fn print_transaction_head(transaction: &Transaction) {
 	println!(
 		"{}{}{}{}",
 		transaction.date,
@@ -62,8 +63,14 @@ fn print_head(transaction: &Transaction) {
 	);
 }
 
-fn print_comments(transaction: &Transaction) {
+fn print_transaction_comments(transaction: &Transaction) {
 	for comment in &transaction.comments {
+		println!("{}; {}", INDENT, comment.comment);
+	}
+}
+
+fn print_posting_comments(posting: &Posting) {
+	for comment in &posting.comments {
 		println!("{}; {}", INDENT, comment.comment);
 	}
 }
