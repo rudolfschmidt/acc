@@ -139,11 +139,14 @@ fn make_root_balance_account(structs: &[BalanceAccount]) -> BalanceAccount {
 }
 
 fn print_balance_accounts(account: BalanceAccount, amount_width: usize) {
-	for child in account.children {
+	for child in &account.children {
 		print_balance_account("", child, amount_width);
 	}
 	for _ in 0..amount_width {
 		print!("-");
+	}
+	if account.children.is_empty() {
+		return;
 	}
 	println!();
 	if account.amounts.iter().all(|(_, a)| a.is_zero()) {
@@ -156,7 +159,7 @@ fn print_balance_accounts(account: BalanceAccount, amount_width: usize) {
 	});
 }
 
-fn print_balance_account(indent: &str, post: BalanceAccount, amount_width: usize) {
+fn print_balance_account(indent: &str, post: &BalanceAccount, amount_width: usize) {
 	let mut it = post.amounts.iter().peekable();
 	while let Some((commodity, amount)) = it.next() {
 		print_commodity_amount(commodity, amount, amount_width);
@@ -165,7 +168,7 @@ fn print_balance_account(indent: &str, post: BalanceAccount, amount_width: usize
 		}
 	}
 	println!("{}{}", indent, post.account.blue());
-	for child in post.children {
+	for child in &post.children {
 		print_balance_account(&format!("{}  ", indent), child, amount_width);
 	}
 }

@@ -1,19 +1,31 @@
 extern crate num;
 
-use super::super::errors::Error;
 use super::super::model::Comment;
 use super::super::model::MixedAmount;
 use super::super::model::Posting;
 use super::super::model::Token;
 use super::super::model::Transaction;
+use super::Error;
+use std::path::Path;
 
-pub fn build(tokens: &[Token], transactions: &mut Vec<Transaction>) -> Result<(), Error> {
+struct Parser<'a> {
+	tokens: &'a [Token],
+	transactions: &'a mut Vec<Transaction>,
+	index: usize,
+}
+
+pub fn build(
+	file: &Path,
+	tokens: &[Token],
+	transactions: &mut Vec<Transaction>,
+) -> Result<(), Error> {
 	let mut parser = Parser {
 		tokens,
 		transactions,
 		index: 0,
 	};
 	match parser.parse() {
+		Ok(()) => Ok(()),
 		Err(message) => Err(Error {
 			line: match parser.tokens.get(parser.index) {
 				None => parser.index + 1,
@@ -33,21 +45,15 @@ pub fn build(tokens: &[Token], transactions: &mut Vec<Transaction>) -> Result<()
 					Token::Alias(line, _value) => *line,
 				},
 			},
-			message: format!("Parse Error : {}", message),
+			message,
 		}),
-		Ok(()) => Ok(()),
 	}
-}
-
-struct Parser<'a> {
-	tokens: &'a [Token],
-	transactions: &'a mut Vec<Transaction>,
-	index: usize,
 }
 
 impl<'a> Parser<'a> {
 	fn parse(&mut self) -> Result<(), String> {
 		while self.index < self.tokens.len() {
+			self.journal_comment()?;
 			self.parse_transaction()?;
 			self.parse_posting()?;
 			self.parse_virtual_posting()?;
@@ -57,12 +63,24 @@ impl<'a> Parser<'a> {
 		Ok(())
 	}
 
+	fn journal_comment(&mut self) -> Result<(), String> {
+		let mut comments = Vec::new();
+		while let Some(Token::Comment(line, comment)) = self.tokens.get(self.index) {
+			comments.push(Comment {
+				line: *line,
+				comment: comment.to_owned(),
+			});
+			self.index += 1;
+		}
+		Ok(())
+	}
+
 	fn parse_transaction(&mut self) -> Result<(), String> {
 		if let Some(Token::TransactionDateYear(line, year)) = self.tokens.get(self.index) {
 			self.index += 1;
 
 			let month = match self.tokens.get(self.index) {
-				Some(Token::TransactionDateMonth(_, month)) => {
+				Some(Token::TransactionDateMonth(_line, month)) => {
 					self.index += 1;
 					month
 				}
@@ -70,7 +88,7 @@ impl<'a> Parser<'a> {
 			};
 
 			let day = match self.tokens.get(self.index) {
-				Some(Token::TransactionDateDay(_, day)) => {
+				Some(Token::TransactionDateDay(_line, day)) => {
 					self.index += 1;
 					day
 				}
@@ -78,15 +96,15 @@ impl<'a> Parser<'a> {
 			};
 
 			let state = match self.tokens.get(self.index) {
-				Some(Token::TransactionState(_, state)) => {
+				Some(Token::TransactionState(_line, state)) => {
 					self.index += 1;
 					state.to_owned()
 				}
-				_ => return Err(format!("Invalid state")),
+				_ => return Err(String::from("invalid date")),
 			};
 
 			let code = match self.tokens.get(self.index) {
-				Some(Token::TransactionCode(_, code)) => {
+				Some(Token::TransactionCode(_line, code)) => {
 					self.index += 1;
 					Some(code.to_owned())
 				}
@@ -94,15 +112,15 @@ impl<'a> Parser<'a> {
 			};
 
 			let description = match self.tokens.get(self.index) {
-				Some(Token::TransactionDescription(_, description)) => {
+				Some(Token::TransactionDescription(_line, description)) => {
 					self.index += 1;
 					description.to_owned()
 				}
-				_ => return Err(String::from("No description found")),
+				_ => return Err(String::from("no description found")),
 			};
 
 			let mut comments = Vec::new();
-			while let Some(Token::Comment(line, comment)) = self.tokens.get(self.index) {
+			while let Some(Token::Comment(_line, comment)) = self.tokens.get(self.index) {
 				comments.push(Comment {
 					line: *line,
 					comment: comment.to_owned(),
@@ -128,7 +146,7 @@ impl<'a> Parser<'a> {
 			self.index += 1;
 
 			let mut comments = Vec::new();
-			while let Some(Token::Comment(_, comment)) = self.tokens.get(self.index) {
+			while let Some(Token::Comment(_line, comment)) = self.tokens.get(self.index) {
 				self.index += 1;
 				comments.push(Comment {
 					line: self.index + 1,
@@ -137,7 +155,7 @@ impl<'a> Parser<'a> {
 			}
 
 			let commodity = match self.tokens.get(self.index) {
-				Some(Token::PostingCommodity(_, commodity)) => {
+				Some(Token::PostingCommodity(_line, commodity)) => {
 					self.index += 1;
 					commodity.to_owned()
 				}
@@ -145,7 +163,7 @@ impl<'a> Parser<'a> {
 			};
 
 			let unbalanced_amount = match self.tokens.get(self.index) {
-				Some(Token::PostingAmount(_, amount)) => {
+				Some(Token::PostingAmount(_line, amount)) => {
 					self.index += 1;
 					Some(MixedAmount {
 						commodity,
@@ -155,7 +173,7 @@ impl<'a> Parser<'a> {
 				_ => None,
 			};
 
-			while let Some(Token::Comment(_, comment)) = self.tokens.get(self.index) {
+			while let Some(Token::Comment(_line, comment)) = self.tokens.get(self.index) {
 				self.index += 1;
 				comments.push(Comment {
 					line: self.index + 1,
@@ -186,7 +204,7 @@ impl<'a> Parser<'a> {
 
 			let mut comments = Vec::new();
 
-			while let Some(Token::Comment(_, comment)) = self.tokens.get(self.index) {
+			while let Some(Token::Comment(_line, comment)) = self.tokens.get(self.index) {
 				self.index += 1;
 				comments.push(Comment {
 					line: self.index + 1,
@@ -195,7 +213,7 @@ impl<'a> Parser<'a> {
 			}
 
 			let commodity = match self.tokens.get(self.index) {
-				Some(Token::PostingCommodity(_, commodity)) => {
+				Some(Token::PostingCommodity(_line, commodity)) => {
 					self.index += 1;
 					commodity.to_owned()
 				}
@@ -203,7 +221,7 @@ impl<'a> Parser<'a> {
 			};
 
 			let unbalanced_amount = match self.tokens.get(self.index) {
-				Some(Token::PostingAmount(_, amount)) => {
+				Some(Token::PostingAmount(_line, amount)) => {
 					self.index += 1;
 					Some(MixedAmount {
 						commodity,
@@ -213,7 +231,7 @@ impl<'a> Parser<'a> {
 				_ => None,
 			};
 
-			while let Some(Token::Comment(_, comment)) = self.tokens.get(self.index) {
+			while let Some(Token::Comment(_line, comment)) = self.tokens.get(self.index) {
 				self.index += 1;
 				comments.push(Comment {
 					line: self.index + 1,
@@ -230,7 +248,7 @@ impl<'a> Parser<'a> {
 			self.index += 1;
 
 			let commodity = match self.tokens.get(self.index) {
-				Some(Token::PostingCommodity(_, commodity)) => {
+				Some(Token::PostingCommodity(_line, commodity)) => {
 					self.index += 1;
 					commodity.to_owned()
 				}
@@ -238,7 +256,7 @@ impl<'a> Parser<'a> {
 			};
 
 			let amount = match self.tokens.get(self.index) {
-				Some(Token::PostingAmount(_, amount)) => {
+				Some(Token::PostingAmount(_line, amount)) => {
 					self.index += 1;
 					create_rational(&amount)
 				}

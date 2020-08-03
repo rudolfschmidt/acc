@@ -1,8 +1,8 @@
 extern crate num;
 
-use super::super::errors::Error;
 use super::super::model::MixedAmount;
 use super::super::model::Transaction;
+use super::Error;
 
 use num::Zero;
 use std::collections::BTreeMap;

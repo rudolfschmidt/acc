@@ -5,9 +5,9 @@ mod mixed_amount;
 mod posting;
 mod transaction;
 
-use super::super::errors;
 use super::super::model::Token;
 use super::super::model::Transaction;
+use super::Error;
 use std::path::Path;
 
 struct Tokenizer<'a> {
@@ -25,17 +25,17 @@ pub fn tokenize(
 	content: &str,
 	tokens: &mut Vec<Token>,
 	transactions: &mut Vec<Transaction>,
-) -> Result<(), errors::Error> {
+) -> Result<(), Error> {
 	let mut tokenizer = Tokenizer {
 		file,
-		tokens,
 		transactions,
+		tokens,
 		chars: Vec::new(),
 		index: 0,
 		line: "",
 		pos: 0,
 	};
-	match tokenizer.create_tokens(content) {
+	match tokenizer.create_tokens(&content) {
 		Ok(()) => Ok(()),
 		Err(reason) => {
 			let mut message = String::new();
@@ -59,7 +59,7 @@ pub fn tokenize(
 			if !reason.is_empty() {
 				message.push_str(&format!("\n{}", reason));
 			}
-			Err(errors::Error {
+			Err(Error {
 				line: tokenizer.index + 1,
 				message,
 			})
@@ -96,7 +96,7 @@ impl<'a> Tokenizer<'a> {
 			directives::is_alias(self)?;
 		}
 		if let Some(c) = self.chars.get(self.pos) {
-			return Err(format!("Unexpected character \"{}\"", c));
+			return Err(format!("unexpected character \"{}\"", c));
 		}
 		Ok(())
 	}

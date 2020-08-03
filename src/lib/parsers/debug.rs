@@ -24,5 +24,7 @@ pub fn print_tokens(tokens: &[Token]) {
 }
 
 pub fn print_transactions(transactions: &[Transaction]) {
-	transactions.iter().for_each(|t| println!("{:?}", t));
+	transactions
+		.iter()
+		.for_each(|t| println!("{:?}", t.description));
 }
