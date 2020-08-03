@@ -38,7 +38,7 @@ fn build_transactions(
 ) -> Result<(), Error> {
 	let mut tokens = Vec::new();
 	tokenizer::tokenize(file, content, &mut tokens, transactions)?;
-	modeler::build(file, &mut tokens, transactions)?;
+	modeler::build(&mut tokens, transactions)?;
 	balancer::balance(transactions)?;
 	Ok(())
 }
