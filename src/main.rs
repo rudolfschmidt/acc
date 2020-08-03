@@ -32,7 +32,6 @@ fn start() -> Result<(), String> {
 	let mut files: Vec<String> = Vec::new();
 	let mut command = None;
 	let mut arguments = Vec::new();
-	let mut tokens = Vec::new();
 	let mut transactions = Vec::new();
 
 	parse_arguments(&mut files, &mut command, &mut arguments)?;
@@ -45,8 +44,9 @@ fn start() -> Result<(), String> {
 					"Error : No file(s) reselected. Try --file <file> to select a file",
 				));
 			}
+
 			for file in files {
-				parsers::parse_file(std::path::Path::new(&file), &mut tokens, &mut transactions)?;
+				parsers::parse_file(std::path::Path::new(&file), &mut transactions)?;
 			}
 
 			execute_command(command, arguments, &transactions)

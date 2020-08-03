@@ -21,40 +21,48 @@ pub(super) fn is_include(tokenizer: &mut Tokenizer) -> Result<(), String> {
 					files.push(PathBuf::from("/"));
 				}
 				for token in file.split('/') {
-					if token == "*" {
-						let mut inc_dirs: Vec<PathBuf> = Vec::new();
+					if token == "**.*" {
+						let mut inc: Vec<PathBuf> = Vec::new();
 						for file in files {
-							if let Err(err) = add_directories(&file, &mut inc_dirs, false) {
+							if let Err(err) = add_files(&file, &mut inc, true, |p| p.is_file()) {
 								return Err(format!("{}", err));
 							}
 						}
-						files = inc_dirs;
-					} else if token == "**" {
-						let mut included: Vec<PathBuf> = Vec::new();
-						for file in files {
-							if let Err(err) = add_directories(&file, &mut included, true) {
-								return Err(format!("{}", err));
-							}
-						}
-						files = included;
+						files = inc;
 					} else if token == "*.*" {
-						let mut inc_dirs = Vec::new();
+						let mut inc = Vec::new();
 						for file in files {
-							if let Err(err) = add_files(&file, &mut inc_dirs, |p| p.is_file()) {
+							if let Err(err) = add_files(&file, &mut inc, false, |p| p.is_file()) {
 								return Err(format!("{}", err));
 							}
 						}
-						files = inc_dirs;
+						files = inc;
 					} else if token.starts_with("*.") {
-						let mut inc_files = Vec::new();
+						let mut inc = Vec::new();
 						for file in files {
-							if let Err(err) = add_files(&file, &mut inc_files, |p| {
+							if let Err(err) = add_files(&file, &mut inc, false, |p| {
 								p.is_file() && p.extension() == Path::new(token).extension()
 							}) {
 								return Err(format!("{}", err));
 							}
 						}
-						files = inc_files;
+						files = inc;
+					} else if token == "*" {
+						let mut inc: Vec<PathBuf> = Vec::new();
+						for file in files {
+							if let Err(err) = add_directories(&file, &mut inc, false) {
+								return Err(format!("{}", err));
+							}
+						}
+						files = inc;
+					} else if token == "**" {
+						let mut inc: Vec<PathBuf> = Vec::new();
+						for file in files {
+							if let Err(err) = add_directories(&file, &mut inc, true) {
+								return Err(format!("{}", err));
+							}
+						}
+						files = inc;
 					} else {
 						match files.last_mut() {
 							None => {
@@ -75,7 +83,7 @@ pub(super) fn is_include(tokenizer: &mut Tokenizer) -> Result<(), String> {
 					}
 				}
 				for file in files {
-					super::super::parse_file(&file, tokenizer.tokens, tokenizer.transactions)?;
+					super::super::parse_file(&file, tokenizer.transactions)?;
 				}
 			}
 			Ok(())
@@ -103,15 +111,23 @@ fn add_directories(
 	Ok(())
 }
 
-fn add_files<P>(base: &Path, files: &mut Vec<PathBuf>, predicate: P) -> Result<(), io::Error>
+fn add_files<P>(
+	base: &Path,
+	files: &mut Vec<PathBuf>,
+	resurive: bool,
+	predicate: P,
+) -> Result<(), io::Error>
 where
-	P: Fn(&Path) -> bool,
+	P: FnOnce(&Path) -> bool + Copy,
 {
 	let mut paths = fs::read_dir(&base)?
 		.map(|res| res.map(|e| e.path()))
 		.collect::<Result<Vec<PathBuf>, io::Error>>()?;
 	paths.sort();
 	for path in paths {
+		if resurive && path.is_dir() {
+			add_files(&path, files, resurive, predicate)?;
+		}
 		if predicate(&path) {
 			files.push(path);
 		}
