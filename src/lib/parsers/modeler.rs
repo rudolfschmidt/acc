@@ -6,7 +6,6 @@ use super::super::model::Posting;
 use super::super::model::Token;
 use super::super::model::Transaction;
 use super::Error;
-use std::path::Path;
 
 struct Parser<'a> {
 	tokens: &'a [Token],
@@ -14,11 +13,7 @@ struct Parser<'a> {
 	index: usize,
 }
 
-pub fn build(
-	file: &Path,
-	tokens: &[Token],
-	transactions: &mut Vec<Transaction>,
-) -> Result<(), Error> {
+pub fn build(tokens: &[Token], transactions: &mut Vec<Transaction>) -> Result<(), Error> {
 	let mut parser = Parser {
 		tokens,
 		transactions,
