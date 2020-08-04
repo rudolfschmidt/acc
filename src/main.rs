@@ -32,7 +32,7 @@ fn start() -> Result<(), String> {
 	let mut files: Vec<String> = Vec::new();
 	let mut command = None;
 	let mut arguments = Vec::new();
-	let mut transactions = Vec::new();
+	let mut items = Vec::new();
 
 	parse_arguments(&mut files, &mut command, &mut arguments)?;
 
@@ -46,10 +46,10 @@ fn start() -> Result<(), String> {
 			}
 
 			for file in files {
-				parsers::parse_file(std::path::Path::new(&file), &mut transactions)?;
+				parsers::parse(std::path::Path::new(&file), &mut items)?;
 			}
 
-			execute_command(command, arguments, &transactions)
+			execute_command(command, arguments, &items)
 		}
 	}
 }

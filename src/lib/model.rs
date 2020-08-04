@@ -1,25 +1,7 @@
 #[derive(Debug)]
-pub enum Token {
-	TransactionDateYear(usize, String),
-	TransactionDateMonth(usize, String),
-	TransactionDateDay(usize, String),
-	TransactionState(usize, State),
-	TransactionCode(usize, String),
-	TransactionDescription(usize, String),
-	Comment(usize, String),
-	PostingAccount(usize, String),
-	PostingVirtualAccount(usize, String),
-	PostingCommodity(usize, String),
-	PostingAmount(usize, String),
-	BalanceAssertion(usize),
-	Alias(usize, String),
-}
-
-#[derive(Debug, Clone)]
-pub enum State {
-	Cleared,
-	Uncleared,
-	Pending,
+pub enum Item {
+	Comment(Comment),
+	Transaction(Transaction),
 }
 
 #[derive(Debug)]
@@ -33,6 +15,13 @@ pub struct Transaction {
 	pub postings: Vec<Posting>,
 }
 
+#[derive(Debug, Clone)]
+pub enum State {
+	Cleared,
+	Uncleared,
+	Pending,
+}
+
 #[derive(Debug)]
 pub struct Posting {
 	pub line: usize,
@@ -41,9 +30,10 @@ pub struct Posting {
 	pub unbalanced_amount: Option<MixedAmount>,
 	pub balanced_amount: Option<MixedAmount>,
 	pub balance_assertion: Option<MixedAmount>,
+	pub virtual_posting: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MixedAmount {
 	pub commodity: String,
 	pub amount: num::rational::Rational64,
