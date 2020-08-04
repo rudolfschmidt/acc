@@ -48,6 +48,7 @@ pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 			accounts: Vec::new(),
 		};
 		for posting in &transaction.postings {
+			println!("{:?}", posting);
 			total
 				.entry(
 					posting

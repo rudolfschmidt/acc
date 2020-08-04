@@ -1,24 +1,45 @@
-use super::super::super::model::Token;
+use super::super::super::model::Comment;
 use super::chars;
 use super::Tokenizer;
 
-pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	if let Some(';') = tokenizer.chars.get(tokenizer.pos) {
-		tokenizer.pos += 1;
+pub(super) fn tokenize_journal_comment(tokenizer: &mut Tokenizer) -> Result<(), String> {
+	if let Some(comment) = tokenize_comment(tokenizer)? {
+		// println!("journal comment : {}", comment);
+	}
+	Ok(())
+}
 
-		chars::consume_whitespaces(tokenizer);
+pub(super) fn tokenize_indented_comment(tokenizer: &mut Tokenizer) -> Result<(), String> {
+	if let Some(comment) = tokenize_comment(tokenizer)? {
+		match tokenizer.transactions.last_mut() {
+			None => return Err(String::from("invalid position for comment")),
+			Some(transaction) => match transaction.postings.last_mut() {
+				None => transaction.comments.push(Comment {
+					line: tokenizer.line_index + 1,
+					comment,
+				}),
+				Some(posting) => posting.comments.push(Comment {
+					line: tokenizer.line_index + 1,
+					comment,
+				}),
+			},
+		}
+	}
+	Ok(())
+}
 
-		let mut value = String::new();
+fn tokenize_comment(tokenizer: &mut Tokenizer) -> Result<Option<String>, String> {
+	if chars::consume(tokenizer, |c| c == ';') {
+		chars::consume(tokenizer, char::is_whitespace);
 
-		while let Some(&c) = tokenizer.chars.get(tokenizer.pos) {
-			value.push(c);
-			tokenizer.pos += 1;
+		let mut comment = String::new();
+
+		while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
+			comment.push(c);
+			tokenizer.line_position += 1;
 		}
 
-		tokenizer
-			.tokens
-			.push(Token::Comment(tokenizer.index, value));
+		return Ok(Some(comment));
 	}
-
-	Ok(())
+	Ok(None)
 }

@@ -1,120 +1,91 @@
-use super::super::super::model::Token;
 use super::Tokenizer;
 
-pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	match tokenizer.chars.get(tokenizer.pos) {
-		None => Ok(()),
+pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<Option<(String, String)>, String> {
+	match tokenizer.line_characters.get(tokenizer.line_position) {
+		None => Ok(None),
 		_ => {
-			let mut commodity = String::new();
-			while let Some(&c) = tokenizer.chars.get(tokenizer.pos) {
-				if c == '-' || c.is_numeric() {
-					break;
-				}
-				if c.is_whitespace() {
-					tokenizer.pos += 1;
-					continue;
-				}
-				commodity.push(c);
-				tokenizer.pos += 1;
-			}
+			let commodity = tokenize_commodity(tokenizer, |c| {
+				c == '-' || c.is_numeric() || c.is_whitespace()
+			});
 			if !commodity.is_empty() {
-				tokenizer
-					.tokens
-					.push(Token::PostingCommodity(tokenizer.index, commodity));
-				return tokenize_amount(tokenizer);
+				super::chars::consume_whitespaces(tokenizer);
+				let amount = tokenize_amount(tokenizer)?;
+				Ok(Some((commodity, amount)))
+			} else {
+				let (amount, _) = parse_amount(tokenizer)?;
+				let commodity = tokenize_commodity(tokenizer, |c| c == '=');
+				Ok(Some((commodity, amount)))
 			}
-			tokenize_amount_commodity(tokenizer)
 		}
 	}
 }
 
-fn tokenize_amount(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	parse_amount(tokenizer)?
-		.map(|(c, _)| Err(format!("received \"{}\", but expected number", c)))
-		.unwrap_or(Ok(()))
+fn tokenize_amount(tokenizer: &mut Tokenizer) -> Result<String, String> {
+	let (amount, c) = parse_amount(tokenizer)?;
+	if let Some(c) = c {
+		return Err(format!("received \"{}\", but expected number", c));
+	}
+	Ok(amount)
 }
 
-fn tokenize_amount_commodity(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	parse_amount(tokenizer)?
-		.map(|(_, amount)| {
-			tokenize_commodity(tokenizer)?;
-			tokenizer
-				.tokens
-				.push(Token::PostingAmount(tokenizer.index, amount));
-			Ok(())
-		})
-		.unwrap_or(Ok(()))
-}
-
-fn parse_amount(tokenizer: &mut Tokenizer) -> Result<Option<(char, String)>, String> {
-	match tokenizer.chars.get(tokenizer.pos) {
-		None => Err(String::from("Unexpected end of line")),
+fn parse_amount(tokenizer: &mut Tokenizer) -> Result<(String, Option<char>), String> {
+	match tokenizer.line_characters.get(tokenizer.line_position) {
+		None => Err(String::from("unexpected end of line")),
 		Some(_) => {
 			let mut amount = String::new();
 
-			if let Some('-') = tokenizer.chars.get(tokenizer.pos) {
+			if let Some('-') = tokenizer.line_characters.get(tokenizer.line_position) {
 				amount.push('-');
-				tokenizer.pos += 1;
+				tokenizer.line_position += 1;
 			}
 
-			match tokenizer.chars.get(tokenizer.pos) {
-				None => return Err(String::from("Unexpected end of line")),
+			match tokenizer.line_characters.get(tokenizer.line_position) {
+				None => return Err(String::from("unexpected end of line")),
 				Some(c) if !c.is_numeric() => {
 					return Err(format!("received \"{}\", but expected number", c))
 				}
 				Some(&c) => {
 					amount.push(c);
-					tokenizer.pos += 1;
+					tokenizer.line_position += 1;
 				}
 			}
 
-			while let Some(&c) = tokenizer.chars.get(tokenizer.pos) {
+			while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
 				if !c.is_numeric() && c != '.' {
 					break;
 				}
 				amount.push(c);
-				tokenizer.pos += 1;
+				tokenizer.line_position += 1;
 			}
 
-			while let Some(&c) = tokenizer.chars.get(tokenizer.pos) {
+			while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
 				if c == '=' {
 					break;
 				} else if c.is_whitespace() {
-					tokenizer.pos += 1;
+					tokenizer.line_position += 1;
 					continue;
 				} else if !c.is_numeric() {
-					return Ok(Some((c, amount)));
+					return Ok((amount, Some(c)));
 				}
 				amount.push(c);
-				tokenizer.pos += 1;
+				tokenizer.line_position += 1;
 			}
-
-			tokenizer
-				.tokens
-				.push(Token::PostingAmount(tokenizer.index, amount));
-
-			Ok(None)
+			Ok((amount, None))
 		}
 	}
 }
 
-fn tokenize_commodity(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	if tokenizer.chars.get(tokenizer.pos).is_some() {
-		let mut commodity = String::new();
-		while let Some(&c) = tokenizer.chars.get(tokenizer.pos) {
-			if c == '-' || c.is_numeric() {
-				break;
-			}
-			if c.is_whitespace() {
-				tokenizer.pos += 1;
-				continue;
-			}
-			commodity.push(c);
-			tokenizer.pos += 1;
+fn tokenize_commodity<F>(tokenizer: &mut Tokenizer, stop_condition: F) -> String
+where
+	F: Fn(char) -> bool,
+{
+	let mut commodity = String::new();
+	while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
+		if stop_condition(c) {
+			break;
 		}
-		tokenizer
-			.tokens
-			.push(Token::PostingCommodity(tokenizer.index, commodity));
+		commodity.push(c);
+		tokenizer.line_position += 1;
 	}
-	Ok(())
+	commodity
 }

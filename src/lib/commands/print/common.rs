@@ -15,7 +15,13 @@ pub(super) fn print<F: Fn(&Posting) -> Option<&MixedAmount>>(
 	let account_width = transactions
 		.iter()
 		.flat_map(|t| t.postings.iter())
-		.map(|p| p.account.chars().count())
+		.map(|p| {
+			if p.virtual_posting {
+				p.account.chars().count() + 2
+			} else {
+				p.account.chars().count()
+			}
+		})
 		.max()
 		.unwrap_or(0);
 
@@ -50,14 +56,7 @@ fn print_transaction_head(transaction: &Transaction) {
 		transaction
 			.code
 			.as_ref()
-			.and_then(|c| {
-				let mut ret = String::new();
-				ret.push('(');
-				ret.push_str(c);
-				ret.push(')');
-				ret.push(' ');
-				Some(ret)
-			})
+			.and_then(|c| { Some(format!("({}) ", c)) })
 			.unwrap_or_else(|| String::from("")),
 		transaction.description
 	);
@@ -76,7 +75,11 @@ fn print_posting_comments(posting: &Posting) {
 }
 
 fn print_account(posting: &Posting) {
-	print!("{}{}", INDENT, posting.account);
+	if posting.virtual_posting {
+		print!("{}{}", INDENT, format!("({})", posting.account));
+	} else {
+		print!("{}{}", INDENT, posting.account);
+	}
 }
 
 fn print_amount<F>(
@@ -98,7 +101,12 @@ where
 		}
 
 		Some(mixed_amount) => {
-			for _ in 0..(account_width + OFFSET - posting.account.chars().count()) {
+			for _ in 0..(account_width + OFFSET
+				- if posting.virtual_posting {
+					posting.account.chars().count() + 2
+				} else {
+					posting.account.chars().count()
+				}) {
 				print!(" ");
 			}
 
