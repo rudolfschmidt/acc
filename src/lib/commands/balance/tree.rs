@@ -1,3 +1,4 @@
+use super::super::super::model::BalancedPosting;
 use super::super::super::model::Transaction;
 use super::super::format_amount;
 use super::common::group_postings_by_account;
@@ -15,8 +16,11 @@ struct BalanceAccount {
 	children: Vec<BalanceAccount>,
 }
 
-pub(super) fn print(transactions: Vec<Transaction>) -> Result<(), String> {
-	if transactions.iter().any(|t| t.balanced_postings.is_empty()) {
+pub(super) fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(), String> {
+	if transactions
+		.iter()
+		.any(|transaction| transaction.postings.is_empty())
+	{
 		return Ok(());
 	}
 	let grouped_postings = group_postings_by_account(transactions)?;
@@ -32,11 +36,11 @@ fn calculate_amount_width(list: &[BalanceAccount]) -> usize {
 		list
 			.iter()
 			.flat_map(|a| a.amounts.iter())
-			.map(|(k, v)| k.chars().count() + format_amount(&v).chars().count())
+			.map(|(k, v)| k.chars().count() + format_amount(v).chars().count())
 			.max()
 			.unwrap_or(0),
 		list
-			.iter()
+			.into_iter()
 			.map(|a| calculate_amount_width(&a.children))
 			.max()
 			.unwrap_or(0),
@@ -154,7 +158,7 @@ fn print_balance_accounts(account: BalanceAccount, amount_width: usize) {
 		return;
 	}
 	account.amounts.iter().for_each(|(commodity, amount)| {
-		print_commodity_amount(commodity, amount, amount_width);
+		print_commodity_amount(commodity, *amount, amount_width);
 		println!();
 	});
 }
@@ -162,7 +166,7 @@ fn print_balance_accounts(account: BalanceAccount, amount_width: usize) {
 fn print_balance_account(indent: &str, post: &BalanceAccount, amount_width: usize) {
 	let mut it = post.amounts.iter().peekable();
 	while let Some((commodity, amount)) = it.next() {
-		print_commodity_amount(commodity, amount, amount_width);
+		print_commodity_amount(commodity, *amount, amount_width);
 		if it.peek().is_some() {
 			println!();
 		}

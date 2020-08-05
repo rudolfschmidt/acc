@@ -81,6 +81,7 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
 						}
 					}
 				}
+				super::balance_last_transaction(tokenizer)?;
 				for file in files {
 					super::super::parse(&file, tokenizer.transactions)?;
 				}

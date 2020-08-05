@@ -11,18 +11,19 @@ pub(super) fn tokenize_journal_comment(tokenizer: &mut Tokenizer) -> Result<(), 
 
 pub(super) fn tokenize_indented_comment(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	if let Some(comment) = tokenize_comment(tokenizer)? {
-		match tokenizer.transactions.last_mut() {
-			None => return Err(String::from("invalid position for comment")),
-			Some(transaction) => match transaction.unbalanced_postings.last_mut() {
-				None => transaction.comments.push(Comment {
-					line: tokenizer.line_index + 1,
-					comment,
-				}),
-				Some(p) => p.comments.push(Comment {
-					line: tokenizer.line_index + 1,
-					comment,
-				}),
-			},
+		let transaction = tokenizer
+			.unbalanced_transactions
+			.last_mut()
+			.expect("transaction not found");
+		match transaction.postings.last_mut() {
+			None => transaction.header.comments.push(Comment {
+				line: tokenizer.line_index + 1,
+				comment,
+			}),
+			Some(p) => p.header.comments.push(Comment {
+				line: tokenizer.line_index + 1,
+				comment,
+			}),
 		}
 	}
 	Ok(())

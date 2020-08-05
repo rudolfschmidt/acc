@@ -1,3 +1,4 @@
+use super::super::model::BalancedPosting;
 use super::super::model::State;
 use super::super::model::Transaction;
 
@@ -25,42 +26,41 @@ struct Account {
 // .output()
 // .expect("failed to fetch terminal width");
 
-pub fn print(transactions: Vec<Transaction>) -> Result<(), String> {
+pub fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(), String> {
 	let mut rows = Vec::new();
 
 	let mut total = BTreeMap::new();
 
 	for transaction in transactions {
-		if transaction.balanced_postings.is_empty() {
+		if transaction.postings.is_empty() {
 			continue;
 		}
 		let mut row = Row {
 			title: format!(
 				"{}{}{}",
-				transaction.date,
-				match transaction.state {
+				transaction.header.date,
+				match transaction.header.state {
 					State::Cleared => " * ",
 					State::Uncleared => " ",
 					State::Pending => " ! ",
 				},
-				transaction.description
+				transaction.header.description
 			),
 			accounts: Vec::new(),
 		};
-		for posting in &transaction.balanced_postings {
-			println!("{:?}", posting);
+		for posting in transaction.postings {
 			total
 				.entry(posting.balanced_amount.commodity.to_owned())
 				.and_modify(|a| *a += posting.balanced_amount.value)
 				.or_insert(posting.balanced_amount.value);
 			row.accounts.push(Account {
-				account: posting.unbalanced_posting.account.to_owned(),
-				commodity: posting.balanced_amount.commodity.to_owned(),
+				account: posting.head.account,
+				commodity: posting.balanced_amount.commodity,
 				amount: super::format_amount(&posting.balanced_amount.value),
 				total: total
 					.iter()
 					.fold(BTreeMap::new(), |mut acc, (commodity, amount)| {
-						acc.insert(commodity.to_owned(), super::format_amount(&amount));
+						acc.insert(commodity.to_owned(), super::format_amount(amount));
 						acc
 					}),
 			});

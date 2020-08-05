@@ -1,5 +1,6 @@
 use super::super::super::model::State;
 use super::super::super::model::Transaction;
+use super::super::super::model::TransactionHead;
 use super::chars;
 use super::Tokenizer;
 
@@ -33,16 +34,17 @@ fn tokenize_transaction(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	let description = tokenize_description(tokenizer)?;
 
 	let transaction = Transaction {
-		line: tokenizer.line_index + 1,
-		date: format!("{}-{}-{}", year, month, day),
-		state,
-		code,
-		description,
-		comments: Vec::new(),
-		unbalanced_postings: Vec::new(),
-		balanced_postings: Vec::new(),
+		header: TransactionHead {
+			line: tokenizer.line_index + 1,
+			date: format!("{}-{}-{}", year, month, day),
+			state,
+			code,
+			description,
+			comments: Vec::new(),
+		},
+		postings: Vec::new(),
 	};
-	tokenizer.transactions.push(transaction);
+	tokenizer.unbalanced_transactions.push(transaction);
 
 	Ok(())
 }

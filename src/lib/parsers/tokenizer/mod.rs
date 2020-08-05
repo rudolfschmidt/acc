@@ -6,14 +6,17 @@ mod mixed_amount;
 mod posting;
 mod transaction;
 
+use super::super::model::BalancedPosting;
 use super::super::model::Transaction;
+use super::super::model::UnbalancedPosting;
 use super::Error;
 use std::path::Path;
 
 struct Tokenizer<'a> {
 	file: &'a Path,
 	content: &'a str,
-	transactions: &'a mut Vec<Transaction>,
+	transactions: &'a mut Vec<Transaction<BalancedPosting>>,
+	unbalanced_transactions: Vec<Transaction<UnbalancedPosting>>,
 	line_string: &'a str,
 	line_characters: Vec<char>,
 	line_index: usize,
@@ -23,12 +26,13 @@ struct Tokenizer<'a> {
 pub fn tokenize(
 	file: &Path,
 	content: &str,
-	transactions: &mut Vec<Transaction>,
+	transactions: &mut Vec<Transaction<BalancedPosting>>,
 ) -> Result<(), Error> {
 	let mut tokenizer = Tokenizer {
 		file,
 		content,
 		transactions,
+		unbalanced_transactions: Vec::new(),
 		line_characters: Vec::new(),
 		line_index: 0,
 		line_string: "",
@@ -98,26 +102,17 @@ impl<'a> Tokenizer<'a> {
 }
 
 fn balance_last_transaction(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	match tokenizer.transactions.pop() {
+	match tokenizer.unbalanced_transactions.pop() {
 		None => Ok(()),
-		Some(transaction) => match super::balancer::balance(transaction) {
-			Ok(transaction) => {
-				tokenizer.transactions.push(transaction);
+		Some(unbalanced_transaction) => match super::balancer::balance(unbalanced_transaction) {
+			Ok(balanced_transaction) => {
+				tokenizer.transactions.push(balanced_transaction);
 				Ok(())
 			}
 			Err(err) => {
 				let mut message = String::new();
 				let lines: Vec<&str> = tokenizer.content.lines().collect();
-				for i in err.transaction.line - 1
-					..err
-						.transaction
-						.unbalanced_postings
-						.iter()
-						.map(|p| p.line - 1)
-						.max()
-						.unwrap_or(0)
-						+ 1
-				{
+				for i in err.start..err.end {
 					message.push_str(&format!("> {} : {}\n", i + 1, lines.get(i).unwrap()));
 				}
 				message.push_str(&err.message);
@@ -127,17 +122,14 @@ fn balance_last_transaction(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	}
 }
 
-fn print_transactions(transactions: &[Transaction]) {
+fn print_transactions(transactions: &[Transaction<UnbalancedPosting>]) {
 	for transaction in transactions {
 		print_transaction(transaction);
 	}
 }
-pub fn print_transaction(transaction: &Transaction) {
-	println!("{}", transaction.description);
-	for posting in &transaction.unbalanced_postings {
-		println!(
-			"posting : {} {:?}",
-			posting.account, posting.unbalanced_amount
-		);
+pub fn print_transaction(transaction: &Transaction<UnbalancedPosting>) {
+	println!("{}", transaction.header.description);
+	for posting in &transaction.postings {
+		println!("posting : {} {:?}", posting.header.account, posting.amount);
 	}
 }
