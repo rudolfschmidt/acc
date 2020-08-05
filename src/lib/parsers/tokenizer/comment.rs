@@ -13,12 +13,12 @@ pub(super) fn tokenize_indented_comment(tokenizer: &mut Tokenizer) -> Result<(),
 	if let Some(comment) = tokenize_comment(tokenizer)? {
 		match tokenizer.transactions.last_mut() {
 			None => return Err(String::from("invalid position for comment")),
-			Some(transaction) => match transaction.postings.last_mut() {
+			Some(transaction) => match transaction.unbalanced_postings.last_mut() {
 				None => transaction.comments.push(Comment {
 					line: tokenizer.line_index + 1,
 					comment,
 				}),
-				Some(posting) => posting.comments.push(Comment {
+				Some(p) => p.comments.push(Comment {
 					line: tokenizer.line_index + 1,
 					comment,
 				}),

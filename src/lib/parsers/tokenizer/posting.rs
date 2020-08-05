@@ -1,85 +1,72 @@
 use super::super::super::model::MixedAmount;
-use super::super::super::model::Posting;
+use super::super::super::model::UnbalancedPosting;
 use super::chars;
 use super::mixed_amount;
 use super::Tokenizer;
 
 pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	if chars::consume(tokenizer, |c| c == '(') {
-		tokenize_posting(tokenizer, true)
-	} else if chars::is_any_char(tokenizer) {
-		tokenize_posting(tokenizer, false)
-	} else {
-		Ok(())
-	}
+	let virtual_posting = chars::consume(tokenizer, |c| c == '(');
+	tokenize_posting(tokenizer, virtual_posting)
 }
 
 fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<(), String> {
-	chars::consume_whitespaces(tokenizer);
-
-	let mut virtual_closed = false;
-	let mut account = String::new();
-
-	while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
-		if chars::consume(tokenizer, |c| c == '\t') || chars::consume_string(tokenizer, "  ") {
-			if virtual_posting && !virtual_closed {
-				return Err(format!("virtual posting not closed"));
-			}
+	match tokenizer.line_characters.get(tokenizer.line_position) {
+		None => Ok(()),
+		Some(_) => {
 			chars::consume_whitespaces(tokenizer);
 
-			let unbalanced_amount = mixed_amount::tokenize(tokenizer)?.map(|(c, a)| MixedAmount {
-				commodity: c,
-				amount: create_rational(&a),
-			});
+			let mut virtual_closed = false;
+			let mut account = String::new();
 
-			let balance_assertion = balance_assertion(tokenizer)?.map(|(c, a)| MixedAmount {
-				commodity: c,
-				amount: create_rational(&a),
-			});
+			while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
+				if chars::consume(tokenizer, |c| c == '\t') || chars::consume_string(tokenizer, "  ") {
+					if virtual_posting && !virtual_closed {
+						return Err(format!("virtual posting not closed"));
+					}
+					chars::consume_whitespaces(tokenizer);
+					let unbalanced_amount = mixed_amount::tokenize(tokenizer)?.map(|(c, a)| MixedAmount {
+						commodity: c,
+						value: create_rational(&a),
+					});
+					let balance_assertion = balance_assertion(tokenizer)?.map(|(c, a)| MixedAmount {
+						commodity: c,
+						value: create_rational(&a),
+					});
+					match tokenizer.transactions.last_mut() {
+						None => return Err(String::from("invalid posting position")),
+						Some(transaction) => transaction.unbalanced_postings.push(UnbalancedPosting {
+							line: tokenizer.line_index + 1,
+							account: account,
+							unbalanced_amount: unbalanced_amount,
+							balance_assertion: balance_assertion,
+							comments: Vec::new(),
+							virtual_posting: virtual_posting,
+						}),
+					}
+					return Ok(());
+				}
+				if virtual_posting && chars::consume(tokenizer, |c| c == ')') {
+					virtual_closed = true;
+					continue;
+				}
+				account.push(c);
+				tokenizer.line_position += 1;
+			}
 
 			match tokenizer.transactions.last_mut() {
 				None => return Err(String::from("invalid posting position")),
-				Some(transaction) => transaction.postings.push(Posting {
+				Some(transaction) => transaction.unbalanced_postings.push(UnbalancedPosting {
 					line: tokenizer.line_index + 1,
 					account: account,
-					unbalanced_amount: unbalanced_amount.clone(),
-					balanced_amount: if virtual_posting {
-						unbalanced_amount
-					} else {
-						None
-					},
-					balance_assertion: balance_assertion,
+					unbalanced_amount: None,
+					balance_assertion: None,
 					comments: Vec::new(),
 					virtual_posting: virtual_posting,
 				}),
 			}
-
-			return Ok(());
+			Ok(())
 		}
-
-		if virtual_posting && chars::consume(tokenizer, |c| c == ')') {
-			virtual_closed = true;
-			continue;
-		}
-
-		account.push(c);
-		tokenizer.line_position += 1;
 	}
-
-	match tokenizer.transactions.last_mut() {
-		None => return Err(String::from("invalid posting position")),
-		Some(transaction) => transaction.postings.push(Posting {
-			line: tokenizer.line_index + 1,
-			account: account,
-			unbalanced_amount: None,
-			balanced_amount: None,
-			balance_assertion: None,
-			comments: Vec::new(),
-			virtual_posting: virtual_posting,
-		}),
-	}
-
-	Ok(())
 }
 
 fn balance_assertion(tokenizer: &mut Tokenizer) -> Result<Option<(String, String)>, String> {
@@ -89,7 +76,7 @@ fn balance_assertion(tokenizer: &mut Tokenizer) -> Result<Option<(String, String
 			chars::consume(tokenizer, char::is_whitespace);
 			match tokenizer.line_characters.get(tokenizer.line_position) {
 				None => Err(String::from("invalid balance assertion")),
-				Some(&c) => {
+				Some(_) => {
 					chars::consume_whitespaces(tokenizer);
 					mixed_amount::tokenize(tokenizer)
 				}

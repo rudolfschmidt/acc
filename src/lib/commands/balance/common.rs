@@ -1,4 +1,4 @@
-use super::super::super::model::Posting;
+use super::super::super::model::BalancedPosting;
 use super::super::super::model::Transaction;
 use super::super::format_amount;
 
@@ -7,38 +7,37 @@ use num::Signed;
 use std::collections::BTreeMap;
 
 pub(super) fn group_postings_by_account(
-	transactions: &[Transaction],
+	transactions: Vec<Transaction>,
 ) -> Result<BTreeMap<String, BTreeMap<String, num::rational::Rational64>>, String> {
 	let mut result = BTreeMap::<String, BTreeMap<String, num::rational::Rational64>>::new();
 
 	for post in transactions
 		.iter()
-		.flat_map(|t| t.postings.iter())
-		.collect::<Vec<&Posting>>()
+		.flat_map(|t| t.balanced_postings.iter())
+		.collect::<Vec<&BalancedPosting>>()
 	{
-		match result.get_mut(&post.account) {
+		match result.get_mut(&post.unbalanced_posting.account) {
 			Some(result_account) => {
-				if result_account.contains_key(&post.balanced_amount.as_ref().unwrap().commodity) {
+				if result_account.contains_key(&post.balanced_amount.commodity) {
 					result_account.insert(
-						post.balanced_amount.as_ref().unwrap().commodity.to_owned(),
-						result_account
-							.get(&post.balanced_amount.as_ref().unwrap().commodity)
-							.unwrap() + post.balanced_amount.as_ref().unwrap().amount,
+						post.balanced_amount.commodity.to_owned(),
+						result_account.get(&post.balanced_amount.commodity).unwrap()
+							+ post.balanced_amount.value,
 					);
 				} else {
 					result_account.insert(
-						post.balanced_amount.as_ref().unwrap().commodity.to_string(),
-						post.balanced_amount.as_ref().unwrap().amount,
+						post.balanced_amount.commodity.to_string(),
+						post.balanced_amount.value,
 					);
 				}
 			}
 			None => {
 				let mut tree: BTreeMap<String, num::rational::Rational64> = BTreeMap::new();
 				tree.insert(
-					post.balanced_amount.as_ref().unwrap().commodity.to_string(),
-					post.balanced_amount.as_ref().unwrap().amount,
+					post.balanced_amount.commodity.to_string(),
+					post.balanced_amount.value,
 				);
-				result.insert(post.account.to_string(), tree);
+				result.insert(post.unbalanced_posting.account.to_string(), tree);
 			}
 		}
 	}

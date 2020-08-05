@@ -15,8 +15,8 @@ struct BalanceAccount {
 	children: Vec<BalanceAccount>,
 }
 
-pub(super) fn print(transactions: &[Transaction]) -> Result<(), String> {
-	if transactions.iter().any(|t| t.postings.is_empty()) {
+pub(super) fn print(transactions: Vec<Transaction>) -> Result<(), String> {
+	if transactions.iter().any(|t| t.balanced_postings.is_empty()) {
 		return Ok(());
 	}
 	let grouped_postings = group_postings_by_account(transactions)?;

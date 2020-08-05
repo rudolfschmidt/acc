@@ -49,7 +49,7 @@ fn start() -> Result<(), String> {
 				parsers::parse(std::path::Path::new(&file), &mut items)?;
 			}
 
-			execute_command(command, arguments, &items)
+			execute_command(command, arguments, items)
 		}
 	}
 }
@@ -86,7 +86,7 @@ fn parse_arguments(
 fn execute_command(
 	command: Command,
 	arguments: Vec<Argument>,
-	transactions: &[model::Transaction],
+	transactions: Vec<model::Transaction>,
 ) -> Result<(), String> {
 	match command {
 		Command::Balance => {
