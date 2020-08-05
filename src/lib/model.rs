@@ -1,19 +1,45 @@
 #[derive(Debug)]
-pub enum Item {
+pub enum Item<T> {
 	Comment(Comment),
-	Transaction(Transaction),
+	Transaction(Transaction<T>),
 }
 
 #[derive(Debug)]
-pub struct Transaction {
+pub struct Transaction<T> {
+	pub header: TransactionHead,
+	pub postings: Vec<T>,
+}
+
+#[derive(Debug)]
+pub struct TransactionHead {
 	pub line: usize,
 	pub date: String,
 	pub state: State,
 	pub code: Option<String>,
 	pub description: String,
 	pub comments: Vec<Comment>,
-	pub unbalanced_postings: Vec<UnbalancedPosting>,
-	pub balanced_postings: Vec<BalancedPosting>,
+}
+
+#[derive(Debug)]
+pub struct UnbalancedPosting {
+	pub header: PostingHead,
+	pub amount: Option<MixedAmount>,
+}
+
+#[derive(Debug)]
+pub struct BalancedPosting {
+	pub head: PostingHead,
+	pub balanced_amount: MixedAmount,
+	pub empty_posting: bool,
+}
+
+#[derive(Debug)]
+pub struct PostingHead {
+	pub line: usize,
+	pub account: String,
+	pub comments: Vec<Comment>,
+	pub balance_assertion: Option<MixedAmount>,
+	pub virtual_posting: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -21,16 +47,6 @@ pub enum State {
 	Cleared,
 	Uncleared,
 	Pending,
-}
-
-#[derive(Debug)]
-pub struct UnbalancedPosting {
-	pub line: usize,
-	pub account: String,
-	pub comments: Vec<Comment>,
-	pub unbalanced_amount: Option<MixedAmount>,
-	pub balance_assertion: Option<MixedAmount>,
-	pub virtual_posting: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -43,10 +59,4 @@ pub struct MixedAmount {
 pub struct Comment {
 	pub line: usize,
 	pub comment: String,
-}
-
-#[derive(Debug)]
-pub struct BalancedPosting {
-	pub unbalanced_posting: UnbalancedPosting,
-	pub balanced_amount: MixedAmount,
 }

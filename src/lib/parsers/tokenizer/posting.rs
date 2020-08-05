@@ -1,4 +1,5 @@
 use super::super::super::model::MixedAmount;
+use super::super::super::model::PostingHead;
 use super::super::super::model::UnbalancedPosting;
 use super::chars;
 use super::mixed_amount;
@@ -24,7 +25,7 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 						return Err(format!("virtual posting not closed"));
 					}
 					chars::consume_whitespaces(tokenizer);
-					let unbalanced_amount = mixed_amount::tokenize(tokenizer)?.map(|(c, a)| MixedAmount {
+					let amount = mixed_amount::tokenize(tokenizer)?.map(|(c, a)| MixedAmount {
 						commodity: c,
 						value: create_rational(&a),
 					});
@@ -32,17 +33,21 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 						commodity: c,
 						value: create_rational(&a),
 					});
-					match tokenizer.transactions.last_mut() {
-						None => return Err(String::from("invalid posting position")),
-						Some(transaction) => transaction.unbalanced_postings.push(UnbalancedPosting {
-							line: tokenizer.line_index + 1,
-							account: account,
-							unbalanced_amount: unbalanced_amount,
-							balance_assertion: balance_assertion,
-							comments: Vec::new(),
-							virtual_posting: virtual_posting,
-						}),
-					}
+					tokenizer
+						.unbalanced_transactions
+						.last_mut()
+						.expect("last transaction not found")
+						.postings
+						.push(UnbalancedPosting {
+							header: PostingHead {
+								line: tokenizer.line_index + 1,
+								account: account,
+								balance_assertion: balance_assertion,
+								comments: Vec::new(),
+								virtual_posting: virtual_posting,
+							},
+							amount: amount,
+						});
 					return Ok(());
 				}
 				if virtual_posting && chars::consume(tokenizer, |c| c == ')') {
@@ -53,17 +58,21 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 				tokenizer.line_position += 1;
 			}
 
-			match tokenizer.transactions.last_mut() {
-				None => return Err(String::from("invalid posting position")),
-				Some(transaction) => transaction.unbalanced_postings.push(UnbalancedPosting {
-					line: tokenizer.line_index + 1,
-					account: account,
-					unbalanced_amount: None,
-					balance_assertion: None,
-					comments: Vec::new(),
-					virtual_posting: virtual_posting,
-				}),
-			}
+			tokenizer
+				.unbalanced_transactions
+				.last_mut()
+				.expect("last transaction not found")
+				.postings
+				.push(UnbalancedPosting {
+					header: PostingHead {
+						line: tokenizer.line_index + 1,
+						account: account,
+						balance_assertion: None,
+						comments: Vec::new(),
+						virtual_posting: virtual_posting,
+					},
+					amount: None,
+				});
 			Ok(())
 		}
 	}

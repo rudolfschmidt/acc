@@ -2,13 +2,17 @@ use super::super::format_amount;
 use super::common::group_postings_by_account;
 use super::common::print_commodity_amount;
 
+use super::super::super::model::BalancedPosting;
 use super::super::super::model::Transaction;
 use colored::Colorize;
 use num::Zero;
 use std::collections::BTreeMap;
 
-pub(super) fn print(transactions: Vec<Transaction>) -> Result<(), String> {
-	if transactions.iter().any(|t| t.balanced_postings.is_empty()) {
+pub(super) fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(), String> {
+	if transactions
+		.iter()
+		.any(|transaction| transaction.postings.is_empty())
+	{
 		return Ok(());
 	}
 	let postings = group_postings_by_account(transactions)?;
@@ -30,21 +34,21 @@ pub(super) fn print(transactions: Vec<Transaction>) -> Result<(), String> {
 	let width = std::cmp::max(
 		postings
 			.values()
-			.flat_map(|a| a.iter())
-			.map(|(k, v)| k.chars().count() + format_amount(&v).chars().count())
+			.flat_map(|accounts| accounts.iter())
+			.map(|(commodity, value)| commodity.chars().count() + format_amount(value).chars().count())
 			.max()
 			.unwrap_or(0),
 		total
 			.iter()
-			.map(|(c, a)| c.chars().count() + format_amount(&a).chars().count())
+			.map(|(commodity, value)| commodity.chars().count() + format_amount(value).chars().count())
 			.max()
 			.unwrap_or(0),
 	);
 
-	for (account, amounts) in &postings {
+	for (account, amounts) in postings {
 		let mut it = amounts.iter().peekable();
 		while let Some((commodity, amount)) = it.next() {
-			print_commodity_amount(commodity, amount, width);
+			print_commodity_amount(commodity, *amount, width);
 			if it.peek().is_some() {
 				println!();
 			}
@@ -61,7 +65,7 @@ pub(super) fn print(transactions: Vec<Transaction>) -> Result<(), String> {
 		println!("{:>w$} ", 0, w = width);
 	} else {
 		for (commodity, amount) in &total {
-			print_commodity_amount(commodity, amount, width);
+			print_commodity_amount(commodity, *amount, width);
 			println!();
 		}
 	}

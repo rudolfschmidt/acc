@@ -32,7 +32,7 @@ fn start() -> Result<(), String> {
 	let mut files: Vec<String> = Vec::new();
 	let mut command = None;
 	let mut arguments = Vec::new();
-	let mut items = Vec::new();
+	let mut transactions = Vec::new();
 
 	parse_arguments(&mut files, &mut command, &mut arguments)?;
 
@@ -46,10 +46,10 @@ fn start() -> Result<(), String> {
 			}
 
 			for file in files {
-				parsers::parse(std::path::Path::new(&file), &mut items)?;
+				parsers::parse(std::path::Path::new(&file), &mut transactions)?;
 			}
 
-			execute_command(command, arguments, items)
+			execute_command(command, arguments, transactions)
 		}
 	}
 }
@@ -86,7 +86,7 @@ fn parse_arguments(
 fn execute_command(
 	command: Command,
 	arguments: Vec<Argument>,
-	transactions: Vec<model::Transaction>,
+	transactions: Vec<model::Transaction<model::BalancedPosting>>,
 ) -> Result<(), String> {
 	match command {
 		Command::Balance => {

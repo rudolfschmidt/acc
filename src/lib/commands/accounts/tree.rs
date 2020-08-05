@@ -1,11 +1,12 @@
+use super::super::super::model::BalancedPosting;
 use super::super::super::model::Transaction;
 
-pub(super) fn print(transactions: Vec<Transaction>) -> Result<(), String> {
+pub(super) fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(), String> {
 	let mut list: Vec<Account> = Vec::new();
 	for account in transactions
 		.into_iter()
-		.flat_map(|transaction| transaction.balanced_postings.into_iter())
-		.map(|p| p.unbalanced_posting.account)
+		.flat_map(|transaction| transaction.postings.into_iter())
+		.map(|posting| posting.head.account)
 		.collect::<std::collections::BTreeSet<String>>()
 	{
 		let mut it = account.split(':');
