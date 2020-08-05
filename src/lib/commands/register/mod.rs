@@ -25,13 +25,13 @@ struct Account {
 // .output()
 // .expect("failed to fetch terminal width");
 
-pub fn print(transactions: &[Transaction]) -> Result<(), String> {
+pub fn print(transactions: Vec<Transaction>) -> Result<(), String> {
 	let mut rows = Vec::new();
 
 	let mut total = BTreeMap::new();
 
 	for transaction in transactions {
-		if transaction.postings.is_empty() {
+		if transaction.balanced_postings.is_empty() {
 			continue;
 		}
 		let mut row = Row {
@@ -47,46 +47,16 @@ pub fn print(transactions: &[Transaction]) -> Result<(), String> {
 			),
 			accounts: Vec::new(),
 		};
-		for posting in &transaction.postings {
+		for posting in &transaction.balanced_postings {
 			println!("{:?}", posting);
 			total
-				.entry(
-					posting
-						.balanced_amount
-						.as_ref()
-						.expect("null commodity not allowed")
-						.commodity
-						.to_owned(),
-				)
-				.and_modify(|a| {
-					*a += posting
-						.balanced_amount
-						.as_ref()
-						.expect("null amount not allowed")
-						.amount
-				})
-				.or_insert(
-					posting
-						.balanced_amount
-						.as_ref()
-						.expect("null amount not allowed")
-						.amount,
-				);
+				.entry(posting.balanced_amount.commodity.to_owned())
+				.and_modify(|a| *a += posting.balanced_amount.value)
+				.or_insert(posting.balanced_amount.value);
 			row.accounts.push(Account {
-				account: posting.account.to_owned(),
-				commodity: posting
-					.balanced_amount
-					.as_ref()
-					.expect("null commodity not allowed")
-					.commodity
-					.to_owned(),
-				amount: super::format_amount(
-					&posting
-						.balanced_amount
-						.as_ref()
-						.expect("null amount not allowed")
-						.amount,
-				),
+				account: posting.unbalanced_posting.account.to_owned(),
+				commodity: posting.balanced_amount.commodity.to_owned(),
+				amount: super::format_amount(&posting.balanced_amount.value),
 				total: total
 					.iter()
 					.fold(BTreeMap::new(), |mut acc, (commodity, amount)| {

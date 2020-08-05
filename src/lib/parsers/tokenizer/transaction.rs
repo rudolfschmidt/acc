@@ -39,7 +39,8 @@ fn tokenize_transaction(tokenizer: &mut Tokenizer) -> Result<(), String> {
 		code,
 		description,
 		comments: Vec::new(),
-		postings: Vec::new(),
+		unbalanced_postings: Vec::new(),
+		balanced_postings: Vec::new(),
 	};
 	tokenizer.transactions.push(transaction);
 
@@ -106,20 +107,19 @@ fn tokenize_state(tokenizer: &mut Tokenizer) -> Result<State, String> {
 
 fn tokenize_code(tokenizer: &mut Tokenizer) -> Result<Option<String>, String> {
 	chars::consume(tokenizer, char::is_whitespace);
-
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		Some('(') => {
 			tokenizer.line_position += 1;
 			match tokenizer.line_characters.get(tokenizer.line_position) {
-				None => Err(String::from("empty code not allowed")),
-				Some(&c) if c == ')' => Err(String::from("empty code not allowed")),
+				None => Err(String::from("code has to be closed with \")\"")),
+				Some(&c) if c == ')' => Err(String::from("null code not allowed")),
 				Some(&c) => {
 					let mut code = String::new();
 					code.push(c);
 					tokenizer.line_position += 1;
 					loop {
 						match tokenizer.line_characters.get(tokenizer.line_position) {
-							None => return Err(String::from("consider closing value with \")\"")),
+							None => return Err(String::from("code has to be closed with \")\"")),
 							Some(&c) if c == ')' => {
 								tokenizer.line_position += 1;
 								break;
@@ -140,17 +140,14 @@ fn tokenize_code(tokenizer: &mut Tokenizer) -> Result<Option<String>, String> {
 
 fn tokenize_description(tokenizer: &mut Tokenizer) -> Result<String, String> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
-		None => Err(String::from("empty description text not allowed")),
+		None => Err(String::from("empty description not allowed")),
 		Some(_) => {
 			chars::consume(tokenizer, char::is_whitespace);
-
 			let mut description = String::new();
-
 			while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
 				description.push(c);
 				tokenizer.line_position += 1;
 			}
-
 			Ok(description)
 		}
 	}

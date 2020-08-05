@@ -1,11 +1,11 @@
 use super::super::super::model::Transaction;
 
-pub(super) fn print(transactions: &[Transaction]) -> Result<(), String> {
+pub(super) fn print(transactions: Vec<Transaction>) -> Result<(), String> {
 	for account in transactions
-		.iter()
-		.flat_map(|t| t.postings.iter())
-		.map(|p| &p.account)
-		.collect::<std::collections::BTreeSet<&String>>()
+		.into_iter()
+		.flat_map(|transaction| transaction.balanced_postings.into_iter())
+		.map(|posting| posting.unbalanced_posting.account)
+		.collect::<std::collections::BTreeSet<String>>()
 	{
 		println!("{}", account);
 	}

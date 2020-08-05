@@ -98,16 +98,20 @@ impl<'a> Tokenizer<'a> {
 }
 
 fn balance_last_transaction(tokenizer: &mut Tokenizer) -> Result<(), String> {
-	match tokenizer.transactions.last_mut() {
+	match tokenizer.transactions.pop() {
 		None => Ok(()),
 		Some(transaction) => match super::balancer::balance(transaction) {
-			Ok(()) => Ok(()),
+			Ok(transaction) => {
+				tokenizer.transactions.push(transaction);
+				Ok(())
+			}
 			Err(err) => {
 				let mut message = String::new();
 				let lines: Vec<&str> = tokenizer.content.lines().collect();
-				for i in err.line - 1
-					..transaction
-						.postings
+				for i in err.transaction.line - 1
+					..err
+						.transaction
+						.unbalanced_postings
 						.iter()
 						.map(|p| p.line - 1)
 						.max()
@@ -130,7 +134,7 @@ fn print_transactions(transactions: &[Transaction]) {
 }
 pub fn print_transaction(transaction: &Transaction) {
 	println!("{}", transaction.description);
-	for posting in &transaction.postings {
+	for posting in &transaction.unbalanced_postings {
 		println!(
 			"posting : {} {:?}",
 			posting.account, posting.unbalanced_amount
