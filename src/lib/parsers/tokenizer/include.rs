@@ -84,11 +84,12 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 				}
 				super::balance_last_transaction(tokenizer)?;
 				for file in files {
-					if tokenizer.file != file {
-						match super::super::parse(&file, tokenizer.transactions) {
-							Err(err) => return Err(Error::LexerError(err)),
-							Ok(()) => {}
-						}
+					if tokenizer.file == file {
+						return Err(Error::LexerError(String::from("include cycle detected")));
+					}
+					match super::super::parse(&file, tokenizer.transactions) {
+						Err(err) => return Err(Error::LexerError(err)),
+						Ok(()) => {}
 					}
 				}
 			}
