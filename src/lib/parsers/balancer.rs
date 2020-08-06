@@ -4,16 +4,11 @@ use super::super::model::BalancedPosting;
 use super::super::model::MixedAmount;
 use super::super::model::Transaction;
 use super::super::model::UnbalancedPosting;
+use super::Error;
 
 use num::Zero;
 use std::collections::BTreeMap;
 use std::ops::Neg;
-
-pub struct Error {
-	pub start: usize,
-	pub end: usize,
-	pub message: String,
-}
 
 pub fn balance(
 	transaction: Transaction<UnbalancedPosting>,
@@ -179,33 +174,33 @@ fn disallow_unbalanced_postings(
 }
 
 fn unbalanced_error(transaction: Transaction<UnbalancedPosting>, message: String) -> Error {
-	let start = transaction.header.line - 1;
-	let end = transaction
+	let range_start = transaction.header.line - 1;
+	let range_end = transaction
 		.postings
 		.iter()
 		.map(|p| p.header.line - 1)
 		.max()
 		.unwrap_or(0)
 		+ 1;
-	Error {
-		start,
-		end,
+	Error::BalanceError {
+		range_start,
+		range_end,
 		message,
 	}
 }
 
 fn balanced_error(transaction: Transaction<BalancedPosting>, message: String) -> Error {
-	let start = transaction.header.line - 1;
-	let end = transaction
+	let range_start = transaction.header.line - 1;
+	let range_end = transaction
 		.postings
 		.iter()
 		.map(|p| p.head.line - 1)
 		.max()
 		.unwrap_or(0)
 		+ 1;
-	Error {
-		start,
-		end,
+	Error::BalanceError {
+		range_start,
+		range_end,
 		message,
 	}
 }

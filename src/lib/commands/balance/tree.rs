@@ -157,21 +157,30 @@ fn print_balance_accounts(account: BalanceAccount, amount_width: usize) {
 		println!("{:>w$} ", 0, w = amount_width);
 		return;
 	}
-	account.amounts.iter().for_each(|(commodity, amount)| {
-		print_commodity_amount(commodity, *amount, amount_width);
-		println!();
-	});
+
+	account
+		.amounts
+		.iter()
+		.filter(|(_commodity, value)| !value.is_zero())
+		.for_each(|(commodity, value)| {
+			print_commodity_amount(commodity, *value, amount_width);
+			println!();
+		});
 }
 
 fn print_balance_account(indent: &str, post: &BalanceAccount, amount_width: usize) {
 	let mut it = post.amounts.iter().peekable();
 	while let Some((commodity, amount)) = it.next() {
-		print_commodity_amount(commodity, *amount, amount_width);
-		if it.peek().is_some() {
-			println!();
+		if !amount.is_zero() {
+			print_commodity_amount(commodity, *amount, amount_width);
+			if it.peek().is_some() {
+				println!();
+			}
 		}
 	}
-	println!("{}{}", indent, post.account.blue());
+	if !post.amounts.iter().all(|(_, value)| value.is_zero()) {
+		println!("{}{}", indent, post.account.blue());
+	}
 	for child in &post.children {
 		print_balance_account(&format!("{}  ", indent), child, amount_width);
 	}

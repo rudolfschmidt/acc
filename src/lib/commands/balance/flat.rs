@@ -48,12 +48,16 @@ pub(super) fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(
 	for (account, amounts) in postings {
 		let mut it = amounts.iter().peekable();
 		while let Some((commodity, amount)) = it.next() {
-			print_commodity_amount(commodity, *amount, width);
-			if it.peek().is_some() {
-				println!();
+			if !amount.is_zero() {
+				print_commodity_amount(commodity, *amount, width);
+				if it.peek().is_some() {
+					println!();
+				}
 			}
 		}
-		println!("{}", account.blue());
+		if !amounts.iter().all(|(_, value)| value.is_zero()) {
+			println!("{}", account.blue());
+		}
 	}
 
 	for _ in 0..width {
@@ -65,8 +69,10 @@ pub(super) fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(
 		println!("{:>w$} ", 0, w = width);
 	} else {
 		for (commodity, amount) in &total {
-			print_commodity_amount(commodity, *amount, width);
-			println!();
+			if !amount.is_zero() {
+				print_commodity_amount(commodity, *amount, width);
+				println!();
+			}
 		}
 	}
 

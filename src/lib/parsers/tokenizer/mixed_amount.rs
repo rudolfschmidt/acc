@@ -1,6 +1,7 @@
+use super::super::Error;
 use super::Tokenizer;
 
-pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<Option<(String, String)>, String> {
+pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<Option<(String, String)>, Error> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		None => Ok(None),
 		_ => {
@@ -20,17 +21,20 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<Option<(String, Stri
 	}
 }
 
-fn tokenize_amount(tokenizer: &mut Tokenizer) -> Result<String, String> {
+fn tokenize_amount(tokenizer: &mut Tokenizer) -> Result<String, Error> {
 	let (amount, c) = parse_amount(tokenizer)?;
 	if let Some(c) = c {
-		return Err(format!("received \"{}\", but expected number", c));
+		return Err(Error::LexerError(format!(
+			"received \"{}\", but expected number",
+			c
+		)));
 	}
 	Ok(amount)
 }
 
-fn parse_amount(tokenizer: &mut Tokenizer) -> Result<(String, Option<char>), String> {
+fn parse_amount(tokenizer: &mut Tokenizer) -> Result<(String, Option<char>), Error> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
-		None => Err(String::from("unexpected end of line")),
+		None => Err(Error::LexerError(String::from("unexpected end of line"))),
 		Some(_) => {
 			let mut amount = String::new();
 
@@ -40,9 +44,12 @@ fn parse_amount(tokenizer: &mut Tokenizer) -> Result<(String, Option<char>), Str
 			}
 
 			match tokenizer.line_characters.get(tokenizer.line_position) {
-				None => return Err(String::from("unexpected end of line")),
+				None => return Err(Error::LexerError(String::from("unexpected end of line"))),
 				Some(c) if !c.is_numeric() => {
-					return Err(format!("received \"{}\", but expected number", c))
+					return Err(Error::LexerError(format!(
+						"received \"{}\", but expected number",
+						c
+					)))
 				}
 				Some(&c) => {
 					amount.push(c);

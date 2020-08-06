@@ -1,16 +1,17 @@
 use super::super::super::model::MixedAmount;
 use super::super::super::model::PostingHead;
 use super::super::super::model::UnbalancedPosting;
+use super::super::Error;
 use super::chars;
 use super::mixed_amount;
 use super::Tokenizer;
 
-pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
+pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 	let virtual_posting = chars::consume(tokenizer, |c| c == '(');
 	tokenize_posting(tokenizer, virtual_posting)
 }
 
-fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<(), String> {
+fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<(), Error> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		None => Ok(()),
 		Some(_) => {
@@ -22,17 +23,20 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 			while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
 				if chars::consume(tokenizer, |c| c == '\t') || chars::consume_string(tokenizer, "  ") {
 					if virtual_posting && !virtual_closed {
-						return Err(format!("virtual posting not closed"));
+						return Err(Error::LexerError(String::from(
+							"virtual posting not closed",
+						)));
 					}
 					chars::consume_whitespaces(tokenizer);
-					let amount = mixed_amount::tokenize(tokenizer)?.map(|(c, a)| MixedAmount {
-						commodity: c,
-						value: create_rational(&a),
+					let amount = mixed_amount::tokenize(tokenizer)?.map(|(commodity, value)| MixedAmount {
+						commodity: commodity,
+						value: create_rational(&value),
 					});
-					let balance_assertion = balance_assertion(tokenizer)?.map(|(c, a)| MixedAmount {
-						commodity: c,
-						value: create_rational(&a),
-					});
+					let balance_assertion =
+						balance_assertion(tokenizer)?.map(|(commodity, value)| MixedAmount {
+							commodity: commodity,
+							value: create_rational(&value),
+						});
 					tokenizer
 						.unbalanced_transactions
 						.last_mut()
@@ -78,13 +82,13 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 	}
 }
 
-fn balance_assertion(tokenizer: &mut Tokenizer) -> Result<Option<(String, String)>, String> {
+fn balance_assertion(tokenizer: &mut Tokenizer) -> Result<Option<(String, String)>, Error> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		Some('=') => {
 			tokenizer.line_position += 1;
 			chars::consume(tokenizer, char::is_whitespace);
 			match tokenizer.line_characters.get(tokenizer.line_position) {
-				None => Err(String::from("invalid balance assertion")),
+				None => Err(Error::LexerError(String::from("invalid balance assertion"))),
 				Some(_) => {
 					chars::consume_whitespaces(tokenizer);
 					mixed_amount::tokenize(tokenizer)
