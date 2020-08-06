@@ -1,6 +1,7 @@
+use super::super::Error;
 use super::Tokenizer;
 
-pub(super) fn expect<F>(tokenizer: &mut Tokenizer, f: F) -> Result<(), String>
+pub(super) fn expect<F>(tokenizer: &mut Tokenizer, f: F) -> Result<(), Error>
 where
 	F: Fn(char) -> bool,
 {
@@ -9,7 +10,7 @@ where
 			tokenizer.line_position += 1;
 			Ok(())
 		}
-		_ => Err(String::from("unexpected value")),
+		_ => Err(Error::LexerError(String::from("unexpected value"))),
 	}
 }
 
@@ -26,9 +27,9 @@ where
 	}
 }
 
-pub(super) fn expect_next(tokenizer: &mut Tokenizer) -> Result<(), String> {
+pub(super) fn expect_next(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
-		None => Err(String::from("Unexpected end of line")),
+		None => Err(Error::LexerError(String::from("Unexpected end of line"))),
 		Some(_) => {
 			tokenizer.line_position += 1;
 			Ok(())
@@ -36,17 +37,17 @@ pub(super) fn expect_next(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	}
 }
 
-pub(super) fn extract<F>(tokenizer: &mut Tokenizer, f: F) -> Result<char, String>
+pub(super) fn extract<F>(tokenizer: &mut Tokenizer, f: F) -> Result<char, Error>
 where
 	F: Fn(char) -> bool,
 {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
-		None => Err(String::from("unexpected end of line")),
+		None => Err(Error::LexerError(String::from("unexpected end of line"))),
 		Some(&c) if f(c) => {
 			tokenizer.line_position += 1;
 			Ok(c)
 		}
-		_ => Err(String::from("unexpected value")),
+		_ => Err(Error::LexerError(String::from("unexpected value"))),
 	}
 }
 

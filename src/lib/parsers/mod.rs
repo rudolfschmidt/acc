@@ -6,9 +6,17 @@ use super::model::Transaction;
 use std::fs::read_to_string;
 use std::path::Path;
 
-pub struct Error {
-	line: usize,
-	message: String,
+pub enum Error {
+	LexerError(String),
+	BalanceError {
+		range_start: usize,
+		range_end: usize,
+		message: String,
+	},
+	ParseError {
+		line: usize,
+		message: String,
+	},
 }
 
 pub fn parse(
@@ -22,12 +30,16 @@ pub fn parse(
 			err
 		)),
 		Ok(content) => match tokenizer::tokenize(file, &content, transactions) {
-			Err(err) => Err(format!(
-				"While parsing file \"{}\" at line {}:\n{}",
-				file.display(),
-				err.line,
-				err.message
-			)),
+			Err(err) => match err {
+				Error::LexerError(_) => unimplemented!(""),
+				Error::BalanceError { .. } => unimplemented!(""),
+				Error::ParseError { line, message } => Err(format!(
+					"While parsing file \"{}\" at line {}:\n{}",
+					file.display(),
+					line,
+					message
+				)),
+			},
 			Ok(()) => Ok(()),
 		},
 	}
