@@ -7,95 +7,100 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
-	match tokenizer.line_characters.get(tokenizer.line_position) {
-		None => Ok(()),
-		Some(_) => {
-			if chars::consume_string(tokenizer, "include ") {
-				let mut file = String::new();
-				while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
-					file.push(c);
-					tokenizer.line_position += 1;
-				}
-				let mut files: Vec<PathBuf> = Vec::new();
-				if file.starts_with('/') {
-					files.push(PathBuf::from("/"));
-				}
-				for token in file.split('/') {
-					if token == "**.*" {
-						let mut inc: Vec<PathBuf> = Vec::new();
-						for file in files {
-							if let Err(err) = add_files(&file, &mut inc, true, |p| p.is_file()) {
-								return Err(Error::LexerError(format!("{}", err)));
-							}
-						}
-						files = inc;
-					} else if token == "*.*" {
-						let mut inc = Vec::new();
-						for file in files {
-							if let Err(err) = add_files(&file, &mut inc, false, |p| p.is_file()) {
-								return Err(Error::LexerError(format!("{}", err)));
-							}
-						}
-						files = inc;
-					} else if token.starts_with("*.") {
-						let mut inc = Vec::new();
-						for file in files {
-							if let Err(err) = add_files(&file, &mut inc, false, |p| {
-								p.is_file() && p.extension() == Path::new(token).extension()
-							}) {
-								return Err(Error::LexerError(format!("{}", err)));
-							}
-						}
-						files = inc;
-					} else if token == "*" {
-						let mut inc: Vec<PathBuf> = Vec::new();
-						for file in files {
-							if let Err(err) = add_directories(&file, &mut inc, false) {
-								return Err(Error::LexerError(format!("{}", err)));
-							}
-						}
-						files = inc;
-					} else if token == "**" {
-						let mut inc: Vec<PathBuf> = Vec::new();
-						for file in files {
-							if let Err(err) = add_directories(&file, &mut inc, true) {
-								return Err(Error::LexerError(format!("{}", err)));
-							}
-						}
-						files = inc;
-					} else {
-						match files.last_mut() {
-							None => {
-								let parent = tokenizer.file.parent().unwrap_or_else(|| {
-									panic!(
-										"file \"{}\" has no parent directory",
-										tokenizer.file.display()
-									)
-								});
-								let mut file = PathBuf::from(parent);
-								file.push(token);
-								files.push(file)
-							}
-							Some(file) => {
-								file.push(Path::new(token));
-							}
-						}
-					}
-				}
-				super::balance_last_transaction(tokenizer)?;
+	if chars::try_consume_string(tokenizer, "include ") {
+		let mut file = String::new();
+		while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
+			file.push(c);
+			tokenizer.line_position += 1;
+		}
+		let mut files: Vec<PathBuf> = Vec::new();
+		if file.starts_with('/') {
+			files.push(PathBuf::from("/"));
+		}
+		for token in file.split('/') {
+			if token == "**.*" {
+				let mut inc: Vec<PathBuf> = Vec::new();
 				for file in files {
-					if tokenizer.file == file {
-						return Err(Error::LexerError(String::from("include cycle detected")));
+					if let Err(err) = add_files(&file, &mut inc, true, |p| p.is_file()) {
+						return Err(Error::LexerError(format!("{}", err)));
 					}
-					match super::super::parse(&file, tokenizer.transactions) {
-						Err(err) => return Err(Error::LexerError(err)),
-						Ok(()) => {}
+				}
+				files = inc;
+			} else if token == "*.*" {
+				let mut inc = Vec::new();
+				for file in files {
+					if let Err(err) = add_files(&file, &mut inc, false, |p| p.is_file()) {
+						return Err(Error::LexerError(format!("{}", err)));
+					}
+				}
+				files = inc;
+			} else if token.starts_with("**.") {
+				let mut inc = Vec::new();
+				for file in files {
+					if let Err(err) = add_files(&file, &mut inc, true, |p| {
+						p.is_file() && p.extension() == Path::new(token).extension()
+					}) {
+						return Err(Error::LexerError(format!("{}", err)));
+					}
+				}
+				files = inc;
+			} else if token.starts_with("*.") {
+				let mut inc = Vec::new();
+				for file in files {
+					if let Err(err) = add_files(&file, &mut inc, false, |p| {
+						p.is_file() && p.extension() == Path::new(token).extension()
+					}) {
+						return Err(Error::LexerError(format!("{}", err)));
+					}
+				}
+				files = inc;
+			} else if token == "*" {
+				let mut inc: Vec<PathBuf> = Vec::new();
+				for file in files {
+					if let Err(err) = add_directories(&file, &mut inc, false) {
+						return Err(Error::LexerError(format!("{}", err)));
+					}
+				}
+				files = inc;
+			} else if token == "**" {
+				let mut inc: Vec<PathBuf> = Vec::new();
+				for file in files {
+					if let Err(err) = add_directories(&file, &mut inc, true) {
+						return Err(Error::LexerError(format!("{}", err)));
+					}
+				}
+				files = inc;
+			} else {
+				match files.last_mut() {
+					None => {
+						let parent = tokenizer.file.parent().unwrap_or_else(|| {
+							panic!(
+								"file \"{}\" has no parent directory",
+								tokenizer.file.display()
+							)
+						});
+						let mut file = PathBuf::from(parent);
+						file.push(token);
+						files.push(file)
+					}
+					Some(file) => {
+						file.push(Path::new(token));
 					}
 				}
 			}
-			Ok(())
+		}
+		super::balance_last_transaction(tokenizer)?;
+		for file in files {
+			if tokenizer.file == file {
+				return Err(Error::LexerError(String::from("include cycle detected")));
+			}
+			match super::super::parse(&file, tokenizer.transactions) {
+				Err(err) => return Err(Error::LexerError(err)),
+				Ok(()) => {}
+			}
 		}
 	}
+	Ok(())
 }
 
 fn add_directories(
