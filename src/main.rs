@@ -86,7 +86,7 @@ fn parse_arguments(
 fn execute_command(
 	command: Command,
 	arguments: Vec<Argument>,
-	transactions: Vec<model::Transaction<model::BalancedPosting>>,
+	transactions: Vec<model::Transaction>,
 ) -> Result<(), String> {
 	match command {
 		Command::Balance => {

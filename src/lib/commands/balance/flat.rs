@@ -2,13 +2,12 @@ use super::super::format_amount;
 use super::common::group_postings_by_account;
 use super::common::print_commodity_amount;
 
-use super::super::super::model::BalancedPosting;
 use super::super::super::model::Transaction;
 use colored::Colorize;
 use num::Zero;
 use std::collections::BTreeMap;
 
-pub(super) fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(), String> {
+pub(super) fn print(transactions: Vec<Transaction>) -> Result<(), String> {
 	if transactions
 		.iter()
 		.any(|transaction| transaction.postings.is_empty())

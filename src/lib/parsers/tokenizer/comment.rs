@@ -13,7 +13,7 @@ pub(super) fn tokenize_journal_comment(tokenizer: &mut Tokenizer) -> Result<(), 
 pub(super) fn tokenize_indented_comment(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 	match tokenize_comment(tokenizer)? {
 		None => Ok(()),
-		Some(comment) => match tokenizer.unbalanced_transactions.last_mut() {
+		Some(comment) => match tokenizer.transactions.last_mut() {
 			None => {
 				return Err(Error::LexerError(String::from(
 					"indented comment need to come after a valid transaction or posting",
@@ -21,11 +21,11 @@ pub(super) fn tokenize_indented_comment(tokenizer: &mut Tokenizer) -> Result<(),
 			}
 			Some(transaction) => {
 				match transaction.postings.last_mut() {
-					None => transaction.header.comments.push(Comment {
+					None => transaction.comments.push(Comment {
 						line: tokenizer.line_index + 1,
 						comment,
 					}),
-					Some(p) => p.header.comments.push(Comment {
+					Some(p) => p.comments.push(Comment {
 						line: tokenizer.line_index + 1,
 						comment,
 					}),
@@ -37,8 +37,8 @@ pub(super) fn tokenize_indented_comment(tokenizer: &mut Tokenizer) -> Result<(),
 }
 
 fn tokenize_comment(tokenizer: &mut Tokenizer) -> Result<Option<String>, Error> {
-	if chars::consume(tokenizer, |c| c == ';') {
-		chars::consume(tokenizer, char::is_whitespace);
+	if chars::try_consume_char(tokenizer, |c| c == ';') {
+		chars::try_consume_char(tokenizer, char::is_whitespace);
 
 		let mut comment = String::new();
 
