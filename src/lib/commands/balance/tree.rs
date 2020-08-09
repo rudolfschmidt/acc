@@ -1,4 +1,3 @@
-use super::super::super::model::BalancedPosting;
 use super::super::super::model::Transaction;
 use super::super::format_amount;
 use super::common::group_postings_by_account;
@@ -16,7 +15,7 @@ struct BalanceAccount {
 	children: Vec<BalanceAccount>,
 }
 
-pub(super) fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(), String> {
+pub(super) fn print(transactions: Vec<Transaction>) -> Result<(), String> {
 	if transactions
 		.iter()
 		.any(|transaction| transaction.postings.is_empty())

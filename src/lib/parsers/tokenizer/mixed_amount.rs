@@ -1,28 +1,56 @@
 use super::super::Error;
+use super::chars;
 use super::Tokenizer;
 
-pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<Option<(String, String)>, Error> {
+type Rational = num::rational::Rational64;
+
+pub(super) fn tokenize_expression(
+	tokenizer: &mut Tokenizer,
+) -> Result<Option<(String, Rational)>, Error> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		None => Ok(None),
 		_ => {
 			let commodity = tokenize_commodity(tokenizer, |c| {
 				c == '-' || c.is_numeric() || c.is_whitespace()
 			});
-			if !commodity.is_empty() {
-				super::chars::consume_whitespaces(tokenizer);
-				let amount = tokenize_amount(tokenizer)?;
+			if commodity.is_empty() {
+				let amount = tokenize_rational_amount(tokenizer)?;
+				let commodity = tokenize_commodity(tokenizer, |c| c == ')');
+				chars::expect(tokenizer, |c| c == ')')?;
 				Ok(Some((commodity, amount)))
 			} else {
-				let (amount, _) = parse_amount(tokenizer)?;
-				let commodity = tokenize_commodity(tokenizer, |c| c == '=');
+				super::chars::consume_whitespaces(tokenizer);
+				let amount = tokenize_rational_amount(tokenizer)?;
+				chars::expect(tokenizer, |c| c == ')')?;
 				Ok(Some((commodity, amount)))
 			}
 		}
 	}
 }
 
-fn tokenize_amount(tokenizer: &mut Tokenizer) -> Result<String, Error> {
-	let (amount, c) = parse_amount(tokenizer)?;
+pub(super) fn tokenize_decimal(
+	tokenizer: &mut Tokenizer,
+) -> Result<Option<(String, String)>, Error> {
+	match tokenizer.line_characters.get(tokenizer.line_position) {
+		None => Ok(None),
+		_ => {
+			let commodity = tokenize_commodity(tokenizer, |c| {
+				c == '-' || c.is_numeric() || c.is_whitespace()
+			});
+			if commodity.is_empty() {
+				let (amount, _) = parse_decimal_amount(tokenizer)?;
+				let commodity = tokenize_commodity(tokenizer, |c| c == '=' || c.is_whitespace());
+				Ok(Some((commodity, amount)))
+			} else {
+				super::chars::consume_whitespaces(tokenizer);
+				let amount = tokenize_decimal_amount(tokenizer)?;
+				Ok(Some((commodity, amount)))
+			}
+		}
+	}
+}
+fn tokenize_decimal_amount(tokenizer: &mut Tokenizer) -> Result<String, Error> {
+	let (amount, c) = parse_decimal_amount(tokenizer)?;
 	if let Some(c) = c {
 		return Err(Error::LexerError(format!(
 			"received \"{}\", but expected number",
@@ -32,17 +60,29 @@ fn tokenize_amount(tokenizer: &mut Tokenizer) -> Result<String, Error> {
 	Ok(amount)
 }
 
-fn parse_amount(tokenizer: &mut Tokenizer) -> Result<(String, Option<char>), Error> {
+fn tokenize_rational_amount(tokenizer: &mut Tokenizer) -> Result<Rational, Error> {
+	match tokenizer.line_characters.get(tokenizer.line_position) {
+		None => Err(Error::LexerError(String::from("unexpected end of line"))),
+		Some(_) => {
+			let numerator = chars::consume_while(tokenizer, |c| c.is_numeric());
+			chars::expect(tokenizer, |c| c == '/')?;
+			let denominator = chars::consume_while(tokenizer, |c| c.is_numeric());
+			Ok(Rational::new(
+				numerator.parse().unwrap(),
+				denominator.parse().unwrap(),
+			))
+		}
+	}
+}
+
+fn parse_decimal_amount(tokenizer: &mut Tokenizer) -> Result<(String, Option<char>), Error> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		None => Err(Error::LexerError(String::from("unexpected end of line"))),
 		Some(_) => {
 			let mut amount = String::new();
-
-			if let Some('-') = tokenizer.line_characters.get(tokenizer.line_position) {
+			if chars::try_consume_char(tokenizer, |c| c == '-') {
 				amount.push('-');
-				tokenizer.line_position += 1;
 			}
-
 			match tokenizer.line_characters.get(tokenizer.line_position) {
 				None => return Err(Error::LexerError(String::from("unexpected end of line"))),
 				Some(c) if !c.is_numeric() => {
@@ -56,7 +96,6 @@ fn parse_amount(tokenizer: &mut Tokenizer) -> Result<(String, Option<char>), Err
 					tokenizer.line_position += 1;
 				}
 			}
-
 			while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
 				if !c.is_numeric() && c != '.' {
 					break;
@@ -64,7 +103,6 @@ fn parse_amount(tokenizer: &mut Tokenizer) -> Result<(String, Option<char>), Err
 				amount.push(c);
 				tokenizer.line_position += 1;
 			}
-
 			while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
 				if c == '=' {
 					break;

@@ -1,6 +1,5 @@
 use super::super::super::model::State;
 use super::super::super::model::Transaction;
-use super::super::super::model::TransactionHead;
 use super::super::Error;
 use super::chars;
 use super::Tokenizer;
@@ -21,7 +20,7 @@ fn tokenize_transaction(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 	let mut day = String::new();
 	parse_date(tokenizer, &mut year, &mut month, &mut day)?;
 
-	if chars::consume(tokenizer, |c| c == '=') {
+	if chars::try_consume_char(tokenizer, |c| c == '=') {
 		let mut year = String::new();
 		let mut month = String::new();
 		let mut day = String::new();
@@ -35,17 +34,15 @@ fn tokenize_transaction(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 	let description = tokenize_description(tokenizer)?;
 
 	let transaction = Transaction {
-		header: TransactionHead {
-			line: tokenizer.line_index + 1,
-			date: format!("{}-{}-{}", year, month, day),
-			state,
-			code,
-			description,
-			comments: Vec::new(),
-		},
+		line: tokenizer.line_index + 1,
+		date: format!("{}-{}-{}", year, month, day),
+		state,
+		code,
+		description,
+		comments: Vec::new(),
 		postings: Vec::new(),
 	};
-	tokenizer.unbalanced_transactions.push(transaction);
+	tokenizer.transactions.push(transaction);
 
 	Ok(())
 }
@@ -61,7 +58,7 @@ fn parse_date(
 	year.push(chars::extract(tokenizer, char::is_numeric)?);
 	year.push(chars::extract(tokenizer, char::is_numeric)?);
 
-	if chars::consume(tokenizer, |c| c == '-') {
+	if chars::try_consume_char(tokenizer, |c| c == '-') {
 		month.push(chars::extract(tokenizer, char::is_numeric)?);
 		month.push(chars::extract(tokenizer, char::is_numeric)?);
 		chars::expect(tokenizer, |c| c == '-')?;
@@ -69,7 +66,7 @@ fn parse_date(
 		day.push(chars::extract(tokenizer, char::is_numeric)?);
 	}
 
-	if chars::consume(tokenizer, |c| c == '/') {
+	if chars::try_consume_char(tokenizer, |c| c == '/') {
 		month.push(chars::extract(tokenizer, char::is_numeric)?);
 		month.push(chars::extract(tokenizer, char::is_numeric)?);
 		chars::expect(tokenizer, |c| c == '/')?;
@@ -77,7 +74,7 @@ fn parse_date(
 		day.push(chars::extract(tokenizer, char::is_numeric)?);
 	}
 
-	if chars::consume(tokenizer, |c| c == '.') {
+	if chars::try_consume_char(tokenizer, |c| c == '.') {
 		month.push(chars::extract(tokenizer, char::is_numeric)?);
 		month.push(chars::extract(tokenizer, char::is_numeric)?);
 		chars::expect(tokenizer, |c| c == '.')?;
@@ -92,7 +89,7 @@ fn tokenize_state(tokenizer: &mut Tokenizer) -> Result<State, Error> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		None => Err(Error::LexerError(String::from("unexpected end of line"))),
 		Some(&c) => {
-			chars::consume(tokenizer, char::is_whitespace);
+			chars::try_consume_char(tokenizer, char::is_whitespace);
 			match c {
 				'*' => {
 					tokenizer.line_position += 1;
@@ -109,7 +106,7 @@ fn tokenize_state(tokenizer: &mut Tokenizer) -> Result<State, Error> {
 }
 
 fn tokenize_code(tokenizer: &mut Tokenizer) -> Result<Option<String>, Error> {
-	chars::consume(tokenizer, char::is_whitespace);
+	chars::try_consume_char(tokenizer, char::is_whitespace);
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		Some('(') => {
 			tokenizer.line_position += 1;
@@ -153,7 +150,7 @@ fn tokenize_description(tokenizer: &mut Tokenizer) -> Result<String, Error> {
 			"empty description not allowed",
 		))),
 		Some(_) => {
-			chars::consume(tokenizer, char::is_whitespace);
+			chars::try_consume_char(tokenizer, char::is_whitespace);
 			let mut description = String::new();
 			while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
 				description.push(c);

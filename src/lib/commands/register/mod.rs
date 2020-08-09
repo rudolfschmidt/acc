@@ -1,22 +1,25 @@
-use super::super::model::BalancedPosting;
+use super::super::model::Posting;
 use super::super::model::State;
 use super::super::model::Transaction;
 
 use colored::Colorize;
+use num::Signed;
+use num::Zero;
 use std::collections::BTreeMap;
 
 const WIDTH_OFFSET: usize = 4;
+
+type Rational = num::rational::Rational64;
 
 struct Row {
 	title: String,
 	accounts: Vec<Account>,
 }
-
 struct Account {
 	account: String,
 	commodity: String,
 	amount: String,
-	total: BTreeMap<String, String>,
+	total: BTreeMap<String, Rational>,
 }
 
 // Maybe I consider the terminal width in the future
@@ -26,7 +29,7 @@ struct Account {
 // .output()
 // .expect("failed to fetch terminal width");
 
-pub fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(), String> {
+pub fn print(transactions: Vec<Transaction>) -> Result<(), String> {
 	let mut rows = Vec::new();
 
 	let mut total = BTreeMap::new();
@@ -38,29 +41,59 @@ pub fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(), Stri
 		let mut row = Row {
 			title: format!(
 				"{}{}{}",
-				transaction.header.date,
-				match transaction.header.state {
+				transaction.date,
+				match transaction.state {
 					State::Cleared => " * ",
 					State::Uncleared => " ",
 					State::Pending => " ! ",
 				},
-				transaction.header.description
+				transaction.description
 			),
 			accounts: Vec::new(),
 		};
 		for posting in transaction.postings {
 			total
-				.entry(posting.balanced_amount.commodity.to_owned())
-				.and_modify(|a| *a += posting.balanced_amount.value)
-				.or_insert(posting.balanced_amount.value);
+				.entry(
+					posting
+						.balanced_amount
+						.as_ref()
+						.expect("balanced amount not found")
+						.commodity
+						.to_owned(),
+				)
+				.and_modify(|a| {
+					*a += posting
+						.balanced_amount
+						.as_ref()
+						.expect("balanced amount not found")
+						.value
+				})
+				.or_insert(
+					posting
+						.balanced_amount
+						.as_ref()
+						.expect("balanced amount not found")
+						.value,
+				);
 			row.accounts.push(Account {
-				account: posting.head.account,
-				commodity: posting.balanced_amount.commodity,
-				amount: super::format_amount(&posting.balanced_amount.value),
+				account: posting.account,
+				commodity: posting
+					.balanced_amount
+					.as_ref()
+					.expect("balanced amount not found")
+					.commodity
+					.to_owned(),
+				amount: super::format_amount(
+					&posting
+						.balanced_amount
+						.as_ref()
+						.expect("balanced amount not found")
+						.value,
+				),
 				total: total
 					.iter()
 					.fold(BTreeMap::new(), |mut acc, (commodity, amount)| {
-						acc.insert(commodity.to_owned(), super::format_amount(amount));
+						acc.insert(commodity.to_owned(), *amount);
 						acc
 					}),
 			});
@@ -99,7 +132,7 @@ pub fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(), Stri
 		.iter()
 		.flat_map(|t| t.accounts.iter())
 		.flat_map(|a| a.total.iter())
-		.map(|(_, a)| a.chars().count())
+		.map(|(_, a)| super::format_amount(a).chars().count())
 		.max()
 		.unwrap_or(0);
 
@@ -139,59 +172,86 @@ pub fn print(transactions: Vec<Transaction<BalancedPosting>>) -> Result<(), Stri
 				);
 			}
 
-			let mut total_iter = account.total.iter();
-
-			if let Some((total_commodity, total_amount)) = total_iter.next() {
-				if total_amount.starts_with('-') {
-					print!(
-						"{}",
-						format_total_commodity_amount(
-							total_commodity,
-							total_amount,
-							commodity_width,
-							total_amount_width
-						)
-						.red()
-					);
-				} else {
-					print!(
-						"{}",
-						format_total_commodity_amount(
-							total_commodity,
-							total_amount,
-							commodity_width,
-							total_amount_width
-						)
-					);
+			if account
+				.total
+				.iter()
+				.map(|(_, amount)| amount)
+				.all(|amount| amount.is_zero())
+			{
+				print!("{:>w$}", "0", w = commodity_width + total_amount_width);
+			} else {
+				let mut total_iter = account.total.iter().filter(|(_, amount)| !amount.is_zero());
+				if let Some((total_commodity, total_amount)) = total_iter.next() {
+					if total_amount.is_zero() {
+						print!(
+							"{}",
+							format_total_amount(
+								&format_with_zero(total_amount),
+								commodity_width,
+								total_amount_width
+							)
+						);
+					} else if total_amount.is_negative() {
+						print!(
+							"{}",
+							format_total_commodity_amount(
+								total_commodity,
+								&format_with_zero(total_amount),
+								commodity_width,
+								total_amount_width
+							)
+							.red()
+						);
+					} else {
+						print!(
+							"{}",
+							format_total_commodity_amount(
+								total_commodity,
+								&format_with_zero(total_amount),
+								commodity_width,
+								total_amount_width
+							)
+						);
+					}
 				}
-			}
-
-			for (total_commodity, total_amount) in total_iter {
-				if total_amount.starts_with('-') {
-					print!(
-						"{}",
-						format_total_commodity_amount_offset(
-							total_commodity,
-							total_amount,
-							header_width,
-							account_width,
-							commodity_width,
-							total_amount_width
-						)
-						.red()
-					);
-				} else {
-					print!(
-						"{}",
-						format_total_commodity_amount_offset(
-							total_commodity,
-							total_amount,
-							header_width,
-							account_width,
-							commodity_width,
-							total_amount_width
-						)
-					);
+				for (total_commodity, total_amount) in total_iter {
+					if total_amount.is_zero() {
+						print!(
+							"{}",
+							format_total_amount_offset(
+								&format_with_zero(total_amount),
+								header_width,
+								account_width,
+								commodity_width,
+								total_amount_width
+							)
+						);
+					} else if total_amount.is_negative() {
+						print!(
+							"{}",
+							format_total_commodity_amount_offset(
+								total_commodity,
+								&format_with_zero(total_amount),
+								header_width,
+								account_width,
+								commodity_width,
+								total_amount_width
+							)
+							.red()
+						);
+					} else {
+						print!(
+							"{}",
+							format_total_commodity_amount_offset(
+								total_commodity,
+								&format_with_zero(total_amount),
+								header_width,
+								account_width,
+								commodity_width,
+								total_amount_width
+							)
+						);
+					}
 				}
 			}
 		}
@@ -219,6 +279,10 @@ fn format_commodity_amount(
 	)
 }
 
+fn format_total_amount(amount: &str, commodity_width: usize, amount_width: usize) -> String {
+	format!("{:>w$}", amount, w = commodity_width + amount_width,)
+}
+
 fn format_total_commodity_amount(
 	commodity: &str,
 	amount: &str,
@@ -231,6 +295,28 @@ fn format_total_commodity_amount(
 		amount,
 		commodity_width = commodity_width,
 		amount_width = amount_width,
+	)
+}
+
+fn format_total_amount_offset(
+	amount: &str,
+	header_width: usize,
+	account_width: usize,
+	commodity_width: usize,
+	amount_width: usize,
+) -> String {
+	format!(
+		"\n{:>offset$}{:>width$}",
+		"",
+		amount,
+		offset = header_width
+			+ WIDTH_OFFSET
+			+ account_width
+			+ WIDTH_OFFSET
+			+ commodity_width
+			+ amount_width
+			+ WIDTH_OFFSET * 2,
+		width = commodity_width + amount_width,
 	)
 }
 
@@ -257,4 +343,12 @@ fn format_total_commodity_amount_offset(
 		commodity_width = commodity_width,
 		amount_width = amount_width,
 	)
+}
+
+fn format_with_zero(num: &Rational) -> String {
+	if num.is_zero() {
+		String::from("0")
+	} else {
+		super::format_amount(num)
+	}
 }

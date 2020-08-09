@@ -1,4 +1,4 @@
-use super::super::super::model::BalancedPosting;
+use super::super::super::model::Posting;
 use super::super::super::model::Transaction;
 use super::super::format_amount;
 
@@ -7,28 +7,56 @@ use num::Signed;
 use std::collections::BTreeMap;
 
 pub(super) fn group_postings_by_account(
-	transactions: Vec<Transaction<BalancedPosting>>,
+	transactions: Vec<Transaction>,
 ) -> Result<BTreeMap<String, BTreeMap<String, num::rational::Rational64>>, String> {
 	let mut result = BTreeMap::<String, BTreeMap<String, num::rational::Rational64>>::new();
 
 	for balanced_posting in transactions
 		.into_iter()
 		.flat_map(|transaction| transaction.postings.into_iter())
-		.collect::<Vec<BalancedPosting>>()
+		.collect::<Vec<Posting>>()
 	{
 		result
-			.entry(balanced_posting.head.account.to_owned())
+			.entry(balanced_posting.account.to_owned())
 			.and_modify(|tree| {
 				tree
-					.entry(balanced_posting.balanced_amount.commodity.to_owned())
-					.and_modify(|value| *value += balanced_posting.balanced_amount.value)
-					.or_insert(balanced_posting.balanced_amount.value);
+					.entry(
+						balanced_posting
+							.balanced_amount
+							.as_ref()
+							.expect("balanced amount not found")
+							.commodity
+							.to_owned(),
+					)
+					.and_modify(|value| {
+						*value += balanced_posting
+							.balanced_amount
+							.as_ref()
+							.expect("balanced amount not found")
+							.value
+					})
+					.or_insert(
+						balanced_posting
+							.balanced_amount
+							.as_ref()
+							.expect("balanced amount not found")
+							.value,
+					);
 			})
 			.or_insert_with(|| {
 				let mut tree: BTreeMap<String, num::rational::Rational64> = BTreeMap::new();
 				tree.insert(
-					balanced_posting.balanced_amount.commodity.to_string(),
-					balanced_posting.balanced_amount.value,
+					balanced_posting
+						.balanced_amount
+						.as_ref()
+						.expect("balanced amount not found")
+						.commodity
+						.to_string(),
+					balanced_posting
+						.balanced_amount
+						.as_ref()
+						.expect("balanced amount not found")
+						.value,
 				);
 				tree
 			});
