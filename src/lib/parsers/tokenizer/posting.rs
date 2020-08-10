@@ -1,4 +1,5 @@
 use super::super::super::model::Costs;
+use super::super::super::model::Item;
 use super::super::super::model::MixedAmount;
 use super::super::super::model::Posting;
 use super::super::Error;
@@ -41,21 +42,23 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 							value: create_rational(&value),
 						});
 					let costs = costs(tokenizer)?;
-					tokenizer
-						.transactions
-						.last_mut()
-						.expect("last transaction not found")
-						.postings
-						.push(Posting {
-							line: tokenizer.line_index + 1,
-							account: account,
-							comments: Vec::new(),
-							balance_assertion: balance_assertion,
-							costs: costs,
-							virtual_posting: virtual_posting,
-							unbalanced_amount: amount,
-							balanced_amount: None,
-						});
+
+					for item in tokenizer.items.iter_mut().rev() {
+						match item {
+							Item::Transaction { postings, .. } => {
+								postings.push(Posting::UnbalancedPosting {
+									line: tokenizer.line_index + 1,
+									account: account,
+									comments: Vec::new(),
+									balance_assertion: balance_assertion,
+									costs: costs,
+									unbalanced_amount: amount,
+								});
+								break;
+							}
+							_ => {}
+						}
+					}
 					return Ok(());
 				}
 				if virtual_posting && chars::try_consume_char(tokenizer, |c| c == ')') {
@@ -72,21 +75,23 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 				)));
 			}
 
-			tokenizer
-				.transactions
-				.last_mut()
-				.expect("last transaction not found")
-				.postings
-				.push(Posting {
-					line: tokenizer.line_index + 1,
-					account: account,
-					balance_assertion: None,
-					comments: Vec::new(),
-					costs: None,
-					virtual_posting: virtual_posting,
-					unbalanced_amount: None,
-					balanced_amount: None,
-				});
+			for item in tokenizer.items.iter_mut().rev() {
+				match item {
+					Item::Transaction { postings, .. } => {
+						postings.push(Posting::UnbalancedPosting {
+							line: tokenizer.line_index + 1,
+							account: account,
+							balance_assertion: None,
+							comments: Vec::new(),
+							costs: None,
+							unbalanced_amount: None,
+						});
+						break;
+					}
+					_ => {}
+				}
+			}
+
 			Ok(())
 		}
 	}

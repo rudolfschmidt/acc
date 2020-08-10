@@ -6,28 +6,24 @@ mod mixed_amount;
 mod posting;
 mod transaction;
 
-use super::super::model::Posting;
-use super::super::model::Transaction;
+use super::super::model::Item;
+// use super::super::model::Posting;
 use super::Error;
 use std::path::Path;
 
 struct Tokenizer<'a> {
 	file: &'a Path,
-	transactions: &'a mut Vec<Transaction>,
+	items: &'a mut Vec<Item>,
 	line_string: &'a str,
 	line_characters: Vec<char>,
 	line_index: usize,
 	line_position: usize,
 }
 
-pub fn tokenize(
-	file: &Path,
-	content: &str,
-	transactions: &mut Vec<Transaction>,
-) -> Result<(), Error> {
+pub fn tokenize(file: &Path, content: &str, items: &mut Vec<Item>) -> Result<(), Error> {
 	let mut tokenizer = Tokenizer {
 		file,
-		transactions,
+		items,
 		line_characters: Vec::new(),
 		line_index: 0,
 		line_string: "",
@@ -116,27 +112,31 @@ impl<'a> Tokenizer<'a> {
 }
 
 fn balance_last_transaction(tokenizer: &mut Tokenizer) -> Result<(), Error> {
-	match tokenizer.transactions.pop() {
-		None => Ok(()),
-		Some(unbalanced_transaction) => {
-			let balanced_transaction = super::balancer::balance(unbalanced_transaction)?;
-			tokenizer.transactions.push(balanced_transaction);
-			Ok(())
+	let mut balanced_transactions = Vec::new();
+	while let Some(item) = tokenizer.items.pop() {
+		if let Item::Transaction { .. } = item {
+			let balanced_item = super::balancer::balance(item)?;
+			balanced_transactions.insert(0, balanced_item);
+			break;
+		} else {
+			balanced_transactions.insert(0, item);
 		}
 	}
+	tokenizer.items.append(&mut balanced_transactions);
+	Ok(())
 }
 
-fn print_transactions(transactions: &[Transaction]) {
-	for transaction in transactions {
-		print_transaction(transaction);
-	}
-}
-pub fn print_transaction(transaction: &Transaction) {
-	println!("{}", transaction.description);
-	for posting in &transaction.postings {
-		println!(
-			"posting : {} {:?}",
-			posting.account, posting.unbalanced_amount
-		);
-	}
-}
+// fn print_transactions(transactions: &[Transaction]) {
+// 	for transaction in transactions {
+// 		print_transaction(transaction);
+// 	}
+// }
+// pub fn print_transaction(transaction: &Transaction) {
+// 	println!("{}", transaction.description);
+// 	for posting in &transaction.postings {
+// 		println!(
+// 			"posting : {} {:?}",
+// 			posting.account, posting.unbalanced_amount
+// 		);
+// 	}
+// }

@@ -1,12 +1,12 @@
 mod flat;
 mod tree;
 
-use super::super::model::Transaction;
+use super::super::model::Item;
 
-pub fn print_flat(transactions: Vec<Transaction>) -> Result<(), String> {
-	flat::print(transactions)
+pub fn print_flat(items: Vec<Item>) -> Result<(), String> {
+	flat::print(items)
 }
 
-pub fn print_tree(transactions: Vec<Transaction>) -> Result<(), String> {
-	tree::print(transactions)
+pub fn print_tree(items: Vec<Item>) -> Result<(), String> {
+	tree::print(items)
 }

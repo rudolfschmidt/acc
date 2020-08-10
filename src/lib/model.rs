@@ -1,30 +1,42 @@
 #[derive(Debug)]
 pub enum Item {
-	Comment(Comment),
-	Transaction(Transaction),
+	Comment {
+		line: usize,
+		comment: String,
+	},
+	Transaction {
+		line: usize,
+		date: String,
+		state: State,
+		code: Option<String>,
+		description: String,
+		comments: Vec<Comment>,
+		postings: Vec<Posting>,
+	},
 }
 
 #[derive(Debug)]
-pub struct Transaction {
-	pub line: usize,
-	pub date: String,
-	pub state: State,
-	pub code: Option<String>,
-	pub description: String,
-	pub comments: Vec<Comment>,
-	pub postings: Vec<Posting>,
-}
-
-#[derive(Debug)]
-pub struct Posting {
-	pub line: usize,
-	pub account: String,
-	pub comments: Vec<Comment>,
-	pub unbalanced_amount: Option<MixedAmount>,
-	pub balanced_amount: Option<MixedAmount>,
-	pub balance_assertion: Option<MixedAmount>,
-	pub costs: Option<Costs>,
-	pub virtual_posting: bool,
+pub enum Posting {
+	UnbalancedPosting {
+		line: usize,
+		account: String,
+		comments: Vec<Comment>,
+		unbalanced_amount: Option<MixedAmount>,
+		balance_assertion: Option<MixedAmount>,
+		costs: Option<Costs>,
+	},
+	BalancedPosting {
+		line: usize,
+		account: String,
+		comments: Vec<Comment>,
+		balanced_amount: MixedAmount,
+		balance_assertion: Option<MixedAmount>,
+		costs: Option<Costs>,
+	},
+	EquityPosting {
+		account: String,
+		amount: MixedAmount,
+	},
 }
 
 #[derive(Debug, Clone)]

@@ -94,7 +94,7 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 			if tokenizer.file == file {
 				return Err(Error::LexerError(String::from("include cycle detected")));
 			}
-			match super::super::parse(&file, tokenizer.transactions) {
+			match super::super::parse(&file, tokenizer.items) {
 				Err(err) => return Err(Error::LexerError(err)),
 				Ok(()) => {}
 			}

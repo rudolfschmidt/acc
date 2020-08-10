@@ -1,38 +1,50 @@
 use super::super::super::model::Comment;
+use super::super::super::model::Item;
+use super::super::super::model::Posting;
 use super::super::Error;
 use super::chars;
 use super::Tokenizer;
 
 pub(super) fn tokenize_journal_comment(tokenizer: &mut Tokenizer) -> Result<(), Error> {
-	if let Some(comment) = tokenize_comment(tokenizer)? {
-		// println!("journal comment : {}", comment);
+	match tokenize_comment(tokenizer)? {
+		None => Ok(()),
+		Some(comment) => {
+			tokenizer.items.push(Item::Comment {
+				line: tokenizer.line_index + 1,
+				comment,
+			});
+			Ok(())
+		}
 	}
-	Ok(())
 }
 
 pub(super) fn tokenize_indented_comment(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 	match tokenize_comment(tokenizer)? {
 		None => Ok(()),
-		Some(comment) => match tokenizer.transactions.last_mut() {
-			None => {
-				return Err(Error::LexerError(String::from(
-					"indented comment need to come after a valid transaction or posting",
-				)))
-			}
-			Some(transaction) => {
-				match transaction.postings.last_mut() {
-					None => transaction.comments.push(Comment {
-						line: tokenizer.line_index + 1,
-						comment,
-					}),
-					Some(p) => p.comments.push(Comment {
-						line: tokenizer.line_index + 1,
-						comment,
-					}),
+		Some(comment) => {
+			for item in tokenizer.items.iter_mut().rev() {
+				match item {
+					Item::Transaction {
+						comments, postings, ..
+					} => {
+						match postings.last_mut() {
+							None => comments.push(Comment {
+								line: tokenizer.line_index + 1,
+								comment,
+							}),
+							Some(Posting::UnbalancedPosting { comments, .. }) => comments.push(Comment {
+								line: tokenizer.line_index + 1,
+								comment,
+							}),
+							_ => {}
+						}
+						break;
+					}
+					_ => {}
 				}
-				Ok(())
 			}
-		},
+			Ok(())
+		}
 	}
 }
 

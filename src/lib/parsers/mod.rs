@@ -1,7 +1,7 @@
 pub mod balancer;
 pub mod tokenizer;
 
-use super::model::Transaction;
+use super::model::Item;
 use std::fs::read_to_string;
 use std::path::Path;
 
@@ -18,14 +18,14 @@ pub enum Error {
 	},
 }
 
-pub fn parse(file: &Path, transactions: &mut Vec<Transaction>) -> Result<(), String> {
+pub fn parse(file: &Path, items: &mut Vec<Item>) -> Result<(), String> {
 	match read_to_string(file) {
 		Err(err) => Err(format!(
 			"While parsing file \"{}\"\n{}",
 			file.display(),
 			err
 		)),
-		Ok(content) => match tokenizer::tokenize(file, &content, transactions) {
+		Ok(content) => match tokenizer::tokenize(file, &content, items) {
 			Err(err) => match err {
 				Error::LexerError(_) => unimplemented!(""),
 				Error::BalanceError { .. } => unimplemented!(""),
