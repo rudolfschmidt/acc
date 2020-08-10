@@ -32,7 +32,7 @@ fn start() -> Result<(), String> {
 	let mut files: Vec<String> = Vec::new();
 	let mut command = None;
 	let mut arguments = Vec::new();
-	let mut transactions = Vec::new();
+	let mut items = Vec::new();
 
 	parse_arguments(&mut files, &mut command, &mut arguments)?;
 
@@ -46,10 +46,10 @@ fn start() -> Result<(), String> {
 			}
 
 			for file in files {
-				parsers::parse(std::path::Path::new(&file), &mut transactions)?;
+				parsers::parse(std::path::Path::new(&file), &mut items)?;
 			}
 
-			execute_command(command, arguments, transactions)
+			execute_command(command, arguments, items)
 		}
 	}
 }
@@ -86,38 +86,38 @@ fn parse_arguments(
 fn execute_command(
 	command: Command,
 	arguments: Vec<Argument>,
-	transactions: Vec<model::Transaction>,
+	items: Vec<model::Item>,
 ) -> Result<(), String> {
 	match command {
 		Command::Balance => {
 			if arguments.contains(&Argument::Flat) {
-				return commands::balance::print_flat(transactions);
+				return commands::balance::print_flat(items);
 			}
 			if arguments.contains(&Argument::Tree) {
-				return commands::balance::print_tree(transactions);
+				return commands::balance::print_tree(items);
 			}
-			return commands::balance::print_tree(transactions);
+			return commands::balance::print_tree(items);
 		}
-		Command::Register => commands::register::print(transactions)?,
+		Command::Register => commands::register::print(items)?,
 		Command::Print => {
 			if arguments.contains(&Argument::Explicit) {
-				return commands::print::print_explicit(transactions);
+				return commands::print::print_explicit(items);
 			}
 			if arguments.contains(&Argument::Raw) {
-				return commands::print::print_raw(transactions);
+				return commands::print::print_raw(items);
 			}
-			return commands::print::print_raw(transactions);
+			return commands::print::print_raw(items);
 		}
 		Command::Accounts => {
 			if arguments.contains(&Argument::Flat) {
-				return commands::accounts::print_flat(transactions);
+				return commands::accounts::print_flat(items);
 			}
 			if arguments.contains(&Argument::Tree) {
-				return commands::accounts::print_tree(transactions);
+				return commands::accounts::print_tree(items);
 			}
-			return commands::accounts::print_tree(transactions);
+			return commands::accounts::print_tree(items);
 		}
-		Command::Codes => commands::codes::print(transactions)?,
+		Command::Codes => commands::codes::print(items)?,
 	}
 	Ok(())
 }

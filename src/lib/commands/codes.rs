@@ -1,9 +1,12 @@
-use super::super::model::Transaction;
+use super::super::model::Item;
 
-pub fn print(transactions: Vec<Transaction>) -> Result<(), String> {
+pub fn print(transactions: Vec<Item>) -> Result<(), String> {
 	for code in transactions
 		.into_iter()
-		.filter_map(|transaction| transaction.code)
+		.filter_map(|item| match item {
+			Item::Transaction { code, .. } => code,
+			_ => None,
+		})
 		.collect::<std::collections::BTreeSet<String>>()
 	{
 		println!("{}", code);

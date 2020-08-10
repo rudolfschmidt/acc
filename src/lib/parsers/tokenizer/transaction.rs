@@ -1,5 +1,5 @@
+use super::super::super::model::Item;
 use super::super::super::model::State;
-use super::super::super::model::Transaction;
 use super::super::Error;
 use super::chars;
 use super::Tokenizer;
@@ -33,7 +33,7 @@ fn tokenize_transaction(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 	let code = tokenize_code(tokenizer)?;
 	let description = tokenize_description(tokenizer)?;
 
-	let transaction = Transaction {
+	let transaction = Item::Transaction {
 		line: tokenizer.line_index + 1,
 		date: format!("{}-{}-{}", year, month, day),
 		state,
@@ -42,7 +42,7 @@ fn tokenize_transaction(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 		comments: Vec::new(),
 		postings: Vec::new(),
 	};
-	tokenizer.transactions.push(transaction);
+	tokenizer.items.push(transaction);
 
 	Ok(())
 }
