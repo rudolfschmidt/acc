@@ -1,3 +1,4 @@
+![alt text](https://www.diamondsite.de/img/projects/acc.jpg "acc accounting plaintext double-entry accounting command line tool")
 # acc
 acc(ounting) is a plaintext double-entry accounting command line tool. It is open source and a free alternative to properary accounting software. 
 
