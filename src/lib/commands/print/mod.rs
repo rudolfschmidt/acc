@@ -1,9 +1,8 @@
-use super::super::model::Comment;
+use super::super::format_amount;
 use super::super::model::Item;
 use super::super::model::MixedAmount;
 use super::super::model::Posting;
 use super::super::model::State;
-use super::format_amount;
 
 use num::Signed;
 
@@ -18,13 +17,7 @@ pub fn print_raw(items: Vec<Item>) -> Result<(), String> {
 	print(items, true)
 }
 
-fn print(items: Vec<Item>, natural: bool) -> Result<(), String> {
-	if items.iter().any(|item| match item {
-		Item::Transaction { postings, .. } => postings.is_empty(),
-		_ => true,
-	}) {
-		return Ok(());
-	}
+fn print(items: Vec<Item>, raw: bool) -> Result<(), String> {
 	let account_max_width = items
 		.iter()
 		.filter_map(|item| match item {
@@ -54,6 +47,9 @@ fn print(items: Vec<Item>, natural: bool) -> Result<(), String> {
 				postings,
 				..
 			} => {
+				if postings.is_empty() {
+					continue;
+				}
 				println!(
 					"{}{}{}{}",
 					date,
@@ -75,11 +71,13 @@ fn print(items: Vec<Item>, natural: bool) -> Result<(), String> {
 						Posting::BalancedPosting {
 							account,
 							comments,
+							unbalanced_amount,
 							balanced_amount,
 							..
 						} => {
 							let account_width = account.chars().count();
 							print!("{}{}", INDENT, account);
+							if !raw || raw && unbalanced_amount.is_some() {}
 							print_mixed_amount(balanced_amount, account_width, account_max_width);
 							for comment in comments {
 								println!("{}; {}", INDENT, comment.comment);
@@ -88,8 +86,15 @@ fn print(items: Vec<Item>, natural: bool) -> Result<(), String> {
 						_ => {}
 					}
 				}
-				if iter.peek().is_some() {
-					println!();
+				if let Some(next) = iter.peek() {
+					match next {
+						Item::Transaction { postings, .. } => {
+							if !postings.is_empty() {
+								println!();
+							}
+						}
+						_ => {}
+					}
 				}
 			}
 		}

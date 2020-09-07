@@ -1,4 +1,3 @@
-use super::super::Error;
 use super::chars;
 use super::Tokenizer;
 use std::fs;
@@ -6,7 +5,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
+pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	if chars::try_consume_string(tokenizer, "include ") {
 		let mut file = String::new();
 		while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
@@ -22,7 +21,7 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 				let mut inc: Vec<PathBuf> = Vec::new();
 				for file in files {
 					if let Err(err) = add_files(&file, &mut inc, true, |p| p.is_file()) {
-						return Err(Error::LexerError(format!("{}", err)));
+						return Err(format!("{}", err));
 					}
 				}
 				files = inc;
@@ -30,7 +29,7 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 				let mut inc = Vec::new();
 				for file in files {
 					if let Err(err) = add_files(&file, &mut inc, false, |p| p.is_file()) {
-						return Err(Error::LexerError(format!("{}", err)));
+						return Err(format!("{}", err));
 					}
 				}
 				files = inc;
@@ -40,7 +39,7 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 					if let Err(err) = add_files(&file, &mut inc, true, |p| {
 						p.is_file() && p.extension() == Path::new(token).extension()
 					}) {
-						return Err(Error::LexerError(format!("{}", err)));
+						return Err(format!("{}", err));
 					}
 				}
 				files = inc;
@@ -50,7 +49,7 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 					if let Err(err) = add_files(&file, &mut inc, false, |p| {
 						p.is_file() && p.extension() == Path::new(token).extension()
 					}) {
-						return Err(Error::LexerError(format!("{}", err)));
+						return Err(format!("{}", err));
 					}
 				}
 				files = inc;
@@ -58,7 +57,7 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 				let mut inc: Vec<PathBuf> = Vec::new();
 				for file in files {
 					if let Err(err) = add_directories(&file, &mut inc, false) {
-						return Err(Error::LexerError(format!("{}", err)));
+						return Err(format!("{}", err));
 					}
 				}
 				files = inc;
@@ -66,7 +65,7 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 				let mut inc: Vec<PathBuf> = Vec::new();
 				for file in files {
 					if let Err(err) = add_directories(&file, &mut inc, true) {
-						return Err(Error::LexerError(format!("{}", err)));
+						return Err(format!("{}", err));
 					}
 				}
 				files = inc;
@@ -89,13 +88,12 @@ pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 				}
 			}
 		}
-		super::balance_last_transaction(tokenizer)?;
 		for file in files {
 			if tokenizer.file == file {
-				return Err(Error::LexerError(String::from("include cycle detected")));
+				return Err(String::from("include cycle detected"));
 			}
-			match super::super::parse(&file, tokenizer.items) {
-				Err(err) => return Err(Error::LexerError(err)),
+			match super::tokenize_file(&file, tokenizer.items) {
+				Err(err) => return Err(err),
 				Ok(()) => {}
 			}
 		}

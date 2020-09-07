@@ -1,20 +1,16 @@
-use super::super::super::model::Item;
-use super::super::super::model::State;
-use super::super::Error;
+use super::super::model::Item;
+use super::super::model::State;
 use super::chars;
 use super::Tokenizer;
 
-pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
+pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
-		Some(c) if c.is_numeric() => {
-			super::balance_last_transaction(tokenizer)?;
-			tokenize_transaction(tokenizer)
-		}
+		Some(c) if c.is_numeric() => tokenize_transaction(tokenizer),
 		_ => Ok(()),
 	}
 }
 
-fn tokenize_transaction(tokenizer: &mut Tokenizer) -> Result<(), Error> {
+fn tokenize_transaction(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	let mut year = String::new();
 	let mut month = String::new();
 	let mut day = String::new();
@@ -34,6 +30,7 @@ fn tokenize_transaction(tokenizer: &mut Tokenizer) -> Result<(), Error> {
 	let description = tokenize_description(tokenizer)?;
 
 	let transaction = Item::Transaction {
+		file: tokenizer.file.to_owned(),
 		line: tokenizer.line_index + 1,
 		date: format!("{}-{}-{}", year, month, day),
 		state,
@@ -52,7 +49,7 @@ fn parse_date(
 	year: &mut String,
 	month: &mut String,
 	day: &mut String,
-) -> Result<(), Error> {
+) -> Result<(), String> {
 	year.push(chars::extract(tokenizer, char::is_numeric)?);
 	year.push(chars::extract(tokenizer, char::is_numeric)?);
 	year.push(chars::extract(tokenizer, char::is_numeric)?);
@@ -85,9 +82,9 @@ fn parse_date(
 	Ok(())
 }
 
-fn tokenize_state(tokenizer: &mut Tokenizer) -> Result<State, Error> {
+fn tokenize_state(tokenizer: &mut Tokenizer) -> Result<State, String> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
-		None => Err(Error::LexerError(String::from("unexpected end of line"))),
+		None => Err(String::from("unexpected end of line")),
 		Some(&c) => {
 			chars::try_consume_char(tokenizer, char::is_whitespace);
 			match c {
@@ -105,27 +102,21 @@ fn tokenize_state(tokenizer: &mut Tokenizer) -> Result<State, Error> {
 	}
 }
 
-fn tokenize_code(tokenizer: &mut Tokenizer) -> Result<Option<String>, Error> {
+fn tokenize_code(tokenizer: &mut Tokenizer) -> Result<Option<String>, String> {
 	chars::try_consume_char(tokenizer, char::is_whitespace);
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		Some('(') => {
 			tokenizer.line_position += 1;
 			match tokenizer.line_characters.get(tokenizer.line_position) {
-				None => Err(Error::LexerError(String::from(
-					"code has to be closed with \")\"",
-				))),
-				Some(&c) if c == ')' => Err(Error::LexerError(String::from("null code not allowed"))),
+				None => Err(String::from("code has to be closed with \")\"")),
+				Some(&c) if c == ')' => Err(String::from("null code not allowed")),
 				Some(&c) => {
 					let mut code = String::new();
 					code.push(c);
 					tokenizer.line_position += 1;
 					loop {
 						match tokenizer.line_characters.get(tokenizer.line_position) {
-							None => {
-								return Err(Error::LexerError(String::from(
-									"code has to be closed with \")\"",
-								)))
-							}
+							None => return Err(String::from("code has to be closed with \")\"")),
 							Some(&c) if c == ')' => {
 								tokenizer.line_position += 1;
 								break;
@@ -144,11 +135,9 @@ fn tokenize_code(tokenizer: &mut Tokenizer) -> Result<Option<String>, Error> {
 	}
 }
 
-fn tokenize_description(tokenizer: &mut Tokenizer) -> Result<String, Error> {
+fn tokenize_description(tokenizer: &mut Tokenizer) -> Result<String, String> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
-		None => Err(Error::LexerError(String::from(
-			"empty description not allowed",
-		))),
+		None => Err(String::from("empty description not allowed")),
 		Some(_) => {
 			chars::try_consume_char(tokenizer, char::is_whitespace);
 			let mut description = String::new();

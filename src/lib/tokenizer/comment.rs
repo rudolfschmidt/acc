@@ -1,26 +1,24 @@
-use super::super::super::model::Comment;
-use super::super::super::model::Item;
-use super::super::super::model::Posting;
-use super::super::Error;
+use super::super::model::Comment;
+use super::super::model::Item;
+use super::super::model::Posting;
 use super::chars;
 use super::Tokenizer;
 
-pub(super) fn tokenize_journal_comment(tokenizer: &mut Tokenizer) -> Result<(), Error> {
-	match tokenize_comment(tokenizer)? {
-		None => Ok(()),
+pub(super) fn tokenize_journal_comment(tokenizer: &mut Tokenizer) {
+	match tokenize_comment(tokenizer) {
+		None => {}
 		Some(comment) => {
 			tokenizer.items.push(Item::Comment {
 				line: tokenizer.line_index + 1,
 				comment,
 			});
-			Ok(())
 		}
 	}
 }
 
-pub(super) fn tokenize_indented_comment(tokenizer: &mut Tokenizer) -> Result<(), Error> {
-	match tokenize_comment(tokenizer)? {
-		None => Ok(()),
+pub(super) fn tokenize_indented_comment(tokenizer: &mut Tokenizer) {
+	match tokenize_comment(tokenizer) {
+		None => {}
 		Some(comment) => {
 			for item in tokenizer.items.iter_mut().rev() {
 				match item {
@@ -43,12 +41,11 @@ pub(super) fn tokenize_indented_comment(tokenizer: &mut Tokenizer) -> Result<(),
 					_ => {}
 				}
 			}
-			Ok(())
 		}
 	}
 }
 
-fn tokenize_comment(tokenizer: &mut Tokenizer) -> Result<Option<String>, Error> {
+fn tokenize_comment(tokenizer: &mut Tokenizer) -> Option<String> {
 	if chars::try_consume_char(tokenizer, |c| c == ';') {
 		chars::try_consume_char(tokenizer, char::is_whitespace);
 
@@ -59,7 +56,8 @@ fn tokenize_comment(tokenizer: &mut Tokenizer) -> Result<Option<String>, Error> 
 			tokenizer.line_position += 1;
 		}
 
-		return Ok(Some(comment));
+		Some(comment)
+	} else {
+		None
 	}
-	Ok(None)
 }

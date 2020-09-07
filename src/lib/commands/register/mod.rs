@@ -1,3 +1,4 @@
+use super::super::format_amount;
 use super::super::model::Item;
 use super::super::model::Posting;
 use super::super::model::State;
@@ -70,7 +71,7 @@ pub fn print(items: Vec<Item>) -> Result<(), String> {
 							row.accounts.push(Account {
 								account,
 								commodity: balanced_amount.commodity.to_owned(),
-								amount: super::format_amount(&balanced_amount.value),
+								amount: format_amount(&balanced_amount.value),
 								total: total
 									.iter()
 									.fold(BTreeMap::new(), |mut acc, (commodity, amount)| {
@@ -87,7 +88,7 @@ pub fn print(items: Vec<Item>) -> Result<(), String> {
 							row.accounts.push(Account {
 								account,
 								commodity: amount.commodity.to_owned(),
-								amount: super::format_amount(&amount.value),
+								amount: format_amount(&amount.value),
 								total: total
 									.iter()
 									.fold(BTreeMap::new(), |mut acc, (commodity, amount)| {
@@ -129,7 +130,7 @@ pub fn print(items: Vec<Item>) -> Result<(), String> {
 		.iter()
 		.flat_map(|t| t.accounts.iter())
 		.flat_map(|a| a.total.iter())
-		.map(|(c, a)| c.chars().count() + super::format_amount(a).chars().count())
+		.map(|(c, a)| c.chars().count() + format_amount(a).chars().count())
 		.max()
 		.unwrap_or(0);
 
@@ -311,6 +312,6 @@ fn format_with_zero(num: &Rational) -> String {
 	if num.is_zero() {
 		String::from("0")
 	} else {
-		super::format_amount(num)
+		format_amount(num)
 	}
 }

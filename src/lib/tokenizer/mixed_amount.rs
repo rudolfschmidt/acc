@@ -1,4 +1,3 @@
-use super::super::Error;
 use super::chars;
 use super::Tokenizer;
 
@@ -6,7 +5,7 @@ type Rational = num::rational::Rational64;
 
 pub(super) fn tokenize_expression(
 	tokenizer: &mut Tokenizer,
-) -> Result<Option<(String, Rational)>, Error> {
+) -> Result<Option<(String, Rational)>, String> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		None => Ok(None),
 		_ => {
@@ -30,7 +29,7 @@ pub(super) fn tokenize_expression(
 
 pub(super) fn tokenize_decimal(
 	tokenizer: &mut Tokenizer,
-) -> Result<Option<(String, String)>, Error> {
+) -> Result<Option<(String, String)>, String> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		None => Ok(None),
 		_ => {
@@ -38,9 +37,10 @@ pub(super) fn tokenize_decimal(
 				c == '-' || c.is_numeric() || c.is_whitespace()
 			});
 			if commodity.is_empty() {
-				let (amount, _) = parse_decimal_amount(tokenizer)?;
-				let commodity = tokenize_commodity(tokenizer, |c| c == '=' || c.is_whitespace());
-				Ok(Some((commodity, amount)))
+				let decimal_amount = tokenize_decimal_amount(tokenizer)?;
+				chars::try_consume_char(tokenizer, char::is_whitespace);
+				let commodity = tokenize_commodity(tokenizer, char::is_whitespace);
+				Ok(Some((commodity, decimal_amount)))
 			} else {
 				super::chars::consume_whitespaces(tokenizer);
 				let amount = tokenize_decimal_amount(tokenizer)?;
@@ -49,47 +49,19 @@ pub(super) fn tokenize_decimal(
 		}
 	}
 }
-fn tokenize_decimal_amount(tokenizer: &mut Tokenizer) -> Result<String, Error> {
-	let (amount, c) = parse_decimal_amount(tokenizer)?;
-	if let Some(c) = c {
-		return Err(Error::LexerError(format!(
-			"received \"{}\", but expected number",
-			c
-		)));
-	}
-	Ok(amount)
-}
 
-fn tokenize_rational_amount(tokenizer: &mut Tokenizer) -> Result<Rational, Error> {
+fn tokenize_decimal_amount(tokenizer: &mut Tokenizer) -> Result<String, String> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
-		None => Err(Error::LexerError(String::from("unexpected end of line"))),
-		Some(_) => {
-			let numerator = chars::consume_while(tokenizer, |c| c.is_numeric());
-			chars::expect(tokenizer, |c| c == '/')?;
-			let denominator = chars::consume_while(tokenizer, |c| c.is_numeric());
-			Ok(Rational::new(
-				numerator.parse().unwrap(),
-				denominator.parse().unwrap(),
-			))
-		}
-	}
-}
-
-fn parse_decimal_amount(tokenizer: &mut Tokenizer) -> Result<(String, Option<char>), Error> {
-	match tokenizer.line_characters.get(tokenizer.line_position) {
-		None => Err(Error::LexerError(String::from("unexpected end of line"))),
+		None => Err(String::from("unexpected end of line")),
 		Some(_) => {
 			let mut amount = String::new();
 			if chars::try_consume_char(tokenizer, |c| c == '-') {
 				amount.push('-');
 			}
 			match tokenizer.line_characters.get(tokenizer.line_position) {
-				None => return Err(Error::LexerError(String::from("unexpected end of line"))),
+				None => return Err(String::from("unexpected end of line")),
 				Some(c) if !c.is_numeric() => {
-					return Err(Error::LexerError(format!(
-						"received \"{}\", but expected number",
-						c
-					)))
+					return Err(format!("received \"{}\", but expected number", c));
 				}
 				Some(&c) => {
 					amount.push(c);
@@ -104,18 +76,30 @@ fn parse_decimal_amount(tokenizer: &mut Tokenizer) -> Result<(String, Option<cha
 				tokenizer.line_position += 1;
 			}
 			while let Some(&c) = tokenizer.line_characters.get(tokenizer.line_position) {
-				if c == '=' {
+				if c.is_whitespace() {
 					break;
-				} else if c.is_whitespace() {
-					tokenizer.line_position += 1;
-					continue;
 				} else if !c.is_numeric() {
-					return Ok((amount, Some(c)));
+					break;
 				}
 				amount.push(c);
 				tokenizer.line_position += 1;
 			}
-			Ok((amount, None))
+			Ok(amount)
+		}
+	}
+}
+
+fn tokenize_rational_amount(tokenizer: &mut Tokenizer) -> Result<Rational, String> {
+	match tokenizer.line_characters.get(tokenizer.line_position) {
+		None => Err(String::from("unexpected end of line")),
+		Some(_) => {
+			let numerator = chars::consume_while(tokenizer, |c| c.is_numeric());
+			chars::expect(tokenizer, |c| c == '/')?;
+			let denominator = chars::consume_while(tokenizer, |c| c.is_numeric());
+			Ok(Rational::new(
+				numerator.parse().unwrap(),
+				denominator.parse().unwrap(),
+			))
 		}
 	}
 }

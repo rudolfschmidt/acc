@@ -1,18 +1,17 @@
-use super::super::super::model::Costs;
-use super::super::super::model::Item;
-use super::super::super::model::MixedAmount;
-use super::super::super::model::Posting;
-use super::super::Error;
+use super::super::model::Costs;
+use super::super::model::Item;
+use super::super::model::MixedAmount;
+use super::super::model::Posting;
 use super::chars;
 use super::mixed_amount;
 use super::Tokenizer;
 
-pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), Error> {
+pub(super) fn tokenize(tokenizer: &mut Tokenizer) -> Result<(), String> {
 	let virtual_posting = chars::try_consume_char(tokenizer, |c| c == '(');
 	tokenize_posting(tokenizer, virtual_posting)
 }
 
-fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<(), Error> {
+fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<(), String> {
 	match tokenizer.line_characters.get(tokenizer.line_position) {
 		None => Ok(()),
 		Some(_) => {
@@ -26,22 +25,13 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 					|| chars::try_consume_string(tokenizer, "  ")
 				{
 					if virtual_posting && !virtual_closed {
-						return Err(Error::LexerError(String::from(
-							"virtual posting not closed",
-						)));
+						return Err(String::from("virtual posting not closed"));
 					}
 					chars::consume_whitespaces(tokenizer);
-					let amount =
-						mixed_amount::tokenize_decimal(tokenizer)?.map(|(commodity, value)| MixedAmount {
-							commodity: commodity,
-							value: create_rational(&value),
-						});
-					let balance_assertion =
-						balance_assertion(tokenizer)?.map(|(commodity, value)| MixedAmount {
-							commodity: commodity,
-							value: create_rational(&value),
-						});
-					let costs = costs(tokenizer)?;
+					let unbalanced_amount = tokenize_unbalanced_amount(tokenizer)?;
+					let lot_price = tokenize_lot_price(tokenizer)?;
+					let costs = tokenize_costs(tokenizer)?;
+					let balance_assertion = tokenize_balance_assertion(tokenizer)?;
 
 					for item in tokenizer.items.iter_mut().rev() {
 						match item {
@@ -51,8 +41,9 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 									account: account,
 									comments: Vec::new(),
 									balance_assertion: balance_assertion,
+									unbalanced_amount: unbalanced_amount,
 									costs: costs,
-									unbalanced_amount: amount,
+									lot_price: lot_price,
 								});
 								break;
 							}
@@ -70,9 +61,7 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 			}
 
 			if virtual_posting && !virtual_closed {
-				return Err(Error::LexerError(String::from(
-					"virtual posting not closed",
-				)));
+				return Err(String::from("virtual posting not closed"));
 			}
 
 			for item in tokenizer.items.iter_mut().rev() {
@@ -85,6 +74,7 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 							comments: Vec::new(),
 							costs: None,
 							unbalanced_amount: None,
+							lot_price: None,
 						});
 						break;
 					}
@@ -97,7 +87,39 @@ fn tokenize_posting(tokenizer: &mut Tokenizer, virtual_posting: bool) -> Result<
 	}
 }
 
-fn costs(tokenizer: &mut Tokenizer) -> Result<Option<Costs>, Error> {
+fn tokenize_unbalanced_amount(tokenizer: &mut Tokenizer) -> Result<Option<MixedAmount>, String> {
+	Ok(
+		mixed_amount::tokenize_decimal(tokenizer)?.map(|(commodity, value)| MixedAmount {
+			commodity: commodity,
+			value: create_rational(&value),
+		}),
+	)
+}
+
+fn tokenize_lot_price(tokenizer: &mut Tokenizer) -> Result<Option<MixedAmount>, String> {
+	chars::try_consume_char(tokenizer, char::is_whitespace);
+	if chars::try_consume_char(tokenizer, |c| c == '{') {
+		let lot_price =
+			mixed_amount::tokenize_decimal(tokenizer)?.map(|(commodity, value)| MixedAmount {
+				commodity: commodity,
+				value: create_rational(&value),
+			});
+		chars::try_consume_char(tokenizer, |c| c == '}');
+		return Ok(lot_price);
+	}
+	Ok(None)
+}
+
+fn tokenize_balance_assertion(tokenizer: &mut Tokenizer) -> Result<Option<MixedAmount>, String> {
+	Ok(
+		balance_assertion(tokenizer)?.map(|(commodity, value)| MixedAmount {
+			commodity: commodity,
+			value: create_rational(&value),
+		}),
+	)
+}
+
+fn tokenize_costs(tokenizer: &mut Tokenizer) -> Result<Option<Costs>, String> {
 	chars::try_consume_char(tokenizer, char::is_whitespace);
 	if chars::try_consume_char(tokenizer, |c| c == '@') {
 		return if chars::try_consume_char(tokenizer, |c| c == '@') {
@@ -129,11 +151,11 @@ fn costs(tokenizer: &mut Tokenizer) -> Result<Option<Costs>, Error> {
 	Ok(None)
 }
 
-fn balance_assertion(tokenizer: &mut Tokenizer) -> Result<Option<(String, String)>, Error> {
+fn balance_assertion(tokenizer: &mut Tokenizer) -> Result<Option<(String, String)>, String> {
 	if chars::try_consume_char(tokenizer, |c| c == '=') {
 		chars::try_consume_char(tokenizer, char::is_whitespace);
 		match tokenizer.line_characters.get(tokenizer.line_position) {
-			None => return Err(Error::LexerError(String::from("invalid balance assertion"))),
+			None => return Err(String::from("invalid balance assertion")),
 			Some(_) => {
 				chars::consume_whitespaces(tokenizer);
 				return mixed_amount::tokenize_decimal(tokenizer);
