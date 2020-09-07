@@ -1,5 +1,5 @@
+use super::super::super::format_amount;
 use super::super::super::model::Item;
-use super::super::format_amount;
 use super::common::group_postings_by_account;
 use super::common::print_commodity_amount;
 
@@ -16,13 +16,6 @@ struct BalanceAccount {
 }
 
 pub(super) fn print(items: Vec<Item>) -> Result<(), String> {
-	if items.iter().any(|item| match item {
-		Item::Transaction { postings, .. } => postings.is_empty(),
-		_ => true,
-	}) {
-		return Ok(());
-	}
-
 	let grouped_postings = group_postings_by_account(items)?;
 	let accounts = make_balance_accounts(&grouped_postings);
 	let root_account = make_root_balance_account(&accounts);
@@ -173,8 +166,11 @@ fn print_balance_account(indent: &str, post: &BalanceAccount, amount_width: usiz
 	while let Some((commodity, amount)) = it.next() {
 		if !amount.is_zero() {
 			print_commodity_amount(commodity, *amount, amount_width);
-			if it.peek().is_some() {
-				println!();
+			match it.peek() {
+				Some((_commodity, amount)) if !amount.is_zero() => {
+					println!();
+				}
+				_ => {}
 			}
 		}
 	}

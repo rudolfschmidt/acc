@@ -1,8 +1,9 @@
 mod lib;
 
+use lib::balancer;
 use lib::commands;
 use lib::model;
-use lib::parsers;
+use lib::tokenizer;
 
 use std::env;
 
@@ -46,10 +47,15 @@ fn start() -> Result<(), String> {
 			}
 
 			for file in files {
-				parsers::parse(std::path::Path::new(&file), &mut items)?;
+				tokenizer::tokenize_file(std::path::Path::new(&file), &mut items)?;
 			}
 
-			execute_command(command, arguments, items)
+			let mut balanced_items = Vec::new();
+			for item in items {
+				balanced_items.push(balancer::balance(item)?)
+			}
+
+			execute_command(command, arguments, balanced_items)
 		}
 	}
 }

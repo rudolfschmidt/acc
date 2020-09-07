@@ -1,6 +1,6 @@
+use super::super::super::format_amount;
 use super::super::super::model::Item;
 use super::super::super::model::Posting;
-use super::super::format_amount;
 
 use colored::Colorize;
 use num::Signed;

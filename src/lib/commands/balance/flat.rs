@@ -1,4 +1,4 @@
-use super::super::format_amount;
+use super::super::super::format_amount;
 use super::common::group_postings_by_account;
 use super::common::print_commodity_amount;
 
@@ -8,13 +8,6 @@ use num::Zero;
 use std::collections::BTreeMap;
 
 pub(super) fn print(items: Vec<Item>) -> Result<(), String> {
-	if items.iter().any(|item| match item {
-		Item::Transaction { postings, .. } => postings.is_empty(),
-		_ => true,
-	}) {
-		return Ok(());
-	}
-
 	let postings = group_postings_by_account(items)?;
 
 	let total = postings
