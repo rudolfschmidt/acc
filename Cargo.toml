@@ -17,4 +17,4 @@ path = "src/lib/mod.rs"
 
 [dependencies]
 colored = "1.9.3"
-num = "0.1.39"
+num = "0.3.0"
