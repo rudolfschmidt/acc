@@ -1,20 +1,21 @@
 [package]
 name = "acc"
-version = "0.1.2"
+version = "0.2.0"
 authors = ["Rudolf Schmidt <info@rudolfschmidt.com>"]
-edition = "2018"
+edition = "2024"
 license = "GPL-3.0"
 description = "plaintext double-entry accounting command line tool"
-keywords = ["cli", "terminal", "ledger", "accounting", "finance"]
-categories = ["command-line-utilities", "parsing", "text-processing"]
+keywords = ["ledger", "accounting", "finance", "money", "journal"]
+categories = ["command-line-utilities", "finance", "parser-implementations", "text-processing", "value-formatting"]
 repository = "https://github.com/rudolfschmidt/acc"
 readme = "README.md"
 include = [ "**/*.rs" ]
 
-[lib]
-name = "acc"
-path = "src/lib/mod.rs"
-
 [dependencies]
-colored = "1.9.3"
-num = "0.3.0"
+clap = { version = "4", features = ["derive"] }
+colored = "2"
+crossterm = "0.28"
+ratatui = "0.29"
+rayon = "1"
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+ureq = { version = "2", default-features = false, features = ["tls"] }

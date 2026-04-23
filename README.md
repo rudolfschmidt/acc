@@ -1,33 +1,28 @@
 ![alt text](https://www.diamondsite.de/img/projects/acc.jpg "acc accounting plaintext double-entry accounting command line tool")
 # acc
-acc(ounting) is a plaintext double-entry accounting command line tool. It is open source and a free alternative to properary accounting software. 
+
+acc(ounting) is a plaintext double-entry accounting command line tool. It is open source and a free alternative to properary accounting software.
 
 acc tracks commodities like fiat money or crypto currencies using a strict following of the double-entry accounting principles. It is inspired by [ledger](https://github.com/ledger/ledger) and [hledger](https://github.com/simonmichael/hledger) and uses the ledger file format.
 
-## Quick Start
-
-Start tracking every cent without trusting anybody
-
-### Installation
+## Installation
 
 With [cargo](https://github.com/rust-lang/cargo):
-
-#### Stable
 
 ```
 cargo install acc
 ```
 
-#### Testing
+From source:
 
 ```
 git clone https://github.com/rudolfschmidt/acc
 cd acc
-cargo build --release 
+cargo build --release
 ./target/release/acc -f demo.ledger print
 ```
 
-### Create Ledger File
+## Quick Start
 
 Record transactions in a plain text file using your favorite texteditor
 
@@ -46,29 +41,27 @@ Record transactions in a plain text file using your favorite texteditor
     assets:checking
 ```
 
-Use one of the listed commands below.
+## Global Options
+
+```
+acc [-f FILE] [-d DIR] [--begin DATE] [--end DATE] [--sort FIELD] [--future] <COMMAND>
+```
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--file FILE` | `-f` | Ledger file to process (can be specified multiple times) |
+| `--dir DIR` | `-d` | Load all files from directory recursively |
+| `--begin DATE` | `-b` | Include only transactions on or after this date (YYYY-MM-DD) |
+| `--end DATE` | `-e` | Include only transactions before this date (YYYY-MM-DD) |
+| `--sort FIELD` | `-S` | Sort by: date, amount, account, description. `rev:` prefix for reverse |
+| `--future` | | Include future transactions (default: only up to today) |
 
 ## Commands
 
-### Syntax
+### bal(ance)
 
 ```
-acc [-f FILE] [command] [arguments]
-```
-
-The order of the command line arguments does not matter. They are parsed first and handled after.
-
-
-### Balance Report
-
-```
-$ acc -f [file] [bal|balance] [--flat|--tree]
-```
-
-#### Tree Balance Report
-
-```
-$ acc -f demo.ledger bal --tree
+$ acc -f demo.ledger bal
  $3134.00 assets
    $40.00   cash
  $3094.00   checking
@@ -82,8 +75,6 @@ $-2000.00   consulting
         0
 ```
 
-#### Flat Balance Report
-
 ```
 $ acc -f demo.ledger bal --flat
    $40.00 assets:cash
@@ -95,70 +86,25 @@ $-2000.00 income:consulting
         0
 ```
 
-### Register Report
-
-#### Syntax
+### reg(ister)
 
 ```
-$ acc -f [file] [reg|register]
+$ acc -f demo.ledger reg
+2020-01-01 opening balances    assets:checking             $1234.00    $1234.00
+                               equity                     $-1234.00           0
+2020-03-15 client payment      assets:checking             $2000.00    $2000.00
+                               income:consulting          $-2000.00           0
+2020-03-20 Sprouts             expenses:food:groceries      $100.00     $100.00
+                               assets:cash                   $40.00     $140.00
+                               assets:checking             $-140.00           0
 ```
 
-#### Example
+### print
+
+Default shows balanced/explicit amounts:
 
 ```
-$ acc -f demo.ledger reg 
-```
-
-```
-2020-01-01 opening balances    assets:checking            $ 1234.001       $1234.00
-                               equity                     $-1234.001       $   0.00
-2020-03-15 client payment      assets:checking            $ 2000.001       $2000.00
-                               income:consulting          $-2000.001       $   0.00
-2020-03-20 Sprouts             expenses:food:groceries    $  100.001       $ 100.00
-                               assets:cash                $   40.001       $ 140.00
-                               assets:checking            $ -140.001       $   0.00
-```
-
-### Print Report
-
-#### Syntax
-
-```
-$ acc -f [file] [print] [--raw|--explicit]
-```
-
-#### Raw Print Report
-
-It prints the data how it is but just formated. Useful when you want to format your ledger files. (Default choice)
-
-```
-$ acc -f demo.ledger print --raw
-```
-
-```
-2020-01-01 opening balances
-	assets:checking            $ 1234.00
-	equity
-
-2020-03-15 client payment
-	assets:checking            $ 2000.00
-	income:consulting
-
-2020-03-20 Sprouts
-	expenses:food:groceries    $ 100.00
-	assets:cash                $ 40.00
-	assets:checking
-```
-
-#### Explicit Print Report
-
-It interprets the posting amounts and fill them with useful numbers
-
-```
-$ acc -f demo.ledger print [--explicit|-x]
-```
-
-```
+$ acc -f demo.ledger print
 2020-01-01 opening balances
 	assets:checking            $ 1234.00
 	equity                     $-1234.00
@@ -173,23 +119,37 @@ $ acc -f demo.ledger print [--explicit|-x]
 	assets:checking            $-140.00
 ```
 
-### Accounts Report
-
-Print the accounts in alphabetical order.
-
-#### Syntax
+`--raw` shows original data without computed amounts:
 
 ```
-$ acc -f demo.ledger accounts [--tree|--flat]
+$ acc -f demo.ledger print --raw
+2020-01-01 opening balances
+	assets:checking            $ 1234.00
+	equity
+
+2020-03-15 client payment
+	assets:checking            $ 2000.00
+	income:consulting
+
+2020-03-20 Sprouts
+	expenses:food:groceries    $ 100.00
+	assets:cash                $ 40.00
+	assets:checking
 ```
 
-#### Tree Output
+### accounts
+
+```
+$ acc -f demo.ledger accounts
+assets:cash
+assets:checking
+equity
+expenses:food:groceries
+income:consulting
+```
 
 ```
 $ acc -f demo.ledger accounts --tree
-```
-
-```
 assets
   cash
   checking
@@ -201,32 +161,44 @@ income
   consulting
 ```
 
-#### Flat Output
+### codes
 
 ```
-$ acc -f demo.ledger accounts --flat
-```
-
-```
-assets:cash
-assets:checking
-equity
-expenses:food:groceries
-income:consulting
-```
-
-### Codes Report
-
-Print the codes in natural order.
-
-```
-acc -f demo.ledger codes
-```
-
-```
+$ acc -f demo.ledger codes
 123
 456
 789
+```
+
+### nav(igate)
+
+Interactive account tree browser. Navigate with vim keybindings.
+
+```
+$ acc -f demo.ledger nav
+```
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Move down |
+| `k` / `↑` | Move up |
+| `Enter` / `Space` | Expand/collapse |
+| `l` / `→` | Expand |
+| `h` / `←` | Collapse |
+| `G` | Jump to bottom |
+| `gg` | Jump to top |
+| `Ctrl-d` | Half page down |
+| `Ctrl-u` | Half page up |
+| `q` / `Esc` | Quit |
+
+### val(idate)
+
+Check journal for inconsistencies. Currently checks:
+* Commodity symbols must be uppercase (single-char symbols like `$`, `€`, `£` are excluded)
+
+```
+$ acc -f demo.ledger val
+No issues found.
 ```
 
 ## Directives
@@ -240,11 +212,11 @@ include file.ledger
 include files/file.ledger
 ```
 
-Includes all files with extension ```ledger```
+Includes all files with extension `ledger`
 
 ```
-include *.ledger 
-include files/*.ledger 
+include *.ledger
+include files/*.ledger
 ```
 
 Includes any file
@@ -254,24 +226,22 @@ include *.*
 include files/*.*
 ```
 
-Include files from any directory inside directory ```files``` (first level)
+Include files from any directory inside directory `files` (first level)
 
 ```
 include files/*/*.*
 include files/*/*.ledger
 ```
 
-Includes all files from all directories under directory ```files``` (recursive)
+Includes all files from all directories under directory `files` (recursive)
 
 ```
 include files/**/*.*
 include files/**/*.ledger
 ```
 
-#### 
-
-
 ## FAQ
+
 ### Why should you not use properary software, specially for accounting?
 
 It is ok to make money with software that costs time and effort to create it.
@@ -280,7 +250,7 @@ We ignore the fact that using proprietary software is a bad idea most of the tim
 
 The nature of accounting is that you organize the most sensitive data about yourself, your financial data.
 
-Most proprietary accounting software will ask you to go online to connect to their server. At the moment you do so, they will store your data on their servers to "maintain" it. 
+Most proprietary accounting software will ask you to go online to connect to their server. At the moment you do so, they will store your data on their servers to "maintain" it.
 
 Your data is on a machine of a profit-oriented company that is interested to make money out of you.
 
@@ -290,11 +260,11 @@ You cannot, because everything is closed, their software, their server.
 
 You traded comfort against freedom and in most cases paid even for it.
 
-Have you ever tried to buy something per invoice? 
+Have you ever tried to buy something per invoice?
 
 Most of the time you will be forwarded to another company that checks your credit rating. Have you ever made the experience to get rejected? If so, did they tell you the reason for it? Most of the time they do not, and there is a reason for it. They do not want you to know what they know about you and what the sources of the information are.
 
-There is probably nothing more sensitive and private than financial data. 
+There is probably nothing more sensitive and private than financial data.
 
 If freedom and privacy matter anything to you, care about your finances or others will do!
 
@@ -305,13 +275,6 @@ If freedom and privacy matter anything to you, care about your finances or other
 
 3. Another important reasons, maybe the most important, is to be able to take decisions based on financial data rather than on temporary feelings. A simple real-life scenario could be the question if you spent your money to go out and eat food at a restaurant or save some bucks by eating at home. Track your grocery costs and calculate the daily average and you get suprised how much you "eat at home". Eating outside will not look expensive anymore I bet.
 
-## ToDo
-* Add filter functionalities
-* Add support for expressions
-* Add support for periodic transactions
-* Add experimental support for other file formats like yaml
-
 ## Changelog
-*Sun 02 Aug 2020 09:18:50 PM CEST* - Removed debug command
 
-*Sat 01 Aug 2020 10:38:14 PM CEST* - Make acc available as lib
+See [CHANGELOG.md](CHANGELOG.md)

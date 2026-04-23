@@ -1,3 +1,4 @@
 /target
-test.ledger
-.*
+/src.backup
+/data
+/Cargo.lock
