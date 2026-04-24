@@ -7,6 +7,8 @@ pub mod balance;
 pub mod checker;
 pub mod codes;
 pub mod commodities;
+pub mod diff;
+pub mod format;
 pub mod navigate;
 pub mod print;
 pub mod register;

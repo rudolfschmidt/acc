@@ -32,4 +32,8 @@ pub struct Journal {
     /// the journal declared `commodity € / alias EUR`, so the target
     /// symbol matches the form stored in postings and the price DB.
     pub aliases: HashMap<String, String>,
+    /// Automated-transaction rules from `= /pattern/` blocks. Expanded
+    /// into their matching transactions by the expander phase between
+    /// booker and filter.
+    pub auto_rules: Vec<crate::parser::entry::AutoRule>,
 }

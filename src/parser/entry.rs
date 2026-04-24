@@ -60,6 +60,55 @@ pub enum Entry {
 
     /// A top-level comment line (`;` or `#` at column 0).
     Comment(String),
+
+    /// Automated-transaction rule: a pattern that matches against
+    /// posting accounts, plus the extra postings to inject (scaled by
+    /// the matching posting's amount) into every matching transaction.
+    /// Line-leading `=` at column 0, followed by `/pattern/`; indented
+    /// children provide the postings with their multipliers.
+    AutoRule(AutoRule),
+}
+
+/// An auto-transaction (`= /pattern/`) block.
+#[derive(Debug, Clone)]
+pub struct AutoRule {
+    pub pattern: AutoPattern,
+    pub postings: Vec<AutoPosting>,
+}
+
+/// Pattern kinds supported in V1 — a subset of ledger-cli regex
+/// semantics, matching what the filter DSL already handles: a
+/// `^prefix` anchor, a `suffix$` anchor, an anchored-both `^exact$`,
+/// or an unanchored substring. Full regex engine deferred until a
+/// real user journal needs it.
+#[derive(Debug, Clone)]
+pub enum AutoPattern {
+    Prefix(String),
+    Suffix(String),
+    Exact(String),
+    Contains(String),
+}
+
+impl AutoPattern {
+    pub fn matches(&self, account: &str) -> bool {
+        match self {
+            AutoPattern::Prefix(s) => account.starts_with(s.as_str()),
+            AutoPattern::Suffix(s) => account.ends_with(s.as_str()),
+            AutoPattern::Exact(s) => account == s,
+            AutoPattern::Contains(s) => account.contains(s.as_str()),
+        }
+    }
+}
+
+/// One posting inside an auto-rule. Account + multiplier + virtual
+/// flags mirror the posting syntax; the multiplier is applied to the
+/// triggering posting's amount during expansion.
+#[derive(Debug, Clone)]
+pub struct AutoPosting {
+    pub account: String,
+    pub multiplier: crate::decimal::Decimal,
+    pub is_virtual: bool,
+    pub balanced: bool,
 }
 
 /// A `P DATE BASE QUOTE RATE` directive. Commodities are stored as

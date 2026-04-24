@@ -10,6 +10,7 @@ pub mod commands;
 pub mod date;
 pub mod decimal;
 pub mod error;
+pub mod expander;
 pub mod filter;
 pub mod indexer;
 pub mod loader;

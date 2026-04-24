@@ -16,6 +16,16 @@ pub(crate) fn print_spaces(n: usize) {
     }
 }
 
+/// Append `n` space characters to a `String` buffer. Same idea as
+/// `print_spaces` but for commands that build up output in memory
+/// (e.g. `format`) instead of streaming directly to stdout.
+pub(crate) fn push_spaces(out: &mut String, n: usize) {
+    out.reserve(n);
+    for _ in 0..n {
+        out.push(' ');
+    }
+}
+
 /// Render an amount as `{commodity}{value}` at the display precision
 /// for that commodity (falls back to 2 when unknown). Suppresses the
 /// cosmetic `-0.00` that would otherwise appear for values that round

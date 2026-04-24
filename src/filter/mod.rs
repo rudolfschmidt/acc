@@ -64,6 +64,7 @@ pub fn filter(
         cta_loss: journal.cta_loss,
         precisions: journal.precisions,
         aliases: journal.aliases,
+        auto_rules: journal.auto_rules,
     }
 }
 
