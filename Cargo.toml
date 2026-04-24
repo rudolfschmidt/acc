@@ -1,9 +1,9 @@
 [package]
 name = "acc"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Rudolf Schmidt <info@rudolfschmidt.com>"]
 edition = "2024"
-license = "GPL-3.0"
+license = "GPL-3.0-or-later"
 description = "plaintext double-entry accounting command line tool"
 keywords = ["ledger", "accounting", "finance", "money", "journal"]
 categories = ["command-line-utilities", "finance", "parser-implementations", "text-processing", "value-formatting"]
