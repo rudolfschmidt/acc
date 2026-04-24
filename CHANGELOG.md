@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 — 2026-04-24
+
+License identifier updated from the deprecated SPDX `GPL-3.0` to
+`GPL-3.0-or-later`. No behaviour change; metadata-only release so
+crates.io and downstream packagers get a clean identifier.
+
 ## 0.3.0 — 2026-04-24
 
 Automatic IAS 21 / ASC 830 Currency Translation Adjustment (CTA)
