@@ -62,13 +62,13 @@ $ acc -f journal.ledger reg
                               income:salary    $-2500.00          0
 ```
 
-The repo ships a [`demo.ledger`](demo.ledger) you can use instead of
+The repo ships a [`examples/demo.ledger`](examples/demo.ledger) you can use instead of
 typing the example above:
 
 ```
 git clone https://github.com/rudolfschmidt/acc
 cd acc
-cargo run -- -f demo.ledger bal
+cargo run -- -f examples/demo.ledger bal
 ```
 
 ---
@@ -275,7 +275,7 @@ Transaction-by-transaction register with per-commodity running total.
 Example output:
 
 ```
-$ acc -f demo.ledger reg
+$ acc -f examples/demo.ledger reg
 2024-01-01 initial balances   assets:checking    $5000.00   $5000.00
                               equity:opening    $-5000.00          0
 2024-01-05 Groceries          expenses:food        $58.20      $58.20
@@ -443,7 +443,7 @@ verbatim output.
 ### `bal` — hierarchical balances
 
 ```
-$ acc -f demo.ledger bal
+$ acc -f examples/demo.ledger bal
  $7441.80  assets
  $7441.80    checking
 $-5000.00  equity
@@ -457,7 +457,7 @@ $-2500.00    salary
 ```
 
 ```
-$ acc -f demo.ledger bal --flat
+$ acc -f examples/demo.ledger bal --flat
  $7441.80  assets:checking
 $-5000.00  equity:opening
    $58.20  expenses:food
@@ -465,7 +465,7 @@ $-2500.00  income:salary
 ```
 
 ```
-$ acc -f demo.ledger bal ^assets
+$ acc -f examples/demo.ledger bal ^assets
  $7441.80  assets
  $7441.80    checking
 ```
@@ -473,7 +473,7 @@ $ acc -f demo.ledger bal ^assets
 ### `reg` — register with running total
 
 ```
-$ acc -f demo.ledger reg
+$ acc -f examples/demo.ledger reg
 2024-01-01 initial balances   assets:checking    $5000.00   $5000.00
                               equity:opening    $-5000.00          0
 2024-01-05 Groceries          expenses:food        $58.20      $58.20
@@ -485,7 +485,7 @@ $ acc -f demo.ledger reg
 ### `print` — normalised vs raw
 
 ```
-$ acc -f demo.ledger print
+$ acc -f examples/demo.ledger print
 2024-01-01 (opening) initial balances
     assets:checking            $5000.00
     equity:opening            $-5000.00
@@ -500,7 +500,7 @@ $ acc -f demo.ledger print
 ```
 
 ```
-$ acc -f demo.ledger print --raw
+$ acc -f examples/demo.ledger print --raw
 2024-01-01 (opening) initial balances
     assets:checking           $5000.00
     equity:opening           $-5000.00
@@ -517,7 +517,7 @@ $ acc -f demo.ledger print --raw
 ### `accounts` — flat and tree
 
 ```
-$ acc -f demo.ledger accounts
+$ acc -f examples/demo.ledger accounts
 assets:checking
 equity:opening
 expenses:food
@@ -525,7 +525,7 @@ income:salary
 ```
 
 ```
-$ acc -f demo.ledger accounts --tree
+$ acc -f examples/demo.ledger accounts --tree
 assets
   checking
 equity
@@ -539,19 +539,19 @@ income
 ### `commodities`
 
 ```
-$ acc -f demo.ledger commodities
+$ acc -f examples/demo.ledger commodities
 $
 ```
 
 ```
-$ acc -f demo.ledger commodities --date
+$ acc -f examples/demo.ledger commodities --date
 2024-01-01  $
 ```
 
 ### `codes`
 
 ```
-$ acc -f demo.ledger codes
+$ acc -f examples/demo.ledger codes
 42
 opening
 ```
@@ -559,7 +559,7 @@ opening
 ### `check`
 
 ```
-$ acc -f demo.ledger check
+$ acc -f examples/demo.ledger check
 Scanned 3 transactions, 7 postings.
 
 Checks:
@@ -1450,7 +1450,7 @@ cd acc
 
 cargo build --release           # build the binary
 cargo test                      # run the full test suite (unit + integration)
-cargo run -- -f demo.ledger bal # try a build against the bundled demo
+cargo run -- -f examples/demo.ledger bal # try a build against the bundled demo
 ```
 
 The test suite is structured as:
