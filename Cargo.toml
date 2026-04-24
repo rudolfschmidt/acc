@@ -9,7 +9,7 @@ keywords = ["ledger", "accounting", "finance", "money", "journal"]
 categories = ["command-line-utilities", "finance", "parser-implementations", "text-processing", "value-formatting"]
 repository = "https://github.com/rudolfschmidt/acc"
 readme = "README.md"
-include = [ "**/*.rs", "README.md", "CHANGELOG.md", "LICENSE", "examples/**/*" ]
+include = [ "src/**/*.rs", "README.md", "CHANGELOG.md", "LICENSE", "Cargo.toml", "examples/**/*" ]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
