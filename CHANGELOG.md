@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.3.0 — 2026-04-24
+
+Automatic IAS 21 / ASC 830 Currency Translation Adjustment (CTA)
+booking, plus `-r`, `-R`, multi-`-p`, working `--future`, and an
+argv pre-parse that lets `-f` sit anywhere on the command line.
+
+### Fri 24 Apr 2026 - `examples/` directory
+
+Seven feature-focused walkthroughs under `examples/` — one
+markdown file per topic, each with the journal inline, the
+commands, and the verbatim output acc produces. Covers basics
+(`bal` / `reg` / `print` / `accounts` / `commodities` / `codes`),
+the filter DSL including `-r` / `-R` / multi-`-p`, currency
+conversion with `-x` and `--market` and multi-hop lookups, fx
+gain/loss realisation, CTA translation adjustment, lot and cost
+annotations (`@` / `@@` / `{COST}`), and balance assertions /
+assignments. Cross-linked from the README's *Examples* section
+and indexed by `examples/README.md`. Added to the published
+crate's `include` list so `cargo publish` ships the walkthroughs
+alongside the main README.
+
+Also: `Cargo.toml`'s `include` was extended from `**/*.rs` to
+cover `README.md`, `CHANGELOG.md`, `LICENSE`, `demo.ledger`, and
+the new `examples/` tree — those files are now part of the
+published crate. Version bumped to `0.3.0` reflecting the CTA
+feature plus the new flags.
+
+`.gitignore` was untracked (moved to `.git/info/exclude` locally)
+— the file contains deployment-local paths and doesn't belong in
+the shared repo.
+
 ### Fri 24 Apr 2026 - CTA: Currency Translation Adjustment phase
 
 A long-standing display problem with the default per-posting

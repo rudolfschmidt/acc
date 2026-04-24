@@ -434,6 +434,12 @@ Output locations:
 
 Visual walkthroughs of each command with realistic output.
 
+Feature-focused, copy-paste-ready walkthroughs live in
+[`examples/`](examples/) — one markdown file per topic (basics,
+filters, currency conversion, fx gain/loss, CTA, lots and costs,
+assertions), each with the journal inline and every command's
+verbatim output.
+
 ### `bal` — hierarchical balances
 
 ```
