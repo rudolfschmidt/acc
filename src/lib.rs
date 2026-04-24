@@ -1,8 +1,8 @@
 //! Pipeline:
 //!
 //! ```text
-//! parser → resolver → booker → indexer → loader → realizer → filter → rebalancer → sorter → commands
-//!                                                 (realizer/rebalancer only with -x)
+//! parser → resolver → booker → indexer → loader → realizer → filter → translator → rebalancer → sorter → commands
+//!                                                 (realizer/translator/rebalancer only with -x)
 //! ```
 
 pub mod booker;
@@ -18,6 +18,7 @@ pub mod realizer;
 pub mod rebalancer;
 pub mod resolver;
 pub mod sorter;
+pub mod translator;
 
 pub(crate) mod i256;
 

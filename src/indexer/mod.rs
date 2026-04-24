@@ -98,4 +98,5 @@ mod tests {
         // Resolver should have replaced $ with USD before indexing
         assert_eq!(db.find("USD", "EUR", "2024-06-16"), Some(Decimal::parse("0.92").unwrap()));
     }
+
 }

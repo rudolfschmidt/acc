@@ -313,7 +313,17 @@ fn extend_block(
                 (Some("fx"), Some("loss"), None) => {
                     upgrade = Some(Entry::FxLossAccount(std::mem::take(name)));
                 }
-                _ => return Err(ParseError::new(line, 1, "expected `fx gain` or `fx loss`")),
+                (Some("cta"), Some("gain"), None) => {
+                    upgrade = Some(Entry::CtaGainAccount(std::mem::take(name)));
+                }
+                (Some("cta"), Some("loss"), None) => {
+                    upgrade = Some(Entry::CtaLossAccount(std::mem::take(name)));
+                }
+                _ => return Err(ParseError::new(
+                    line,
+                    1,
+                    "expected `fx gain`, `fx loss`, `cta gain`, or `cta loss`",
+                )),
             }
         }
         _ => return Err(ParseError::new(line, 1, "indented directive not expected here")),

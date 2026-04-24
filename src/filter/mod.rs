@@ -15,8 +15,7 @@
 //! desc <foo>         same as @foo (keyword form for values with spaces)
 //! #XYZ               transaction-code equals "XYZ" (case-insensitive)
 //! code <XYZ>         same as #XYZ
-//! com <EUR>          posting commodity equals "EUR" (case-SENSITIVE —
-//!                    $ and USD are distinct)
+//! com <EUR>          posting commodity equals "EUR" (case-insensitive)
 //! not <pat>          negate the following single pattern
 //! and / or           combinators. Default between bare tokens is OR.
 //! ```
@@ -48,13 +47,23 @@ pub fn filter(
     patterns: &[String],
     begin: Option<&str>,
     end: Option<&str>,
+    related: bool,
 ) -> Journal {
     Journal {
-        transactions: filter_transactions(journal.transactions, patterns, begin, end),
+        transactions: filter_transactions(
+            journal.transactions,
+            patterns,
+            begin,
+            end,
+            related,
+        ),
         prices: journal.prices,
         fx_gain: journal.fx_gain,
         fx_loss: journal.fx_loss,
+        cta_gain: journal.cta_gain,
+        cta_loss: journal.cta_loss,
         precisions: journal.precisions,
+        aliases: journal.aliases,
     }
 }
 
@@ -65,6 +74,7 @@ fn filter_transactions(
     patterns: &[String],
     begin: Option<&str>,
     end: Option<&str>,
+    related: bool,
 ) -> Vec<Located<Transaction>> {
     let matcher = (!patterns.is_empty()).then(|| PatternMatcher::from_parts(patterns));
 
@@ -87,9 +97,24 @@ fn filter_transactions(
             if let Some(m) = &matcher {
                 let desc_lower = lt.value.description.to_lowercase();
                 let code_lower = lt.value.code.as_deref().unwrap_or("").to_lowercase();
-                lt.value
-                    .postings
-                    .retain(|lp| m.matches_full(&lp.value, &desc_lower, &code_lower));
+                // `-r`: keep sibling postings of matched txs. Drop the
+                // tx entirely if no posting matches. Otherwise drop
+                // the matched postings and keep the rest.
+                if related {
+                    let any = lt.value.postings.iter().any(|lp| {
+                        m.matches_full(&lp.value, &desc_lower, &code_lower)
+                    });
+                    if !any {
+                        return None;
+                    }
+                    lt.value.postings.retain(|lp| {
+                        !m.matches_full(&lp.value, &desc_lower, &code_lower)
+                    });
+                } else {
+                    lt.value.postings.retain(|lp| {
+                        m.matches_full(&lp.value, &desc_lower, &code_lower)
+                    });
+                }
                 if lt.value.postings.is_empty() {
                     return None;
                 }
@@ -200,9 +225,9 @@ impl Query {
                 Dim::Account => pat.test(&p.account.to_lowercase()),
                 Dim::Description => pat.test(desc_lower),
                 Dim::Code => pat.test(code_lower),
-                // Commodity is case-sensitive and only exists when the
+                // Commodity is case-insensitive; only exists when the
                 // posting carries an amount.
-                Dim::Commodity => p.amount.as_ref().is_some_and(|a| pat.test(&a.commodity)),
+                Dim::Commodity => p.amount.as_ref().is_some_and(|a| pat.test(&a.commodity.to_lowercase())),
             },
             Query::Not(q) => !q.eval(p, desc_lower, code_lower),
             Query::And(a, b) => {
@@ -353,7 +378,7 @@ impl<'a> Parser<'a> {
                 Some(Query::Match(
                     Dim::Commodity,
                     Pattern {
-                        text: val.to_string(),
+                        text: val.to_lowercase(),
                         mode: MatchMode::Exact,
                     },
                 ))
@@ -454,7 +479,7 @@ mod tests {
 
     fn run(patterns: &[&str], txs: Vec<Located<Transaction>>) -> Vec<Located<Transaction>> {
         let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
-        filter_transactions(txs, &pats, None, None)
+        filter_transactions(txs, &pats, None, None, false)
     }
 
     fn account(lt: &Located<Transaction>, idx: usize) -> &str {
@@ -556,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn commodity_keyword_case_sensitive() {
+    fn commodity_keyword_matches_exact_symbol() {
         let txs = vec![
             tx(
                 "2025-01-01",
@@ -579,14 +604,15 @@ mod tests {
     }
 
     #[test]
-    fn commodity_keyword_wrong_case_does_not_match() {
+    fn commodity_keyword_is_case_insensitive() {
         let txs = vec![tx(
             "2025-01-01",
             "a",
             vec![posting("ex:x", "EUR", -5), posting("as:cc", "EUR", 5)],
         )];
+        // Lowercase pattern matches uppercase commodity.
         let out = run(&["com", "eur"], txs);
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 1);
     }
 
     #[test]
@@ -777,7 +803,8 @@ mod tests {
             ),
         ];
         let pats: Vec<String> = Vec::new();
-        let out = filter_transactions(txs, &pats, Some("2025-01-15"), Some("2025-02-15"));
+        let out =
+            filter_transactions(txs, &pats, Some("2025-01-15"), Some("2025-02-15"), false);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value.date.to_string(), "2025-02-01");
     }
