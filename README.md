@@ -400,18 +400,25 @@ of surrounding context per change block.
 Exit `0` on clean match, `1` on any difference or missing
 counterpart file.
 
-Two invocations to illustrate the two modes:
+Three invocations to illustrate the modes:
 
 ```
 # Explicit: compare a file against a specific backup.
 acc diff journal.ledger /path/to/backup/journal.ledger
 
-# Snapshot: let acc find the matching path inside the backup tree.
+# Snapshot, single file: acc finds the matching path inside the
+# backup tree by suffix match.
 acc diff --snapshot /path/to/backup journal.ledger
+
+# Snapshot, whole working tree: `.` (or omitted) resolves to the
+# current directory and the entire subtree is matched against the
+# snapshot. Common usage from the working-tree root.
+cd ~/journals
+acc diff --snapshot /path/to/backup .
 ```
 
-Both produce identical output; the snapshot form just saves you
-from typing the tree path twice.
+The snapshot form saves you from typing the tree path twice and
+works regardless of where in the working tree you stand.
 
 ### `acc navigate` (aliases `nav`, `ui`)
 

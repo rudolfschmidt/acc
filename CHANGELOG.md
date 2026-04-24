@@ -204,6 +204,80 @@ standalone subcommands — format, diff, update, check — keep only
 their own args. `acc format --help` now shows one flag and one
 positional argument, not the whole global set.
 
+### Sat 25 Apr 2026 - `acc format`: posting comments preserve their source position
+
+Fix: a comment line that followed a posting (`; some note` on its
+own indented line, after the posting it belongs to) was being
+attached to the surrounding transaction's `tx.comments` by the
+parser, alongside any genuine pre-posting transaction-level
+comments. The format renderer then emitted **all** of those before
+**all** postings, so a journal with comments interleaved between
+postings came out with the comments stacked at the top of the
+transaction, breaking the source order.
+
+Concrete impact: a journal like
+```
+2023-09-20 * vendor
+    ; document-id-A.pdf      (tx-level comment)
+    expenses:foo    €-800.00
+    ; document-id-B.pdf      (commented-out alternative for foo)
+    ; alternative posting    (also commented-out)
+    income:counterparty
+```
+came out reordered as `tx-comment-A, tx-comment-B, tx-comment-C,
+foo-posting, counterparty-posting` — the two trailing comments
+silently jumped to the top.
+
+Parser fix: `extend_block` now attaches an indented `;` line to
+the **last posting** of the current transaction if one exists,
+otherwise to `tx.comments`. This matches ledger-cli convention:
+comments after a posting belong to it. The format renderer was
+already emitting `posting.comments` immediately after each
+posting, so no change there — the moment the parser routes them
+correctly, the source order is preserved end-to-end.
+
+### Sat 25 Apr 2026 - `acc diff --snapshot DIR .` now matches the snapshot root itself
+
+Fix: running `acc diff --snapshot SNAP .` (or with no positional
+argument) from a working-tree root that mirrors `SNAP`'s top
+layout failed with `no matching path under SNAP for …`. The
+longest-suffix walk iterated `0..components.len()` and stopped
+one step short of the empty suffix — the case where `SNAP`
+itself directly corresponds to the working-tree root. Loop now
+runs `0..=components.len()`, so the empty suffix is tried last
+and a backup directory that fully mirrors the working tree is
+paired against the working-tree root without typing the nested
+path.
+
+### Sat 25 Apr 2026 - `acc diff` treats whitespace-only files as identical to empty
+
+Fix: an old file containing nothing but a single newline (or any
+whitespace — tabs, spaces, blank lines) compared against a 0-byte
+new file produced a one-line removal hunk:
+```
+@@ -1,1 +1,0 @@
+-
+```
+A whitespace-only file has no token content; it is semantically
+identical to an empty file. `compare_files` now short-circuits
+to an empty hunk list when both sides are whitespace-only,
+skipping the LCS walk entirely. Real content vs. an empty file
+still surfaces as a removal — only the both-sides-empty edge case
+is treated as a non-difference.
+
+### Sat 25 Apr 2026 - `acc diff` argument-count error uses clap's native style
+
+Polish: when called without `--snapshot`, `acc diff` requires
+exactly two paths (`OLD NEW`). Previously the wrong count produced
+a plain `Error: diff takes exactly two paths…` message in the
+project's own error format. clap-derive cannot express the
+"path count depends on whether `--snapshot` is set" rule
+directly, so the validation runs post-parse — but it now goes
+through clap's own `Command::error()` machinery, producing the
+familiar `error: …` headline plus a `Usage:` hint and the
+`For more information, try '--help'` footer. Consistent with how
+clap reports every other invalid invocation.
+
 ## 0.3.2 — 2026-04-24
 
 TLS backend switched from bundled `rustls` + `ring` to system

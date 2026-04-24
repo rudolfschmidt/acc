@@ -27,16 +27,12 @@ use crate::error::Error;
 const CONTEXT_LINES: usize = 3;
 
 pub fn run(snapshot: Option<&str>, paths: &[String]) -> Result<(), Error> {
+    // Path-count validation lives at the clap layer in `main.rs` —
+    // this entry point trusts the caller to have passed exactly two
+    // paths in the no-snapshot case, or any number with --snapshot.
     let pairs = match snapshot {
         Some(snap) => build_pairs_via_snapshot(Path::new(snap), paths)?,
-        None => {
-            if paths.len() != 2 {
-                return Err(Error::from(
-                    "diff takes exactly two paths (OLD NEW) without --snapshot".to_string(),
-                ));
-            }
-            collect_pairs(Path::new(&paths[0]), Path::new(&paths[1]))?
-        }
+        None => collect_pairs(Path::new(&paths[0]), Path::new(&paths[1]))?,
     };
 
     let mut files_compared = 0usize;
@@ -188,6 +184,11 @@ fn build_pairs_via_snapshot(
 
 /// Walk `work_abs` components from right to left, returning the
 /// snapshot-side path for the longest suffix that exists on disk.
+/// The empty suffix is also tried (`skip == components.len()`),
+/// which covers the case where `snapshot_root` itself mirrors the
+/// working-tree root — common when the user invokes `acc diff
+/// --snapshot DIR .` from the working-tree root and the backup
+/// preserves the same top-level layout.
 fn longest_suffix_match(snapshot_root: &Path, work_abs: &Path) -> Option<PathBuf> {
     let components: Vec<&std::ffi::OsStr> = work_abs
         .components()
@@ -198,9 +199,9 @@ fn longest_suffix_match(snapshot_root: &Path, work_abs: &Path) -> Option<PathBuf
         .collect();
 
     // Try longest suffix first: start with the full component list,
-    // then shrink from the front. The first existing path under
-    // `snapshot_root` wins.
-    for skip in 0..components.len() {
+    // shrink from the front, and finally try the empty suffix
+    // (`snapshot_root` itself). The first existing path wins.
+    for skip in 0..=components.len() {
         let mut candidate = snapshot_root.to_path_buf();
         for seg in &components[skip..] {
             candidate.push(seg);
@@ -268,6 +269,17 @@ fn compare_files(old_path: &Path, new_path: &Path) -> Result<Vec<Hunk>, Error> {
         .map_err(|e| Error::from(format!("read {}: {}", old_path.display(), e)))?;
     let new_src = fs::read_to_string(new_path)
         .map_err(|e| Error::from(format!("read {}: {}", new_path.display(), e)))?;
+
+    // Whitespace-only files (only newlines / spaces / tabs) are
+    // semantically equivalent to a 0-byte file — there's no token
+    // content on either side. Treat both as identical and emit no
+    // hunks. Without this, an old `\n` snapshot vs. a 0-byte working
+    // file (or vice versa) would surface as a removed empty line.
+    if old_src.chars().all(|c| c.is_whitespace())
+        && new_src.chars().all(|c| c.is_whitespace())
+    {
+        return Ok(Vec::new());
+    }
 
     let old_lines: Vec<&str> = old_src.lines().collect();
     let new_lines: Vec<&str> = new_src.lines().collect();
