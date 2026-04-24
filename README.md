@@ -432,15 +432,7 @@ Output locations:
 
 ## Examples
 
-Visual walkthroughs of each command with realistic output.
-
-Feature-focused, copy-paste-ready walkthroughs live in
-[`examples/`](examples/) — one markdown file per topic (basics,
-filters, currency conversion, fx gain/loss, CTA, lots and costs,
-assertions), each with the journal inline and every command's
-verbatim output.
-
-### `bal` — hierarchical balances
+The two reports most users run first:
 
 ```
 $ acc -f journal.ledger bal
@@ -457,22 +449,6 @@ $-2500.00    salary
 ```
 
 ```
-$ acc -f journal.ledger bal --flat
- $7441.80  assets:checking
-$-5000.00  equity:opening
-   $58.20  expenses:food
-$-2500.00  income:salary
-```
-
-```
-$ acc -f journal.ledger bal ^assets
- $7441.80  assets
- $7441.80    checking
-```
-
-### `reg` — register with running total
-
-```
 $ acc -f journal.ledger reg
 2024-01-01 initial balances   assets:checking    $5000.00   $5000.00
                               equity:opening    $-5000.00          0
@@ -482,94 +458,26 @@ $ acc -f journal.ledger reg
                               income:salary    $-2500.00          0
 ```
 
-### `print` — normalised vs raw
+Everything else — `print`, `accounts`, `commodities`, `codes`,
+`check`, filter patterns, `-x` currency conversion, `--market`,
+fx gain/loss, CTA, lot annotations, balance assertions — is
+covered in topic-specific walkthroughs with journal inline and
+verbatim output:
 
-```
-$ acc -f journal.ledger print
-2024-01-01 (opening) initial balances
-    assets:checking            $5000.00
-    equity:opening            $-5000.00
-
-2024-01-05 (42) Groceries
-    expenses:food                $58.20
-    assets:checking             $-58.20
-
-2024-01-10 * paycheck
-    assets:checking            $2500.00
-    income:salary             $-2500.00
-```
-
-```
-$ acc -f journal.ledger print --raw
-2024-01-01 (opening) initial balances
-    assets:checking           $5000.00
-    equity:opening           $-5000.00
-
-2024-01-05 (42) Groceries
-    expenses:food              $58.20
-    assets:checking
-
-2024-01-10 * paycheck
-    assets:checking           $2500.00
-    income:salary            $-2500.00
-```
-
-### `accounts` — flat and tree
-
-```
-$ acc -f journal.ledger accounts
-assets:checking
-equity:opening
-expenses:food
-income:salary
-```
-
-```
-$ acc -f journal.ledger accounts --tree
-assets
-  checking
-equity
-  opening
-expenses
-  food
-income
-  salary
-```
-
-### `commodities`
-
-```
-$ acc -f journal.ledger commodities
-$
-```
-
-```
-$ acc -f journal.ledger commodities --date
-2024-01-01  $
-```
-
-### `codes`
-
-```
-$ acc -f journal.ledger codes
-42
-opening
-```
-
-### `check`
-
-```
-$ acc -f journal.ledger check
-Scanned 3 transactions, 7 postings.
-
-Checks:
-  ✓ commodity-casing — multi-char commodity symbols must be all-uppercase
-
-No issues found.
-```
-
-When an issue is found, the check is marked `✗` and the offending
-locations are listed.
+- [`examples/01-basics.md`](examples/01-basics.md) — all the list-
+  and print-style commands
+- [`examples/02-filters.md`](examples/02-filters.md) — the filter
+  DSL, `-r`, `-R`, multi-`-p`, date ranges
+- [`examples/03-currency-conversion.md`](examples/03-currency-conversion.md) —
+  `-x`, `--market`, multi-hop
+- [`examples/04-fx-gain-loss.md`](examples/04-fx-gain-loss.md) —
+  realising gain/loss on multi-commodity trades
+- [`examples/05-cta.md`](examples/05-cta.md) — IAS 21 / ASC 830
+  Cumulative Translation Adjustment
+- [`examples/06-lots-and-costs.md`](examples/06-lots-and-costs.md) —
+  `@` / `@@` / `{COST}` lot tracking
+- [`examples/07-assertions.md`](examples/07-assertions.md) —
+  balance assertions and assignments
 
 ### Error output
 
