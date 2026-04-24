@@ -316,14 +316,23 @@ fn extend_block(
     let content = text.trim_start();
 
     // Whole-line comment under the block (e.g. `    ; note on the tx`).
-    // Attaches to a Transaction, dropped otherwise.
+    // For Transactions: if a posting already exists, the comment
+    // attaches to that last posting (ledger-cli convention — a
+    // comment that follows a posting belongs to it). Otherwise it
+    // is a transaction-level comment that renders before any
+    // posting. Comments under non-Transaction entries are dropped.
     if content.starts_with(';') || content.starts_with('#') {
         if let Entry::Transaction(tx) = &mut last.value {
-            tx.comments.push(Located {
+            let comment = Located {
                 file: file.clone(),
                 line,
                 value: Comment { text: content[1..].trim().to_string() },
-            });
+            };
+            if let Some(last_posting) = tx.postings.last_mut() {
+                last_posting.value.comments.push(comment);
+            } else {
+                tx.comments.push(comment);
+            }
         }
         return Ok(());
     }

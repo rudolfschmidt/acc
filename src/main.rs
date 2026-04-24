@@ -403,8 +403,25 @@ fn start() -> Result<(), acc::Error> {
     }
 
     // Diff is standalone — source-level file/tree comparison, no
-    // downstream pipeline.
+    // downstream pipeline. Path-count validation is conditional on
+    // `--snapshot` and not expressible via clap-derive alone, so the
+    // check runs here with a clap-styled error so the user sees the
+    // usual `error: …` + Usage block.
     if let Command::Diff { snapshot, paths } = &command {
+        if snapshot.is_none() && paths.len() != 2 {
+            use clap::CommandFactory;
+            let mut cmd = Args::command();
+            cmd.find_subcommand_mut("diff")
+                .unwrap()
+                .error(
+                    clap::error::ErrorKind::WrongNumberOfValues,
+                    format!(
+                        "expected 2 paths (OLD NEW) without --snapshot, got {}",
+                        paths.len()
+                    ),
+                )
+                .exit();
+        }
         return acc::commands::diff::run(snapshot.as_deref(), paths);
     }
 
