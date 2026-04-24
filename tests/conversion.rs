@@ -99,3 +99,60 @@ fn same_commodity_is_noop() {
     assert_eq!(amt.value, Decimal::from(100));
     assert_eq!(amt.commodity, "EUR");
 }
+
+/// Transit accounts that net to zero in their native commodity
+/// accumulate drift under per-posting historical conversion. The
+/// translator phase appends a paren-virtual posting on the declared
+/// `fx cta` account so the drift is named and reportable — the
+/// pattern matches how the realizer labels fx gain/loss on
+/// multi-commodity transactions.
+#[test]
+fn cta_labels_transit_drift_on_declared_account() {
+    let mut j = common::load(
+        "account in:cta\n\
+         \tcta gain\n\
+         account ex:cta\n\
+         \tcta loss\n\
+         P 2024-01-15 EUR USD 1.10\n\
+         P 2024-06-15 EUR USD 1.05\n\
+         P 2024-12-15 EUR USD 1.08\n\
+         2024-01-15 * salary arrives\n\
+         \tassets:checking       10 EUR\n\
+         \tincome:salary        -10 EUR\n\
+         2024-06-15 * move to savings\n\
+         \tassets:savings        10 EUR\n\
+         \tassets:checking      -10 EUR\n\
+         2024-12-15 * grocery spend\n\
+         \texpenses:food         10 EUR\n\
+         \tassets:savings       -10 EUR\n",
+    );
+    assert_eq!(j.cta_gain.as_deref(), Some("in:cta"));
+    assert_eq!(j.cta_loss.as_deref(), Some("ex:cta"));
+    acc::translator::translate(
+        &mut j.transactions,
+        "USD",
+        &j.prices,
+        None,
+        "in:cta",
+        "ex:cta",
+        2,
+    );
+    acc::rebalancer::rebalance(&mut j.transactions, "USD", &j.prices, None);
+
+    // At least one CTA account must now carry a non-zero drift.
+    let mut cta_sum = Decimal::zero();
+    for lt in &j.transactions {
+        for lp in &lt.value.postings {
+            if lp.value.account != "in:cta" && lp.value.account != "ex:cta" {
+                continue;
+            }
+            if let Some(a) = &lp.value.amount {
+                cta_sum = cta_sum + a.value;
+            }
+        }
+    }
+    assert!(
+        !cta_sum.is_zero(),
+        "CTA accounts must show the absorbed drift"
+    );
+}

@@ -3,10 +3,9 @@
 //! Layout: `from → to → BTreeMap<day, rate>`. Two HashMap probes land
 //! on a per-pair time series; a range query on that BTreeMap picks
 //! the latest rate at or before the requested day. Commodity symbols
-//! arrive already interned as `Arc<str>` from the resolver — the
-//! indexer just stores the shared references, no per-insert dedup or
-//! string allocation. Dates are stored as `u32` days-since-epoch so
-//! comparison is an integer op.
+//! are compared case-sensitively — `USD` and `usd` are distinct.
+//! Dates are stored as `u32` days-since-epoch so comparison is an
+//! integer op.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;

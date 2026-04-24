@@ -35,15 +35,22 @@ pub struct Resolved {
     pub prices: Vec<Located<Price>>,
     pub fx_gain: Option<String>,
     pub fx_loss: Option<String>,
+    pub cta_gain: Option<String>,
+    pub cta_loss: Option<String>,
     /// Explicit `precision N` values from `commodity` directives.
     /// The loader merges these over the amount-derived `Journal.precisions`
     /// so declared commodities render with exactly N fractional digits,
     /// regardless of what the posting amounts contain.
     pub precisions: HashMap<String, usize>,
+    /// `alias → canonical` map collected from `commodity` directives.
+    /// Handed downstream so CLI targets like `-x EUR` can be resolved
+    /// to `€` before they reach the rebalancer or the price DB.
+    pub aliases: HashMap<String, String>,
 }
 
 pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
-    let (aliases, fx_gain, fx_loss, precisions) = collect_declarations(&entries)?;
+    let (aliases, fx_gain, fx_loss, cta_gain, cta_loss, precisions) =
+        collect_declarations(&entries)?;
 
     // Parallel Arc-based alias table for the Price path. Each alias
     // maps to an interned primary `Arc<str>`; the same interner is
@@ -98,7 +105,10 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         prices,
         fx_gain,
         fx_loss,
+        cta_gain,
+        cta_loss,
         precisions,
+        aliases,
     })
 }
 
@@ -133,12 +143,15 @@ fn resolve_arc(
 }
 
 /// First pass: walk entries, build the alias table and capture the
-/// fx-gain / fx-loss accounts. Errors on any conflict.
+/// fx-gain / fx-loss / cta-gain / cta-loss accounts. Errors on any
+/// conflict.
 fn collect_declarations(
     entries: &[Located<Entry>],
 ) -> Result<
     (
         HashMap<String, String>,
+        Option<String>,
+        Option<String>,
         Option<String>,
         Option<String>,
         HashMap<String, usize>,
@@ -148,6 +161,8 @@ fn collect_declarations(
     let mut aliases: HashMap<String, String> = HashMap::new();
     let mut fx_gain: Option<Declaration> = None;
     let mut fx_loss: Option<Declaration> = None;
+    let mut cta_gain: Option<Declaration> = None;
+    let mut cta_loss: Option<Declaration> = None;
     let mut precisions: HashMap<String, usize> = HashMap::new();
 
     for e in entries {
@@ -202,6 +217,36 @@ fn collect_declarations(
                 }
                 fx_loss = Some(Declaration { line: e.line, name: name.clone() });
             }
+            Entry::CtaGainAccount(name) => {
+                if let Some(prev) = &cta_gain {
+                    if prev.name != *name {
+                        return Err(ResolveError::new(
+                            e.file.clone(),
+                            e.line,
+                            format!(
+                                "cta gain account already set to `{}` at line {}",
+                                prev.name, prev.line
+                            ),
+                        ));
+                    }
+                }
+                cta_gain = Some(Declaration { line: e.line, name: name.clone() });
+            }
+            Entry::CtaLossAccount(name) => {
+                if let Some(prev) = &cta_loss {
+                    if prev.name != *name {
+                        return Err(ResolveError::new(
+                            e.file.clone(),
+                            e.line,
+                            format!(
+                                "cta loss account already set to `{}` at line {}",
+                                prev.name, prev.line
+                            ),
+                        ));
+                    }
+                }
+                cta_loss = Some(Declaration { line: e.line, name: name.clone() });
+            }
             _ => {}
         }
     }
@@ -210,6 +255,8 @@ fn collect_declarations(
         aliases,
         fx_gain.map(|d| d.name),
         fx_loss.map(|d| d.name),
+        cta_gain.map(|d| d.name),
+        cta_loss.map(|d| d.name),
         precisions,
     ))
 }

@@ -56,7 +56,10 @@ where
         prices,
         fx_gain: resolved.fx_gain,
         fx_loss: resolved.fx_loss,
+        cta_gain: resolved.cta_gain,
+        cta_loss: resolved.cta_loss,
         precisions,
+        aliases: resolved.aliases,
     })
 }
 

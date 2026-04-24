@@ -46,6 +46,18 @@ pub enum Entry {
     /// Produced when `account NAME` is followed by indented `fx loss`.
     FxLossAccount(String),
 
+    /// Produced when `account NAME` is followed by indented
+    /// `cta gain`. Target for positive Cumulative Translation
+    /// Adjustments — the drift absorbed when a transit account
+    /// nets to zero in native but gained value in the `-x` target
+    /// currency over its holding period.
+    CtaGainAccount(String),
+
+    /// Produced when `account NAME` is followed by indented
+    /// `cta loss`. Target for negative Cumulative Translation
+    /// Adjustments — symmetric counterpart to `cta gain`.
+    CtaLossAccount(String),
+
     /// A top-level comment line (`;` or `#` at column 0).
     Comment(String),
 }

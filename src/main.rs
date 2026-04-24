@@ -9,7 +9,10 @@ use clap::{Parser, Subcommand};
 struct Args {
     /// Ledger file or directory to load. Directories are walked
     /// recursively. May be given multiple times; order is preserved
-    /// and matters for transactions with identical dates.
+    /// and matters for transactions with identical dates. Not global:
+    /// clap's `global = true` silently drops earlier `-f` values when
+    /// the flag also appears after the subcommand, so `-f` must stay
+    /// top-level and all `-f` occurrences must precede the subcommand.
     #[arg(short = 'f', long = "file", value_name = "PATH")]
     paths: Vec<String>,
 
@@ -23,13 +26,33 @@ struct Args {
 
     /// Include only transactions in this period. Accepts a year
     /// (YYYY), a month (YYYY-MM), or a single day (YYYY-MM-DD).
-    /// Shortcut for setting `--begin` and `--end` together.
+    /// Shortcut for setting `--begin` and `--end` together. Repeat
+    /// `-p` to include multiple discrete periods — each period works
+    /// independently and a transaction is kept if it matches any.
     #[arg(long = "period", short = 'p', value_name = "PERIOD", global = true)]
-    period: Option<String>,
+    periods: Vec<String>,
 
-    /// Include future transactions (default: only up to today)
-    #[arg(long)]
+    /// Include transactions dated after today. Hidden by default so
+    /// forward-dated recurring entries (rent, subscriptions) don't
+    /// clutter "what has happened" reports.
+    #[arg(long, global = true)]
     future: bool,
+
+    /// Show real postings only — drop every virtual posting
+    /// (paren-virtual `(account)` and bracket-virtual `[account]`)
+    /// from the output. Realizer and translator still compute their
+    /// adjustments for correctness, but their injected postings
+    /// (fx gain / fx loss / translation adjustment) are hidden.
+    #[arg(short = 'R', long = "real", global = true)]
+    real: bool,
+
+    /// Related postings. With a pattern filter, show the *other*
+    /// postings of the matched transactions — the counter-parties —
+    /// instead of the matched postings themselves. `acc reg ^ex:cta
+    /// -r` shows which accounts balance against ex:cta in each
+    /// transaction.
+    #[arg(short = 'r', long = "related", global = true)]
+    related: bool,
 
     /// Sort by field: date, amount, account, description. Prefix with - for reverse. (default: date)
     #[arg(short = 'S', long = "sort", default_value = "date")]
@@ -129,9 +152,10 @@ enum Command {
     /// Update exchange rate data (MEXC for crypto, openexchangerates for fiat).
     /// Standalone — does not read the journal.
     Update {
-        /// Trading pair(s) in BASE/QUOTE format, e.g. BTC/USDT ETH/USDT.
-        /// If omitted, all existing crypto files are updated.
-        #[arg(long = "pair", num_args = 1..)]
+        /// Trading pair in BASE/QUOTE format, e.g. BTC/USDT. Repeat
+        /// `--pair` to update multiple pairs. If omitted, all existing
+        /// crypto files under $ACC_PRICES_DIR/crypto/ are updated.
+        #[arg(long = "pair")]
         pairs: Vec<String>,
         /// Overwrite data from this date onwards (YYYY-MM-DD)
         #[arg(long = "since", conflicts_with = "date")]
@@ -247,8 +271,33 @@ fn collect_ledger_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>
     }
 }
 
+/// Pull every `-f` / `--file PATH` pair out of the raw argv before
+/// clap sees it. Works around a clap-derive limitation: global +
+/// `Vec<String>` args are bound to a single subcommand level, so
+/// `-f` instances split across `acc -f A bal -f B` get dropped on
+/// one side. Pre-parsing here collects them all into one place and
+/// hands clap an argv that no longer contains the flag.
+fn split_file_args() -> (Vec<String>, Vec<String>) {
+    let mut iter = std::env::args();
+    let mut rest = vec![iter.next().unwrap()];
+    let mut files = Vec::new();
+    while let Some(a) = iter.next() {
+        match a.as_str() {
+            "-f" | "--file" => {
+                if let Some(v) = iter.next() {
+                    files.push(v);
+                }
+            }
+            _ => rest.push(a),
+        }
+    }
+    (files, rest)
+}
+
 fn start() -> Result<(), acc::Error> {
-    let args = Args::parse();
+    let (files, argv) = split_file_args();
+    let mut args = Args::parse_from(argv);
+    args.paths = files;
 
     let Some(command) = args.command else {
         use clap::CommandFactory;
@@ -350,13 +399,26 @@ fn start() -> Result<(), acc::Error> {
 
     let mut journal = acc::load(&paths).map_err(|e| acc::Error::from(e.to_string()))?;
 
+    // Resolve the `-x` target through the journal's aliases so
+    // `-x EUR` and `-x €` both collapse to the canonical symbol the
+    // price DB and postings are stored under. Without this, the
+    // lookup silently misses when the CLI uses one spelling and the
+    // journal the other.
+    let exchange_target: Option<String> = args.exchange.as_deref().map(|t| {
+        journal
+            .aliases
+            .get(t)
+            .cloned()
+            .unwrap_or_else(|| t.to_string())
+    });
+
     // Realizer phase: inject fx gain/loss postings where the
     // transaction's implied rate diverges from the market rate in
     // the price DB. Runs *before* the filter so pattern matches like
     // `acc bal Equity:FxGain` can see the synthetic postings. Needs
     // `-x TARGET` plus both `fx gain` / `fx loss` accounts
     // declared in the journal; otherwise silently skipped.
-    if let Some(target) = args.exchange.as_deref() {
+    if let Some(target) = exchange_target.as_deref() {
         if let (Some(gain), Some(loss)) = (
             journal.fx_gain.as_deref(),
             journal.fx_loss.as_deref(),
@@ -372,18 +434,62 @@ fn start() -> Result<(), acc::Error> {
         }
     }
 
+    // Translator phase (CTA): emit synthetic translation-adjustment
+    // transactions for transit accounts whose native sum is zero but
+    // whose target drift is non-zero. Both `cta gain` and `cta loss`
+    // accounts must be declared so positive and negative drifts can
+    // be routed separately. Runs *before* filter so `acc bal in:cta`
+    // pattern matches the injected postings.
+    if let Some(target) = exchange_target.as_deref() {
+        if let (Some(cta_gain), Some(cta_loss)) = (
+            journal.cta_gain.as_deref(),
+            journal.cta_loss.as_deref(),
+        ) {
+            let fixed_date: Option<String> = args.market.as_deref().map(|m| {
+                if m == "today" {
+                    acc::date::ms_to_date(acc::date::current_ms())
+                } else {
+                    m.to_string()
+                }
+            });
+            let precision = journal.precisions.get(target).copied().unwrap_or(2);
+            acc::translator::translate(
+                &mut journal.transactions,
+                target,
+                &journal.prices,
+                fixed_date.as_deref(),
+                cta_gain,
+                cta_loss,
+                precision,
+            );
+        }
+    }
+
     // Expand `-p` / `-b` / `-e` with the same period grammar: a year
     // (`YYYY`), a month (`YYYY-MM`) or a day (`YYYY-MM-DD`). Both
     // `-b` and `-e` take the *start* of the specified period — they
     // are point-in-time cutoffs, not spans. `-e` stays exclusive as
     // before. `-p` is the only one that spans: its half-open range
     // covers the whole period.
-    let (period_begin, period_end) = match args.period.as_deref() {
-        Some(p) => match expand_period(p) {
-            Ok((b, e)) => (Some(b), Some(e)),
+    // Expand every `-p` up front. Single `-p` becomes a normal
+    // begin/end pair for the main filter. Multiple `-p` drop the
+    // begin/end route and filter transactions against the union of
+    // periods further below.
+    let period_ranges: Vec<(String, String)> = args
+        .periods
+        .iter()
+        .map(|p| match expand_period(p) {
+            Ok(pair) => pair,
             Err(e) => fail(&e),
-        },
-        None => (None, None),
+        })
+        .collect();
+    let (period_begin, period_end) = match period_ranges.len() {
+        0 => (None, None),
+        1 => (
+            Some(period_ranges[0].0.clone()),
+            Some(period_ranges[0].1.clone()),
+        ),
+        _ => (None, None),
     };
     let explicit_begin = args.begin.as_deref().map(|b| match expand_period(b) {
         Ok((start, _)) => start,
@@ -394,17 +500,56 @@ fn start() -> Result<(), acc::Error> {
         Err(e) => fail(&e),
     });
     let begin = explicit_begin.as_deref().or(period_begin.as_deref());
-    let end = explicit_end.as_deref().or(period_end.as_deref());
+    let user_end = explicit_end.as_deref().or(period_end.as_deref());
+
+    // Hide future transactions by default. The filter's `end` is
+    // exclusive, so `today+1` keeps everything up to and including
+    // today and drops anything strictly after. When the user already
+    // passed `-e` / `-p`, we take the earlier of the two cutoffs.
+    let future_cap: Option<String> = (!args.future).then(|| {
+        let today_str = acc::date::ms_to_date(acc::date::current_ms());
+        let today = acc::date::Date::parse(&today_str)
+            .expect("current_ms() returns valid YYYY-MM-DD");
+        acc::date::Date::from_days(today.days() + 1).to_string()
+    });
+    let end: Option<&str> = match (user_end, future_cap.as_deref()) {
+        (Some(u), Some(cap)) => Some(if u < cap { u } else { cap }),
+        (Some(u), None) => Some(u),
+        (None, Some(cap)) => Some(cap),
+        (None, None) => None,
+    };
 
     // Filter phase: scope the journal to the command's pattern and
     // the global --begin / --end date range. Runs once here so every
     // commander sees an already-scoped journal.
-    let mut journal = acc::filter::filter(journal, command.patterns(), begin, end);
+    let mut journal = acc::filter::filter(
+        journal,
+        command.patterns(),
+        begin,
+        end,
+        args.related,
+    );
+
+    // Multiple `-p`: keep transactions whose date falls within any
+    // of the supplied periods. Half-open `[begin, end)` per period.
+    if period_ranges.len() > 1 {
+        let parsed: Vec<(acc::date::Date, acc::date::Date)> = period_ranges
+            .iter()
+            .filter_map(|(b, e)| {
+                let b = acc::date::Date::parse(b).ok()?;
+                let e = acc::date::Date::parse(e).ok()?;
+                Some((b, e))
+            })
+            .collect();
+        journal.transactions.retain(|lt| {
+            parsed.iter().any(|(b, e)| lt.value.date >= *b && lt.value.date < *e)
+        });
+    }
 
     // Rebalance phase: convert posting amounts into -x target.
     // `--market [DATE]` picks a fixed snapshot date; without it each
     // posting uses its own tx.date.
-    if let Some(target) = args.exchange.as_deref() {
+    if let Some(target) = exchange_target.as_deref() {
         let fixed_date: Option<String> = args.market.as_deref().map(|m| {
             if m == "today" {
                 acc::date::ms_to_date(acc::date::current_ms())
@@ -418,6 +563,17 @@ fn start() -> Result<(), acc::Error> {
             &journal.prices,
             fixed_date.as_deref(),
         );
+    }
+
+    // `-R` / `--real`: drop every virtual posting from the output.
+    // Realizer/translator injections (fx gain/loss, CTA release) all
+    // use virtual postings, so this hides them while keeping the
+    // underlying computation intact.
+    if args.real {
+        for lt in &mut journal.transactions {
+            lt.value.postings.retain(|lp| !lp.value.is_virtual);
+        }
+        journal.transactions.retain(|lt| !lt.value.postings.is_empty());
     }
 
     // Sort phase: user-controlled ordering applied after rebalance.

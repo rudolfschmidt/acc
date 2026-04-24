@@ -188,10 +188,10 @@ fn format_title(tx: &Transaction) -> String {
 }
 
 fn render_account(p: &Posting) -> String {
-    if p.is_virtual {
-        format!("({})", p.account)
-    } else {
-        p.account.clone()
+    match (p.is_virtual, p.balanced) {
+        (true, true) => format!("[{}]", p.account),
+        (true, false) => format!("({})", p.account),
+        (false, _) => p.account.clone(),
     }
 }
 

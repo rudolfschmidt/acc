@@ -1,5 +1,139 @@
 # Changelog
 
+### Fri 24 Apr 2026 - CTA: Currency Translation Adjustment phase
+
+A long-standing display problem with the default per-posting
+historical conversion was tracked down and resolved: transit
+accounts (cash, wallets, escrow) that netted to zero in their
+native commodity kept showing non-zero drift in a `-x` target
+currency, even though nothing economically happened — the money had
+flowed through and out. The drift was real (rate moved between
+inflow and outflow), but attributing it to the asset account
+misrepresented where the value actually sat. Under IFRS IAS 21 and
+US-GAAP ASC 830 this translation residual belongs on a **Cumulative
+Translation Adjustment** account in equity / other comprehensive
+income, not smeared over the balance-sheet items that briefly held
+the foreign currency.
+
+A new `translator/` phase was introduced between `realizer` and
+`filter`. For every `(account, commodity)` group whose native
+amounts summed to zero over the reporting period, the translator
+walked postings chronologically, tracked running native and target
+sums, and at every zero-crossing of the native balance emitted a
+synthetic transaction on that date:
+
+```
+<date> * translation adjustment
+    [<transit-account>]   TARGET -drift
+    [<cta-account>]       TARGET drift
+```
+
+Both postings are **bracket-virtual** (`is_virtual: true,
+balanced: true`) so they participate in balance — driving the
+transit account's target sum to zero — while rendering in square
+brackets in the register to mark them as translator-injected.
+Double-entry remains intact: the two postings sum to zero in the
+target currency.
+
+Two new account sub-directives — `cta gain` and `cta loss` —
+were added, parallel to the existing `fx gain` / `fx loss` pair.
+Both must be declared for the translator to run; positive drift
+(target value retained while holding native) routes to
+`cta_loss`, negative drift (target value increased while holding
+native) routes to `cta_gain`, following the sign convention of the
+existing fx realizer. Multi-commodity transactions are tainted and
+skipped — those belong to the realizer (fx gain/loss on trades) and
+co-booking would double-count the same rate divergence.
+
+Deliberate interaction with `--market`: when rebalance uses a fixed
+snapshot date, every posting converts at one rate, so transit
+accounts net to zero in target automatically and the translator
+emits nothing. CTA only materialises under the default per-tx-date
+mode, which is where drift is structurally possible.
+
+This is, as far as the research could find, the first
+plaintext-accounting tool to implement IAS 21 / ASC 830
+translation adjustment automatically. hledger and ledger-cli
+default to single-rate revaluation (no drift in the first place, but
+historical stability lost for income/expense). beancount and
+rustledger have the option infrastructure for conversion accounts
+but no automatic booking — users would need to invoke
+`summarize.conversions()` manually.
+
+### Fri 24 Apr 2026 - Register renders bracket-virtual with `[...]`
+
+The register's `render_account` previously mapped both posting-
+virtual forms to `(account)` parentheses. With the translator
+emitting `is_virtual: true, balanced: true` postings that do
+participate in balance, the rendering was extended to distinguish:
+`is_virtual && balanced` → `[account]`, `is_virtual && !balanced`
+→ `(account)`, real postings unchanged. This matches ledger's
+convention and makes translator-injected postings visually
+distinguishable from realizer-injected fx gain/loss labels in
+register output.
+
+### Fri 24 Apr 2026 - `-r` / `--related`, modelled on ledger-cli
+
+The flag was added with semantics taken directly from ledger-cli:
+when a pattern filter would have dropped every non-matching
+posting, `-r` flips the filter to keep the **sibling** postings of
+the matched transactions instead — the counter-parties, the other
+half of each trade. `acc reg ^ex:cta -r` answers "what accounts
+did the CTA drift balance against in each adjustment" without
+having to stare at full transactions.
+
+The implementation went into the existing filter phase: if any
+posting in the transaction matched, the matched postings were
+dropped and the rest retained, else the whole transaction was
+dropped. No new phase needed.
+
+### Fri 24 Apr 2026 - `-R` / `--real`
+
+The complement to `-r`: strip every virtual posting from the
+output while keeping the computation that produced them intact.
+Realizer still injects fx gain/loss; translator still emits
+translation-adjustment transactions; rebalance still converts. But
+the resulting virtual postings (both paren-virtual and
+bracket-virtual) are dropped from the journal before the command
+runs, so the user can see the "real" movements without the
+auto-computed labels obscuring them. Transactions that become
+empty after the filter are removed entirely.
+
+### Fri 24 Apr 2026 - Multi-period `-p` with union semantics
+
+`-p` became repeatable. The first implementation tried range
+semantics — earliest period's start, latest period's end — but
+that was pointed out to be redundant with `-b` / `-e`. The
+semantics were flipped to **union**: each `-p` is an independent
+period, and a transaction is kept if it falls within any of them.
+`acc reg -p 2023-10-01 -p 2023-11-30` shows postings on exactly
+those two days, not everything between them. Single `-p` behaviour
+is unchanged.
+
+### Fri 24 Apr 2026 - `--future` actually implemented
+
+The flag had been declared in clap and documented in the README
+for months but was never read anywhere — a dead signal. It now
+clamps the filter's effective `end` to `today + 1` (exclusive)
+unless `--future` is passed, hiding forward-dated transactions
+(rent, subscriptions, recurring entries) from "what has happened"
+reports. When the user also passes `-e` or `-p`, the earlier of
+the two cutoffs wins.
+
+### Fri 24 Apr 2026 - `-f` pre-parsed out of argv
+
+A reported "conversion silently does nothing" bug turned out to
+be a clap-derive limitation: `global = true` on `Vec<String>`
+binds the field to a single subcommand level's matches, so `-f`
+given both before **and** after the subcommand (the shape the
+user's wrapper script produced: `acc -f CONFIG -f PRICES bal -f
+FILE -x €`) silently dropped one side. The fix pre-parses argv
+before handing it to clap: every `-f PATH` / `--file PATH`
+occurrence is pulled out into a single list, the rest goes to
+clap. The `-f` declaration stayed on the Args struct for `--help`
+and documentation; its value is populated manually from the
+pre-parse.
+
 ### Thu 23 Apr 2026 - Design decisions locked down during the phase work
 
 Several architectural decisions were made explicit during the
