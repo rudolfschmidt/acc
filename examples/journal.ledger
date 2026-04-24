@@ -1,0 +1,11 @@
+2024-01-01 (opening) initial balances
+    assets:checking           $5000.00
+    equity:opening           $-5000.00
+
+2024-01-05 (42) Groceries
+    expenses:food              $58.20
+    assets:checking
+
+2024-01-10 * paycheck
+    assets:checking           $2500.00
+    income:salary            $-2500.00

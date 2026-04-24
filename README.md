@@ -62,13 +62,14 @@ $ acc -f journal.ledger reg
                               income:salary    $-2500.00          0
 ```
 
-The repo ships a [`examples/demo.ledger`](examples/demo.ledger) you can use instead of
-typing the example above:
+The repo ships the journal above at
+[`examples/journal.ledger`](examples/journal.ledger) so you can
+clone and run without copy-pasting:
 
 ```
 git clone https://github.com/rudolfschmidt/acc
 cd acc
-cargo run -- -f journal.ledger bal
+cargo run -- -f examples/journal.ledger bal
 ```
 
 ---
