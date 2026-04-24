@@ -60,6 +60,7 @@ where
         cta_loss: resolved.cta_loss,
         precisions,
         aliases: resolved.aliases,
+        auto_rules: resolved.auto_rules,
     })
 }
 

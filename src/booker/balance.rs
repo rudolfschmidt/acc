@@ -104,7 +104,7 @@ pub(super) fn balance_tx(
                             commodity,
                             value: -sum,
                             decimals,
-                        });
+                                });
                         lp
                     })
                     .collect();
@@ -191,7 +191,7 @@ fn effective_amount(p: &Posting) -> Option<Amount> {
                 commodity: cost.commodity.clone(),
                 value: signed,
                 decimals: 0,
-            }
+                }
         }
     })
 }

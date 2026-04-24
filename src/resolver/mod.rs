@@ -46,6 +46,12 @@ pub struct Resolved {
     /// Handed downstream so CLI targets like `-x EUR` can be resolved
     /// to `€` before they reach the rebalancer or the price DB.
     pub aliases: HashMap<String, String>,
+    /// Automated-transaction rules collected from `= /pattern/` blocks.
+    /// The expander phase applies these after the booker — for every
+    /// posting account that matches a rule, the rule's extra postings
+    /// are injected into the same transaction, scaled by the
+    /// triggering amount.
+    pub auto_rules: Vec<crate::parser::entry::AutoRule>,
 }
 
 pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
@@ -66,6 +72,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
 
     let mut transactions = Vec::new();
     let mut prices = Vec::new();
+    let mut auto_rules = Vec::new();
 
     for Located { file, line, value } in entries {
         match value {
@@ -91,6 +98,44 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                 }
                 transactions.push(Located { file, line, value: tx });
             }
+            Entry::AutoRule(mut rule) => {
+                // Apply commodity aliases to the injected postings'
+                // account names? No — aliases are commodity aliases,
+                // not account aliases. Accounts aren't renamed. Just
+                // collect the rule for the expander.
+                // But: an empty rule (no postings) is useless; reject.
+                if rule.postings.is_empty() {
+                    return Err(ResolveError::new(
+                        file.clone(),
+                        line,
+                        "auto-rule has no postings",
+                    ));
+                }
+                // Sanity: multipliers must sum to zero for the expanded
+                // postings to balance. Reject otherwise early so the
+                // booker won't get confused downstream.
+                let mut total = crate::decimal::Decimal::zero();
+                for p in &rule.postings {
+                    total = total + p.multiplier;
+                }
+                if !total.is_zero() {
+                    return Err(ResolveError::new(
+                        file.clone(),
+                        line,
+                        format!(
+                            "auto-rule multipliers must sum to zero, got {}",
+                            total
+                        ),
+                    ));
+                }
+                // Strip any aliases that resolve in posting accounts —
+                // not relevant for auto-rules (account names are
+                // literal), just store as-is.
+                for _ in &mut rule.postings {
+                    // Placeholder: no per-posting alias work needed.
+                }
+                auto_rules.push(rule);
+            }
             // Commodity/Account scaffolds and Comment entries carry no
             // data we need past this point — drop them.
             _ => {}
@@ -109,6 +154,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         cta_loss,
         precisions,
         aliases,
+        auto_rules,
     })
 }
 

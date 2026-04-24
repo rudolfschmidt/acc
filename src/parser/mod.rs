@@ -74,8 +74,76 @@ fn dispatch(
             });
             Ok(())
         }
+        [b'=', b' ', ..] | [b'=', b'\t', ..] => {
+            parse_auto_rule(&text[1..].trim_start(), line, file, entries)
+        }
         _ => parse_directive(text, line, file, entries),
     }
+}
+
+/// Parse an auto-transaction header line. Body is `/<pattern>/` —
+/// a ledger-cli style regex delimiter. V1 accepts only the simple
+/// form (no `and expr "..."` conditional). Indented `[account]
+/// multiplier` lines attach via `extend_block`.
+fn parse_auto_rule(
+    rest: &str,
+    line: usize,
+    file: &Arc<str>,
+    entries: &mut Vec<Located<Entry>>,
+) -> Result<(), ParseError> {
+    if rest.contains("and expr") {
+        return Err(ParseError::new(
+            line,
+            1,
+            "auto-rule conditional `and expr \"...\"` is not supported yet; \
+             use the simple `= /pattern/` form",
+        ));
+    }
+    let pattern = parse_auto_pattern(rest, line)?;
+    entries.push(Located {
+        file: file.clone(),
+        line,
+        value: Entry::AutoRule(crate::parser::entry::AutoRule {
+            pattern,
+            postings: Vec::new(),
+        }),
+    });
+    Ok(())
+}
+
+fn parse_auto_pattern(
+    rest: &str,
+    line: usize,
+) -> Result<crate::parser::entry::AutoPattern, ParseError> {
+    let body = rest.trim();
+    let inner = body
+        .strip_prefix('/')
+        .and_then(|s| s.strip_suffix('/'))
+        .ok_or_else(|| {
+            ParseError::new(
+                line,
+                1,
+                "auto-rule pattern must be delimited by /…/",
+            )
+        })?;
+    if inner.is_empty() {
+        return Err(ParseError::new(line, 1, "auto-rule pattern is empty"));
+    }
+    let anchored_start = inner.starts_with('^');
+    let anchored_end = inner.ends_with('$');
+    let core = match (anchored_start, anchored_end) {
+        (true, true) => &inner[1..inner.len() - 1],
+        (true, false) => &inner[1..],
+        (false, true) => &inner[..inner.len() - 1],
+        (false, false) => inner,
+    };
+    use crate::parser::entry::AutoPattern;
+    Ok(match (anchored_start, anchored_end) {
+        (true, true) => AutoPattern::Exact(core.to_string()),
+        (true, false) => AutoPattern::Prefix(core.to_string()),
+        (false, true) => AutoPattern::Suffix(core.to_string()),
+        (false, false) => AutoPattern::Contains(core.to_string()),
+    })
 }
 
 /// Parse a `P DATE BASE QUOTE RATE` directive. The leading `P ` has
@@ -326,6 +394,10 @@ fn extend_block(
                 )),
             }
         }
+        Entry::AutoRule(rule) => {
+            let auto_posting = parse_auto_posting(body, line)?;
+            rule.postings.push(auto_posting);
+        }
         _ => return Err(ParseError::new(line, 1, "indented directive not expected here")),
     }
 
@@ -333,6 +405,60 @@ fn extend_block(
         last.value = new_value;
     }
     Ok(())
+}
+
+/// Parse one auto-rule posting line: `[account]  MULTIPLIER` (or the
+/// paren-virtual / real-posting variant). Multiplier is a signed
+/// decimal, applied to the triggering posting's amount during
+/// expansion.
+fn parse_auto_posting(
+    body: &str,
+    line: usize,
+) -> Result<crate::parser::entry::AutoPosting, ParseError> {
+    // Separator between account and multiplier: tab or 2+ spaces,
+    // same rule as regular postings.
+    let (account_raw, multiplier_raw) = split_account_and_amount(body).ok_or_else(|| {
+        ParseError::new(
+            line,
+            1,
+            "auto-rule posting needs account and multiplier separated by 2+ spaces or a tab",
+        )
+    })?;
+    let (account, is_virtual, balanced) = if let Some(inner) =
+        account_raw.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+    {
+        (inner.to_string(), true, true)
+    } else if let Some(inner) =
+        account_raw.strip_prefix('(').and_then(|s| s.strip_suffix(')'))
+    {
+        (inner.to_string(), true, false)
+    } else {
+        (account_raw.to_string(), false, true)
+    };
+    let multiplier = crate::decimal::Decimal::parse(multiplier_raw.trim()).map_err(|e| {
+        ParseError::new(line, 1, format!("invalid auto-rule multiplier: {}", e))
+    })?;
+    Ok(crate::parser::entry::AutoPosting {
+        account,
+        multiplier,
+        is_virtual,
+        balanced,
+    })
+}
+
+/// Split a posting/auto-posting body into (account, amount) where the
+/// separator is a tab or a run of 2+ spaces. Returns `None` if no
+/// such separator exists.
+fn split_account_and_amount(body: &str) -> Option<(&str, &str)> {
+    if let Some(idx) = body.find('\t') {
+        let (a, b) = body.split_at(idx);
+        return Some((a.trim_end(), b.trim_start()));
+    }
+    if let Some(idx) = body.find("  ") {
+        let (a, b) = body.split_at(idx);
+        return Some((a.trim_end(), b.trim_start()));
+    }
+    None
 }
 
 /// Parse the body of a posting line. `body` has already had its indent

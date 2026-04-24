@@ -1,5 +1,209 @@
 # Changelog
 
+## 0.4.0 — 2026-04-24
+
+Three new commands and subsystems landed together: `acc format`
+as an in-place journal formatter that preserves the source byte-
+for-byte inside amount tails, `acc diff` as a source-level
+journal comparison tool (think `diff -w` for ledger files with
+git-style output), and the expander phase that implements
+ledger-cli style automated transactions (`= /pattern/`). The
+filter and conversion flags were regrouped so their help text no
+longer leaks into unrelated subcommands.
+
+### Fri 24 Apr 2026 - `acc format`: in-place re-alignment without re-evaluation
+
+Formatting a journal file back to itself sounds trivial but has a
+subtle correctness trap: if the formatter parses numeric amounts
+into internal `Decimal` values and re-renders them from those
+values, any precision drift or representation quirk in the parser
+gets written back to disk. A real journal in testing hit this
+exactly: an amount written as `$5000.00 @ (USD 1200/12)` — with
+a ledger valuation expression as the cost — was parsed through
+`expression::parse`, evaluated to a `Decimal` with `decimals: 0`
+(expression results carry no user-chosen display precision), and
+re-emitted as `@ USD0` after format. Silent data loss.
+
+The fix inverts the pass-through direction. `acc format` still
+parses the journal (for layout purposes — it needs to know where
+transactions start and which lines are postings), but the **amount
+column content comes verbatim from the source line**, not from the
+parsed AST. The renderer reads each posting's source line, splits
+off the account prefix on tab / 2+ spaces, isolates the amount
+token (everything before the first `@`, `=`, `{`, or `[`), and
+passes the remainder — `@` cost, `{…}` lot, `= assertion`, inline
+`; comment` — through as a single string. Expressions stay as
+expressions, long decimals stay as long decimals, nothing goes
+through `Decimal`.
+
+Column alignment still happens: the account column is measured
+from the AST (so virtual wrappings `(…)` and `[…]` line up even
+when source whitespace varies) and left-aligned on the file's
+maximum account width; the amount column width is measured on the
+source-side amount string and right-aligned. Between them a fixed
+8-space gap and a leading tab indent.
+
+One normalisation: commodity symbol and number are glued with no
+whitespace between (`USD -100` → `USD-100`). This is the only
+character the formatter inserts or removes inside an amount —
+everything else matches the source byte-for-byte.
+
+Only the parser runs — not the resolver, not the booker, not the
+balancer. Journals with unbalanced transactions still format.
+Journals with missing commodity aliases still format. This is
+deliberate: running a formatter is often the very thing you do in
+the middle of editing a broken journal to get the layout right
+before fixing the balance.
+
+Transactions are stably date-sorted by default, with `--no-sort`
+for the case where source order is meaningful (e.g. time-of-day
+within a single date is encoded positionally). Output is written
+atomically via `.tmp` + `rename` to guard against partial writes
+on crash.
+
+Pass `-` as a path to read from stdin and write to stdout instead
+of touching the filesystem. This is the vim-integration story:
+with a single line in the ledger ftplugin —
+
+    autocmd FileType ledger nnoremap <leader>f :%!acc format -<cr>
+
+— pressing `<leader>f` in a ledger buffer pipes the buffer
+through acc and replaces it with the formatted output. Undo
+history is preserved (it's a buffer edit, not a file overwrite +
+reload), and because only the parser runs, format works on
+half-edited journals where the balance doesn't yet compute.
+
+### Fri 24 Apr 2026 - `acc diff`: source-level journal comparison
+
+Verifying that a formatter round-trip preserved the journal's
+content — the motivation for writing `diff` in the first place —
+doesn't work with regular `diff`: whitespace differences dominate
+the output and obscure real changes. `diff -w` ignores whitespace
+but has no way to walk a directory tree of `.ledger` files and
+pair them by relative path.
+
+`acc diff` is `diff -w` for ledger journals, plus directory
+walking and a snapshot-matching convenience. Source lines are
+normalised by stripping every whitespace character before
+comparison (matching `diff --ignore-all-space`), so a posting
+that went from `$5000.00 @ (USD 1200/12)` to `$5000.00 @ USD0`
+shows up as a real content change, not buried under reformatted-
+indentation noise. The output mimics `git diff`:
+`--- OLD` / `+++ NEW` headers and `@@ -line,count +line,count @@`
+hunk markers, red `-` / green `+` prefixes, and 3 lines of
+surrounding context per change block (change blocks within 6
+context lines of each other are merged into one hunk).
+
+An early version of the diff ran on parsed AST entries, comparing
+transaction and posting structs after resolving. That hit the
+same wall as format: the parser evaluates `(USD 1200/12)` into a
+`Decimal` and the evaluated value equals `USD 100` on both sides
+after a lossy round-trip — so the diff found nothing even though
+the source files were byte-different. Moving to source-line
+comparison with whitespace stripping solved that: the diff now
+surfaces exactly what the parser would normalise away on each
+side and the user cares about verifying.
+
+Two invocation modes. Explicit pair:
+
+    acc diff OLD NEW
+
+compares two files or two directories. Directory pairs are
+recursively walked for `.ledger` files and matched by relative
+path; files present on only one side are reported as `- only in
+OLD` or `+ only in NEW`.
+
+Or, with `--snapshot`:
+
+    acc diff --snapshot /path/to/snapshot-root journal.ledger
+
+acc resolves the positional path to absolute form, then walks its
+components right-to-left looking for the longest suffix that
+exists under the snapshot root — so you only ever give the
+snapshot root, not the full nested path into it. With no
+positional argument, the current directory is used. This works
+regardless of the user's backup layout — no environment variable,
+no config file, no convention forced on the snapshot tool of
+choice.
+
+Exit code is 0 when everything matches, 1 on any difference or
+any missing counterpart, so `acc diff` composes into CI checks
+and shell pipelines.
+
+Matching diff to format was the direct reason for building this
+tool: running `acc format` against real journals, spot-checking
+whether the reformat lost anything, and having a tool that
+ignores whitespace (the formatter's job) but catches token-level
+edits (what the user actually wants to verify). Together the
+pair gives confidence: format the file, then diff against the
+pre-format backup, expect no output.
+
+### Fri 24 Apr 2026 - Automated transactions via the expander phase
+
+Ledger-cli's `=` automated-transaction syntax landed, implemented
+as a new `expander` phase running between the booker and the
+realizer. Source form:
+
+    = /^assets:cash/
+        [assets:cash]        -1
+        [expenses:cash]       1
+
+When a regular transaction has a posting whose account matches
+the pattern, the rule's postings are appended to the transaction
+with each multiplier scaled by the triggering posting's amount.
+The example above is the cash-flush pattern: every inflow into
+`assets:cash` gets an automatic counter-posting that zeroes the
+cash account and records the same amount on `expenses:cash`, so
+physical cash withdrawn from the bank is treated as immediately
+spent — the classic "all cash counts as expense" accounting
+policy, no per-coffee tracking required.
+
+The multipliers must sum to zero across a rule — validated in
+the resolver. This guarantees the expansion leaves the
+transaction balanced: the injected postings net to zero among
+themselves in the triggering commodity. A VAT-split variant uses
+this:
+
+    = /^income:gross/
+        [income:gross]       -1
+        [income:net]       0.81
+        [taxes:vat19]      0.19
+
+Matching `income:gross $1000` injects `income:gross $-1000`,
+`income:net $810`, `taxes:vat19 $190`, all in the same commodity,
+and they sum to zero.
+
+Patterns are a subset of Ledger regex — `^prefix`, `suffix$`,
+`^exact$`, bare substring — implemented without a regex engine
+dependency. A full-regex upgrade is possible later if a real
+journal needs it; for now the subset covers the observed
+patterns.
+
+Injected postings don't re-trigger the expander on themselves:
+the rule scanner snapshots the original posting count at the
+start of each transaction. Without this, a rule like `= /cash/`
+matching both `assets:cash` and its injected counter-posting
+`[expenses:cash]` would recurse endlessly.
+
+The `= ... and expr "..."` conditional form from ledger-cli is
+parsed and rejected with an explicit error — it's planned for a
+follow-up release but the syntax is reserved here so journals
+using it don't silently ignore the condition.
+
+### Fri 24 Apr 2026 - Per-subcommand flag grouping (`ReportArgs`)
+
+The filter and conversion flags (`-b`, `-e`, `-p`, `-R`, `-r`,
+`-x`, `--market`, `--sort`, `--future`) used to sit on the
+top-level `Args` struct with `global = true`, so every subcommand
+showed all of them in its help — including `acc format` and
+`acc check` where most of them make no sense. A standalone
+`ReportArgs` struct now holds them and flattens into each
+report-style subcommand via `#[command(flatten)]`: balance,
+register, print, accounts, codes, commodities, navigate. The
+standalone subcommands — format, diff, update, check — keep only
+their own args. `acc format --help` now shows one flag and one
+positional argument, not the whole global set.
+
 ## 0.3.2 — 2026-04-24
 
 TLS backend switched from bundled `rustls` + `ring` to system

@@ -40,26 +40,26 @@ Run:
 
 ```
 $ acc -f journal.ledger bal
- $7441.80  assets
- $7441.80    checking
-$-5000.00  equity
-$-5000.00    opening
-   $58.20  expenses
-   $58.20    food
-$-2500.00  income
-$-2500.00    salary
+ $7441.80 assets
+ $7441.80   checking
+$-5000.00 equity
+$-5000.00   opening
+   $58.20 expenses
+   $58.20   food
+$-2500.00 income
+$-2500.00   salary
 ---------
         0
 ```
 
 ```
 $ acc -f journal.ledger reg
-2024-01-01 initial balances   assets:checking    $5000.00   $5000.00
-                              equity:opening    $-5000.00          0
-2024-01-05 Groceries          expenses:food        $58.20      $58.20
-                              assets:checking     $-58.20          0
-2024-01-10 paycheck           assets:checking   $2500.00    $2500.00
-                              income:salary    $-2500.00          0
+2024-01-01 initial balances  assets:checking   $5000.00  $5000.00
+                             equity:opening   $-5000.00         0
+2024-01-05 Groceries         expenses:food       $58.20    $58.20
+                             assets:checking    $-58.20         0
+2024-01-10 * paycheck        assets:checking   $2500.00  $2500.00
+                             income:salary    $-2500.00         0
 ```
 
 The repo ships the journal above at
@@ -135,23 +135,28 @@ Implementation and semantic choices are acc's own.
 
 **Supported today:** `balance`, `register`, `print`, `accounts`,
 `commodities`, `codes`, `check`, interactive `navigate`, `update`
-(rate fetching); transactions with states, codes, arithmetic
-expressions in amounts, `@` / `@@` cost annotations, `{COST}`
-lot annotations, virtual postings, balance assertions and
-assignments; directives `commodity` (with `alias`, `precision`),
-`account` (with `fx gain` / `fx loss` / `cta gain` / `cta loss`),
-and `P`; filter DSL across account / description / code /
-commodity plus `-r` sibling-posting view; per-posting currency
-conversion at `tx.date` with `--market` snapshot mode; multi-hop
-price lookups; **automatic IAS 21 / ASC 830 translation adjustment**
-(CTA) for transit accounts; `-R` real-only output.
+(rate fetching), `format` (in-place journal formatter with
+source-preserving amount pass-through), `diff` (source-level
+ledger-aware file / tree comparison); transactions with states,
+codes, arithmetic expressions in amounts, `@` / `@@` cost
+annotations, `{COST}` lot annotations, virtual postings, balance
+assertions and assignments; directives `commodity` (with `alias`,
+`precision`), `account` (with `fx gain` / `fx loss` / `cta gain`
+/ `cta loss`), `P`, and ledger-style **automated transactions**
+(line-leading `= /pattern/` rules that inject scaled postings
+into matching transactions); filter DSL across account /
+description / code / commodity plus `-r` sibling-posting view;
+per-posting currency conversion at `tx.date` with `--market`
+snapshot mode; multi-hop price lookups; **automatic IAS 21 /
+ASC 830 translation adjustment** (CTA) for transit accounts;
+`-R` real-only output.
 
-**Not in scope today:** `include` directive, `apply/end`, `define`,
-the short-form directives `D` / `Y` / `A` / `N`, `tag`, `payee`,
-periodic transactions (`~` blocks), automated transactions (`=`
-blocks — the line-leading `=`, not the posting-level balance
-assertion / assignment which *does* work), CSV import, query
-language, budget reports, web UI, value expressions.
+**Not in scope today:** `include` directive, `apply/end`,
+`define`, the short-form directives `D` / `Y` / `A` / `N`,
+`tag`, `payee`, periodic transactions (`~` blocks), the
+conditional form of automated transactions (`= ... and expr
+"..."`), CSV import, query language, budget reports, web UI,
+value expressions.
 
 Journals using any of those will fail to load — acc has no
 silent-skip policy for directives it doesn't understand.
@@ -277,12 +282,12 @@ Example output:
 
 ```
 $ acc -f journal.ledger reg
-2024-01-01 initial balances   assets:checking    $5000.00   $5000.00
-                              equity:opening    $-5000.00          0
-2024-01-05 Groceries          expenses:food        $58.20      $58.20
-                              assets:checking     $-58.20          0
-2024-01-10 paycheck           assets:checking   $2500.00    $2500.00
-                              income:salary    $-2500.00          0
+2024-01-01 initial balances  assets:checking   $5000.00  $5000.00
+                             equity:opening   $-5000.00         0
+2024-01-05 Groceries         expenses:food       $58.20    $58.20
+                             assets:checking    $-58.20         0
+2024-01-10 * paycheck        assets:checking   $2500.00  $2500.00
+                             income:salary    $-2500.00         0
 ```
 
 ### `acc print`
@@ -351,6 +356,62 @@ Run all built-in consistency checks and report.
 No flags. Current checks: `commodity-casing` (multi-char commodity
 symbols must be all-uppercase; single-char symbols like `$` `€` `£`
 are exempt).
+
+### `acc format`
+
+```
+acc format [OPTIONS] [PATHS]...
+```
+
+Reformat one or more ledger journal files: account column
+left-aligned, amount column right-aligned. Everything after the
+amount (`@` cost, `{…}` lot, `= assertion`, `; comment`) passes
+through 1:1 from the source line — expressions like
+`(USD 1200/12)` are never re-evaluated, so no precision drift.
+Commodity symbol and number are glued together (`USD -100` →
+`USD-100`). Only the parser runs, so journals with unbalanced
+transactions still format.
+
+| Flag          | Default | Description |
+|---------------|---------|-------------|
+| `--no-sort`   | off     | Keep transactions in their source order. Default sort is stable-by-date, same-day events keep their original relative position. |
+| `PATHS...`    | —       | Files or directories. Directories are walked recursively for `.ledger` files. Pass `-` to read from stdin and write to stdout (for editor pipes); no other path flag is valid in that mode. |
+
+Writes atomically via a `.tmp` + rename, so a crash mid-write
+never leaves a half-written file.
+
+### `acc diff`
+
+```
+acc diff [--snapshot DIR] <PATHS>...
+```
+
+Compare two ledger files or directory trees at the source level,
+ignoring all whitespace differences. Output follows `git diff`
+conventions: `--- OLD` / `+++ NEW` headers, `@@ -line,count
++line,count @@` hunk markers, `-` / `+` prefixed lines, 3 lines
+of surrounding context per change block.
+
+| Flag                 | Description |
+|----------------------|-------------|
+| `--snapshot DIR`     | Snapshot-root mode. acc resolves each positional path, then walks its components right-to-left and pairs it against the longest suffix that exists under `DIR`. Use this when your backups preserve the working-tree layout under a timestamped root — you no longer have to type the full nested path into the snapshot. With no positional argument, the current directory is used. |
+| `PATHS`              | Without `--snapshot`: exactly two paths (`OLD NEW`). With `--snapshot`: one or more working-side paths (each resolved against the snapshot root). |
+
+Exit `0` on clean match, `1` on any difference or missing
+counterpart file.
+
+Two invocations to illustrate the two modes:
+
+```
+# Explicit: compare a file against a specific backup.
+acc diff journal.ledger /path/to/backup/journal.ledger
+
+# Snapshot: let acc find the matching path inside the backup tree.
+acc diff --snapshot /path/to/backup journal.ledger
+```
+
+Both produce identical output; the snapshot form just saves you
+from typing the tree path twice.
 
 ### `acc navigate` (aliases `nav`, `ui`)
 
@@ -437,26 +498,26 @@ The two reports most users run first:
 
 ```
 $ acc -f journal.ledger bal
- $7441.80  assets
- $7441.80    checking
-$-5000.00  equity
-$-5000.00    opening
-   $58.20  expenses
-   $58.20    food
-$-2500.00  income
-$-2500.00    salary
+ $7441.80 assets
+ $7441.80   checking
+$-5000.00 equity
+$-5000.00   opening
+   $58.20 expenses
+   $58.20   food
+$-2500.00 income
+$-2500.00   salary
 ---------
         0
 ```
 
 ```
 $ acc -f journal.ledger reg
-2024-01-01 initial balances   assets:checking    $5000.00   $5000.00
-                              equity:opening    $-5000.00          0
-2024-01-05 Groceries          expenses:food        $58.20      $58.20
-                              assets:checking     $-58.20          0
-2024-01-10 paycheck           assets:checking   $2500.00    $2500.00
-                              income:salary    $-2500.00          0
+2024-01-01 initial balances  assets:checking   $5000.00  $5000.00
+                             equity:opening   $-5000.00         0
+2024-01-05 Groceries         expenses:food       $58.20    $58.20
+                             assets:checking    $-58.20         0
+2024-01-10 * paycheck        assets:checking   $2500.00  $2500.00
+                             income:salary    $-2500.00         0
 ```
 
 Everything else — `print`, `accounts`, `commodities`, `codes`,
@@ -479,6 +540,133 @@ verbatim output:
   `@` / `@@` / `{COST}` lot tracking
 - [`examples/07-assertions.md`](examples/07-assertions.md) —
   balance assertions and assignments
+
+### `acc format`
+
+Before — misaligned, mixed commodity-glue, whitespace noise:
+
+```
+2024-03-01 * Equipment purchase
+    assets:bank    USD-5000.00
+    expenses:hardware   USD 5000.00
+
+2024-04-15 * Monthly rent (annual contract split)
+    expenses:rent   USD 1000.00 @ (USD 12000/12)
+    assets:bank USD-1000.00
+```
+
+After `acc format journal.ledger`:
+
+```
+2024-03-01 * Equipment purchase
+	assets:bank              USD-5000.00
+	expenses:hardware         USD5000.00
+
+2024-04-15 * Monthly rent (annual contract split)
+	expenses:rent             USD1000.00 @ (USD 12000/12)
+	assets:bank              USD-1000.00
+```
+
+Account column left-aligned, amount column right-aligned, the
+`(USD 12000/12)` expression survives the round-trip as-is. Commodity
+and number are glued (`USD -1000` → `USD-1000`) — so the digits
+line up on the right edge and `USD` floats to wherever the number
+pushes it.
+
+**Vim integration** — drop this in your `ftplugin/ledger.vim`:
+
+```vim
+autocmd FileType ledger nnoremap <leader>f :%!acc format --no-sort -<cr>
+```
+
+Then in any ledger buffer, `<leader>f` pipes the buffer through
+`acc format` and replaces it with the aligned output. Undo
+history stays intact (it's a buffer edit, not a file reload), and
+because only the parser runs, format works mid-edit on a journal
+whose balance doesn't yet compute.
+
+### `acc diff`
+
+Useful for checking that a format pass — or any other edit —
+didn't drop content. Given a `.bak` that saved the pre-format
+state:
+
+```
+$ acc diff journal.ledger.bak journal.ledger
+--- journal.ledger.bak
++++ journal.ledger
+@@ -1,5 +1,5 @@
+ 2024-03-01 * Equipment purchase
+-    assets:bank    USD-5000.00
+-    expenses:hardware   USD 5000.00
++	assets:bank              USD-5000.00
++	expenses:hardware         USD5000.00
+
+1 files compared, 0 with differences
+```
+
+Note: the tab vs 4-space indent and the `USD 5000 → USD5000`
+glue both show up as changed lines (because `-w` strips them for
+comparison, but the display still shows them). Exit code is `0`
+because no **token-level** difference — so in a CI check, `acc
+format` + `acc diff` proves the round-trip is safe.
+
+When the working tree and a backup share the same layout under
+different roots, skip the full path:
+
+```
+cd ~/journals/cash
+acc diff --snapshot /path/to/backup journal.ledger
+```
+
+acc walks `journal.ledger`'s absolute path from the right and
+matches against the longest suffix that exists under the
+snapshot root — no config, no env var, works with any backup
+layout.
+
+### Automated transactions (`= /pattern/`)
+
+Keep `assets:cash` at zero by auto-booking every cash inflow to
+`expenses:cash` (so the physical cash you pull from the bank is
+immediately treated as spent — the classic "all cash counts as
+expense" policy):
+
+```
+= /^assets:cash/
+	[assets:cash]          -1
+	[expenses:cash]         1
+
+2024-05-10 * ATM withdrawal
+	assets:cash             $100
+	assets:bank            $-100
+```
+
+Expanded at load time to:
+
+```
+2024-05-10 * ATM withdrawal
+	assets:cash             $100
+	assets:bank            $-100
+	[assets:cash]          $-100
+	[expenses:cash]         $100
+```
+
+Net effect: `assets:cash` back to zero, `assets:bank` down $100,
+`expenses:cash` up $100.
+
+Multipliers must sum to zero across the rule — the resolver
+validates this, so the expansion always leaves the transaction
+balanced. A VAT-split variant:
+
+```
+= /^income:gross/
+	[income:gross]          -1
+	[income:net]          0.81
+	[taxes:vat19]         0.19
+```
+
+Matching `income:gross $1000` injects `-$1000` flush,
+`+$810` net, `+$190` vat.
 
 ### Error output
 
@@ -573,14 +761,14 @@ sell-from-lot math works:
 ```
 ; acquire a lot
 2023-06-01 buy
-    assets:btc    BTC 0.1 {$30000}
-    assets:cash  $-3000
+	assets:btc         BTC0.1 {$30000}
+	assets:cash        $-3000
 
 ; sell part of the lot at a higher price → gain
 2024-06-01 sell
-    assets:btc    BTC -0.05 {$30000} @ $40000
-    assets:cash   $2000
-    income:gain  $-500
+	assets:btc         BTC-0.05 {$30000} @ $40000
+	assets:cash           $2000
+	income:gain           $-500
 ```
 
 `{COST}` = floating lot cost; `{=COST}` = fixed lot cost (pins it

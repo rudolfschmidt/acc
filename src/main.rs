@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args as ClapArgs, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
@@ -9,19 +9,29 @@ use clap::{Parser, Subcommand};
 struct Args {
     /// Ledger file or directory to load. Directories are walked
     /// recursively. May be given multiple times; order is preserved
-    /// and matters for transactions with identical dates. Not global:
-    /// clap's `global = true` silently drops earlier `-f` values when
-    /// the flag also appears after the subcommand, so `-f` must stay
-    /// top-level and all `-f` occurrences must precede the subcommand.
+    /// and matters for transactions with identical dates. Pre-parsed
+    /// out of argv before clap sees it, so it works anywhere on the
+    /// command line — `acc -f CONFIG bal -f JOURNAL` collects both.
     #[arg(short = 'f', long = "file", value_name = "PATH")]
     paths: Vec<String>,
 
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+/// Filter / sort / conversion flags shared by every report-style
+/// command (`balance`, `register`, `print`, `accounts`, `codes`,
+/// `commodities`, `navigate`). Flattened into each variant via
+/// `#[command(flatten)]` so `acc format --help` and `acc update
+/// --help` stay uncluttered.
+#[derive(ClapArgs, Clone, Debug)]
+struct ReportArgs {
     /// Include only transactions on or after this date (YYYY-MM-DD)
-    #[arg(long = "begin", short = 'b', conflicts_with = "period", global = true)]
+    #[arg(long = "begin", short = 'b', conflicts_with = "periods")]
     begin: Option<String>,
 
     /// Include only transactions before this date (YYYY-MM-DD)
-    #[arg(long = "end", short = 'e', conflicts_with = "period", global = true)]
+    #[arg(long = "end", short = 'e', conflicts_with = "periods")]
     end: Option<String>,
 
     /// Include only transactions in this period. Accepts a year
@@ -29,13 +39,13 @@ struct Args {
     /// Shortcut for setting `--begin` and `--end` together. Repeat
     /// `-p` to include multiple discrete periods — each period works
     /// independently and a transaction is kept if it matches any.
-    #[arg(long = "period", short = 'p', value_name = "PERIOD", global = true)]
+    #[arg(long = "period", short = 'p', value_name = "PERIOD")]
     periods: Vec<String>,
 
     /// Include transactions dated after today. Hidden by default so
     /// forward-dated recurring entries (rent, subscriptions) don't
     /// clutter "what has happened" reports.
-    #[arg(long, global = true)]
+    #[arg(long)]
     future: bool,
 
     /// Show real postings only — drop every virtual posting
@@ -43,7 +53,7 @@ struct Args {
     /// from the output. Realizer and translator still compute their
     /// adjustments for correctness, but their injected postings
     /// (fx gain / fx loss / translation adjustment) are hidden.
-    #[arg(short = 'R', long = "real", global = true)]
+    #[arg(short = 'R', long = "real")]
     real: bool,
 
     /// Related postings. With a pattern filter, show the *other*
@@ -51,7 +61,7 @@ struct Args {
     /// instead of the matched postings themselves. `acc reg ^ex:cta
     /// -r` shows which accounts balance against ex:cta in each
     /// transaction.
-    #[arg(short = 'r', long = "related", global = true)]
+    #[arg(short = 'r', long = "related")]
     related: bool,
 
     /// Sort by field: date, amount, account, description. Prefix with - for reverse. (default: date)
@@ -59,12 +69,7 @@ struct Args {
     sort: Vec<String>,
 
     /// Convert all amounts into this commodity using exchange rates
-    #[arg(
-        short = 'x',
-        long = "exchange",
-        value_name = "COMMODITY",
-        global = true
-    )]
+    #[arg(short = 'x', long = "exchange", value_name = "COMMODITY")]
     exchange: Option<String>,
 
     /// Market-snapshot mode for `-x`: convert every posting at a fixed date
@@ -75,12 +80,8 @@ struct Args {
         value_name = "DATE",
         num_args = 0..=1,
         default_missing_value = "today",
-        global = true,
     )]
     market: Option<String>,
-
-    #[command(subcommand)]
-    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -88,6 +89,8 @@ enum Command {
     /// Show account balances
     #[command(visible_alias = "bal")]
     Balance {
+        #[command(flatten)]
+        filter: ReportArgs,
         /// Show as a flat list
         #[arg(long, conflicts_with = "tree")]
         flat: bool,
@@ -103,11 +106,15 @@ enum Command {
     /// Show transaction register
     #[command(visible_alias = "reg")]
     Register {
+        #[command(flatten)]
+        filter: ReportArgs,
         /// Filter by account name pattern
         pattern: Vec<String>,
     },
     /// Print formatted transactions
     Print {
+        #[command(flatten)]
+        filter: ReportArgs,
         /// Show raw data without computed amounts
         #[arg(long)]
         raw: bool,
@@ -116,6 +123,8 @@ enum Command {
     },
     /// List all accounts
     Accounts {
+        #[command(flatten)]
+        filter: ReportArgs,
         /// Show as flat list (default)
         #[arg(long)]
         flat: bool,
@@ -127,11 +136,15 @@ enum Command {
     },
     /// List all transaction codes
     Codes {
+        #[command(flatten)]
+        filter: ReportArgs,
         /// Filter by account name pattern
         pattern: Vec<String>,
     },
     /// List all commodities
     Commodities {
+        #[command(flatten)]
+        filter: ReportArgs,
         /// Also show the first date the commodity was used
         #[arg(long)]
         date: bool,
@@ -141,6 +154,8 @@ enum Command {
     /// Interactive account navigater
     #[command(visible_aliases = ["nav", "ui"])]
     Navigate {
+        #[command(flatten)]
+        filter: ReportArgs,
         /// Show accounts with zero balance
         #[arg(short = 'E', long)]
         empty: bool,
@@ -149,6 +164,59 @@ enum Command {
     },
     /// Run consistency checks over the journal
     Check,
+    /// Reformat a ledger journal: account column left-aligned,
+    /// amount column right-aligned.
+    ///
+    /// Everything after the amount (`@` cost, `{…}` lot,
+    /// `= assertion`, `; comment`) is passed through 1:1 from
+    /// source — expressions like `(USD 1200/12)` are never
+    /// re-evaluated, so no precision drift. Commodity and number
+    /// are glued together (`USD -100` → `USD-100`).
+    ///
+    /// Only the parser runs: no balance check, so journals with
+    /// unbalanced transactions still format fine. Transactions
+    /// are stably date-sorted by default (`--no-sort` to disable).
+    /// Writes atomically. Pass `-` as path to pipe via
+    /// stdin/stdout (`:%!acc format -` in vim).
+    #[command(arg_required_else_help = true)]
+    Format {
+        /// Skip the chronological sort and keep transactions in their
+        /// source order.
+        #[arg(long = "no-sort")]
+        no_sort: bool,
+        /// Files or directories to format. Directories are walked
+        /// recursively for `.ledger` files. `-` reads from stdin,
+        /// writes to stdout.
+        paths: Vec<String>,
+    },
+    /// Compare two ledger files or directory trees. Whitespace
+    /// differences (indent, column alignment) are ignored — only
+    /// actual character differences are shown, like `diff -w`. Output
+    /// follows `git diff` conventions (`--- / +++ / @@`).
+    ///
+    /// Two modes:
+    ///
+    /// - Explicit: `acc diff OLD NEW` — both paths given directly.
+    /// - Snapshot: `acc diff --snapshot SNAP [PATH...]` — acc finds
+    ///   the corresponding path(s) inside `SNAP` via suffix match, so
+    ///   you only give the working file and the snapshot root once.
+    ///   `PATH` defaults to the current directory.
+    ///
+    /// Exits 1 when differences are found, 0 when identical.
+    #[command(arg_required_else_help = true)]
+    Diff {
+        /// Snapshot root directory. When set, acc locates the matching
+        /// path inside this tree by longest-suffix match against each
+        /// positional PATH. The positional args become working-side
+        /// paths only; the snapshot-side paths are derived.
+        #[arg(long = "snapshot", value_name = "DIR")]
+        snapshot: Option<String>,
+
+        /// Paths. Without `--snapshot`: exactly two paths (OLD NEW).
+        /// With `--snapshot`: one or more working paths; defaults to
+        /// the current directory if none given.
+        paths: Vec<String>,
+    },
     /// Update exchange rate data (MEXC for crypto, openexchangerates for fiat).
     /// Standalone — does not read the journal.
     Update {
@@ -195,10 +263,32 @@ impl Command {
             | Self::Register { pattern, .. }
             | Self::Print { pattern, .. }
             | Self::Accounts { pattern, .. }
-            | Self::Codes { pattern }
+            | Self::Codes { pattern, .. }
             | Self::Commodities { pattern, .. }
             | Self::Navigate { pattern, .. } => pattern.as_slice(),
-            Self::Update { .. } | Self::Check => &[],
+            Self::Update { .. }
+            | Self::Check
+            | Self::Format { .. }
+            | Self::Diff { .. } => &[],
+        }
+    }
+
+    /// Return the filter / convert flags for this command, or `None`
+    /// for commands that don't participate in the load → filter →
+    /// rebalance → sort pipeline (format, update, check, diff).
+    fn filter(&self) -> Option<&ReportArgs> {
+        match self {
+            Self::Balance { filter, .. }
+            | Self::Register { filter, .. }
+            | Self::Print { filter, .. }
+            | Self::Accounts { filter, .. }
+            | Self::Codes { filter, .. }
+            | Self::Commodities { filter, .. }
+            | Self::Navigate { filter, .. } => Some(filter),
+            Self::Update { .. }
+            | Self::Check
+            | Self::Format { .. }
+            | Self::Diff { .. } => None,
         }
     }
 }
@@ -305,6 +395,19 @@ fn start() -> Result<(), acc::Error> {
         return Ok(());
     };
 
+    // Format is standalone — does its own file IO, bypasses the main
+    // load pipeline. Parse-only, no resolve / book / rebalance, so a
+    // journal with balance errors still formats without complaining.
+    if let Command::Format { no_sort, paths } = &command {
+        return acc::commands::format::run(paths, *no_sort);
+    }
+
+    // Diff is standalone — source-level file/tree comparison, no
+    // downstream pipeline.
+    if let Command::Diff { snapshot, paths } = &command {
+        return acc::commands::diff::run(snapshot.as_deref(), paths);
+    }
+
     // Update is standalone — does not read the journal.
     if let Command::Update {
         pairs,
@@ -356,12 +459,17 @@ fn start() -> Result<(), acc::Error> {
         std::process::exit(1);
     }
 
+    // Filter / convert flags for report-style commands. `None` for
+    // `check` (runs a minimal load → validate path). `format` and
+    // `update` already returned above.
+    let filter_args: Option<&ReportArgs> = command.filter();
+
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
 
     // Load prices first when `-x` is set — the rebalancer and
     // realizer both need P-directives already in the journal.
     // `$ACC_PRICES_DIR` contains them.
-    if args.exchange.is_some() {
+    if filter_args.map(|f| f.exchange.is_some()).unwrap_or(false) {
         if let Ok(dir) = std::env::var("ACC_PRICES_DIR") {
             let path = std::path::Path::new(&dir);
             if path.is_dir() {
@@ -404,13 +512,21 @@ fn start() -> Result<(), acc::Error> {
     // price DB and postings are stored under. Without this, the
     // lookup silently misses when the CLI uses one spelling and the
     // journal the other.
-    let exchange_target: Option<String> = args.exchange.as_deref().map(|t| {
-        journal
-            .aliases
-            .get(t)
-            .cloned()
-            .unwrap_or_else(|| t.to_string())
-    });
+    let exchange_target: Option<String> = filter_args
+        .and_then(|f| f.exchange.as_deref())
+        .map(|t| {
+            journal
+                .aliases
+                .get(t)
+                .cloned()
+                .unwrap_or_else(|| t.to_string())
+        });
+
+    // Expander phase: apply `= /pattern/` auto-rules by injecting
+    // their postings into every matching transaction (scaled by the
+    // triggering posting's amount). Runs before realizer so later
+    // phases see the full, expanded journal.
+    acc::expander::expand(&mut journal.transactions, &journal.auto_rules);
 
     // Realizer phase: inject fx gain/loss postings where the
     // transaction's implied rate diverges from the market rate in
@@ -445,7 +561,7 @@ fn start() -> Result<(), acc::Error> {
             journal.cta_gain.as_deref(),
             journal.cta_loss.as_deref(),
         ) {
-            let fixed_date: Option<String> = args.market.as_deref().map(|m| {
+            let fixed_date: Option<String> = filter_args.and_then(|f| f.market.as_deref()).map(|m| {
                 if m == "today" {
                     acc::date::ms_to_date(acc::date::current_ms())
                 } else {
@@ -475,8 +591,9 @@ fn start() -> Result<(), acc::Error> {
     // begin/end pair for the main filter. Multiple `-p` drop the
     // begin/end route and filter transactions against the union of
     // periods further below.
-    let period_ranges: Vec<(String, String)> = args
-        .periods
+    let period_ranges: Vec<(String, String)> = filter_args
+        .map(|f| f.periods.as_slice())
+        .unwrap_or(&[])
         .iter()
         .map(|p| match expand_period(p) {
             Ok(pair) => pair,
@@ -491,14 +608,18 @@ fn start() -> Result<(), acc::Error> {
         ),
         _ => (None, None),
     };
-    let explicit_begin = args.begin.as_deref().map(|b| match expand_period(b) {
-        Ok((start, _)) => start,
-        Err(e) => fail(&e),
-    });
-    let explicit_end = args.end.as_deref().map(|e| match expand_period(e) {
-        Ok((start, _)) => start,
-        Err(e) => fail(&e),
-    });
+    let explicit_begin = filter_args
+        .and_then(|f| f.begin.as_deref())
+        .map(|b| match expand_period(b) {
+            Ok((start, _)) => start,
+            Err(e) => fail(&e),
+        });
+    let explicit_end = filter_args
+        .and_then(|f| f.end.as_deref())
+        .map(|e| match expand_period(e) {
+            Ok((start, _)) => start,
+            Err(e) => fail(&e),
+        });
     let begin = explicit_begin.as_deref().or(period_begin.as_deref());
     let user_end = explicit_end.as_deref().or(period_end.as_deref());
 
@@ -506,7 +627,8 @@ fn start() -> Result<(), acc::Error> {
     // exclusive, so `today+1` keeps everything up to and including
     // today and drops anything strictly after. When the user already
     // passed `-e` / `-p`, we take the earlier of the two cutoffs.
-    let future_cap: Option<String> = (!args.future).then(|| {
+    let show_future = filter_args.map(|f| f.future).unwrap_or(false);
+    let future_cap: Option<String> = (!show_future).then(|| {
         let today_str = acc::date::ms_to_date(acc::date::current_ms());
         let today = acc::date::Date::parse(&today_str)
             .expect("current_ms() returns valid YYYY-MM-DD");
@@ -522,12 +644,13 @@ fn start() -> Result<(), acc::Error> {
     // Filter phase: scope the journal to the command's pattern and
     // the global --begin / --end date range. Runs once here so every
     // commander sees an already-scoped journal.
+    let related = filter_args.map(|f| f.related).unwrap_or(false);
     let mut journal = acc::filter::filter(
         journal,
         command.patterns(),
         begin,
         end,
-        args.related,
+        related,
     );
 
     // Multiple `-p`: keep transactions whose date falls within any
@@ -550,7 +673,7 @@ fn start() -> Result<(), acc::Error> {
     // `--market [DATE]` picks a fixed snapshot date; without it each
     // posting uses its own tx.date.
     if let Some(target) = exchange_target.as_deref() {
-        let fixed_date: Option<String> = args.market.as_deref().map(|m| {
+        let fixed_date: Option<String> = filter_args.and_then(|f| f.market.as_deref()).map(|m| {
             if m == "today" {
                 acc::date::ms_to_date(acc::date::current_ms())
             } else {
@@ -569,7 +692,8 @@ fn start() -> Result<(), acc::Error> {
     // Realizer/translator injections (fx gain/loss, CTA release) all
     // use virtual postings, so this hides them while keeping the
     // underlying computation intact.
-    if args.real {
+    let real = filter_args.map(|f| f.real).unwrap_or(false);
+    if real {
         for lt in &mut journal.transactions {
             lt.value.postings.retain(|lp| !lp.value.is_virtual);
         }
@@ -579,7 +703,11 @@ fn start() -> Result<(), acc::Error> {
     // Sort phase: user-controlled ordering applied after rebalance.
     // The booker has already validated assertions in natural date
     // order, so this is pure presentation.
-    acc::sorter::sort(&mut journal.transactions, &args.sort);
+    let default_sort = [String::from("date")];
+    let sort_keys: &[String] = filter_args
+        .map(|f| f.sort.as_slice())
+        .unwrap_or(&default_sort);
+    acc::sorter::sort(&mut journal.transactions, sort_keys);
 
     match command {
         Command::Balance { flat, empty, .. } => {
