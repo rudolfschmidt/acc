@@ -1,4 +1,3 @@
-![alt text](https://www.diamondsite.de/img/projects/acc.jpg "acc accounting plaintext double-entry accounting command line tool")
 # acc
 
 [![crates.io](https://img.shields.io/crates/v/acc.svg)](https://crates.io/crates/acc)
