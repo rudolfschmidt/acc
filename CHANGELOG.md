@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.2 — 2026-04-24
+
+TLS backend switched from bundled `rustls` + `ring` to system
+`native-tls` (OpenSSL). The only caller, `acc update`, makes HTTPS
+requests against MEXC and openexchangerates.org — the handshake
+itself doesn't care which library runs it, and using the OS-
+managed crypto library cuts ~20 transitive crates, around 500 KB
+from the release binary, and the entire C + assembly build stage
+in `ring`. Downstream packagers get a cleaner build: `ring`'s
+`rust-lld` linker friction on fresh Arch chroots went away in one
+line of `Cargo.toml`.
+
+System dependency now: `openssl` (already present on every
+mainstream Linux distribution). The `acc update` behaviour, ureq
+API surface, and rate-fetching semantics are unchanged.
+
 ## 0.3.1 — 2026-04-24
 
 License identifier updated from the deprecated SPDX `GPL-3.0` to
