@@ -15,3 +15,4 @@ verbatim.
 | [05-cta.md](05-cta.md) | **CTA** — IAS 21 / ASC 830 Cumulative Translation Adjustment for transit accounts |
 | [06-lots-and-costs.md](06-lots-and-costs.md) | `@` / `@@` cost annotations, `{COST}` lots, sell-from-lot math |
 | [07-assertions.md](07-assertions.md) | Balance assertions `= AMT` and balance assignments |
+| [08-diff.md](08-diff.md) | `acc diff` — every input combination (file/dir, explicit / `--snapshot`), with verbatim outputs |
