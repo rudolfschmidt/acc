@@ -400,14 +400,21 @@ of surrounding context per change block.
 Exit `0` on clean match, `1` on any difference or missing
 counterpart file.
 
-Three invocations to illustrate the modes:
+Four invocations to illustrate the modes:
 
 ```
-# Explicit: compare a file against a specific backup.
-acc diff journal.ledger /path/to/backup/journal.ledger
+# Explicit, two files: compare one journal against another.
+acc diff journal.ledger journal.ledger.bak
+
+# Explicit, two directories: walk both trees recursively, pair
+# `.ledger` files by relative path, diff each pair. Files
+# present on only one side are reported as `- only in OLD` /
+# `+ only in NEW`.
+acc diff ~/journals /path/to/backup
 
 # Snapshot, single file: acc finds the matching path inside the
-# backup tree by suffix match.
+# backup tree by longest-suffix match — no need to type the
+# full nested path.
 acc diff --snapshot /path/to/backup journal.ledger
 
 # Snapshot, whole working tree: `.` (or omitted) resolves to the
@@ -417,8 +424,9 @@ cd ~/journals
 acc diff --snapshot /path/to/backup .
 ```
 
-The snapshot form saves you from typing the tree path twice and
-works regardless of where in the working tree you stand.
+Both files and directories work in either mode. The snapshot form
+saves you from typing the tree path twice and works regardless of
+where in the working tree you stand.
 
 ### `acc navigate` (aliases `nav`, `ui`)
 
@@ -547,6 +555,9 @@ verbatim output:
   `@` / `@@` / `{COST}` lot tracking
 - [`examples/07-assertions.md`](examples/07-assertions.md) —
   balance assertions and assignments
+- [`examples/08-diff.md`](examples/08-diff.md) — `acc diff`
+  every input combination (file/dir, explicit / `--snapshot`)
+  with verbatim outputs
 
 ### `acc format`
 
