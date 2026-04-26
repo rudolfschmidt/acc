@@ -125,17 +125,6 @@ impl i256 {
         )
     }
 
-    pub(crate) fn gcd(self, other: Self) -> Self {
-        let mut a = self.abs();
-        let mut b = other.abs();
-        while !b.is_zero() {
-            let (_, r) = a.divmod(&b);
-            a = b;
-            b = r;
-        }
-        a
-    }
-
     pub(crate) fn cmp_signed(&self, other: &Self) -> std::cmp::Ordering {
         match (self.negative, other.negative) {
             (true, false) if !self.is_zero() || !other.is_zero() => std::cmp::Ordering::Less,
@@ -146,35 +135,6 @@ impl i256 {
         }
     }
 
-    pub(crate) fn to_f64(self) -> f64 {
-        let mag = self.limbs[1] as f64 * (u128::MAX as f64 + 1.0) + self.limbs[0] as f64;
-        if self.negative {
-            -mag
-        } else {
-            mag
-        }
-    }
-
-    pub(crate) fn format(&self) -> String {
-        if self.is_zero() {
-            return "0".to_string();
-        }
-        let ten = i256::from_i128(10);
-        let mut digits = Vec::new();
-        let mut val = self.abs();
-        while !val.is_zero() {
-            let (q, r) = val.divmod(&ten);
-            digits.push(r.limbs[0] as u8 + b'0');
-            val = q;
-        }
-        digits.reverse();
-        let s = String::from_utf8(digits).unwrap();
-        if self.negative {
-            format!("-{}", s)
-        } else {
-            s
-        }
-    }
 }
 
 fn cmp_mag(a: [u128; 2], b: [u128; 2]) -> std::cmp::Ordering {
@@ -301,25 +261,10 @@ mod tests {
     }
 
     #[test]
-    fn test_gcd() {
-        assert_eq!(
-            i256::from_i128(12).gcd(i256::from_i128(8)).to_i128(),
-            Some(4)
-        );
-    }
-
-    #[test]
     fn test_negate() {
         assert_eq!(i256::from_i128(5).negate().to_i128(), Some(-5));
         assert_eq!(i256::from_i128(-5).negate().to_i128(), Some(5));
         assert_eq!(i256::zero().negate(), i256::zero());
-    }
-
-    #[test]
-    fn test_format() {
-        assert_eq!(i256::from_i128(12345).format(), "12345");
-        assert_eq!(i256::from_i128(-99).format(), "-99");
-        assert_eq!(i256::zero().format(), "0");
     }
 
     #[test]
