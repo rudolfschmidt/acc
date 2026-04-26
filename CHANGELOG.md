@@ -265,6 +265,38 @@ skipping the LCS walk entirely. Real content vs. an empty file
 still surfaces as a removal — only the both-sides-empty edge case
 is treated as a non-difference.
 
+### Sun 26 Apr 2026 - `examples/08-diff.md` walkthrough
+
+Added a verbatim walkthrough for `acc diff` covering every input
+combination — file vs. file, dir vs. dir, mixed types (error),
+missing paths, and every `--snapshot` form (single file, whole
+tree via `.`, multiple paths, error cases). All command outputs
+are copied byte-for-byte from real runs against the release
+binary, so the walkthrough doubles as a behavioural reference for
+the diff implementation.
+
+`examples/README.md` and the main `README.md` reference list both
+got an entry pointing to the new file.
+
+### Sun 26 Apr 2026 - `i256`: drop unused methods (`gcd`, `to_f64`, `format`)
+
+Three methods on the internal `i256` type had no production
+caller:
+
+- `gcd` — `Decimal` is fixed-point with a single mantissa, not a
+  numerator/denominator pair, so GCD never showed up in the
+  arithmetic paths.
+- `to_f64` — `Decimal::to_f64` exists separately and computes
+  directly from the `i128` mantissa, never via `i256`.
+- `format` — only its own unit test referenced it; debug
+  rendering of `i256` values went through `Debug` derive instead.
+
+All three were flagged as dead code by the release build. Methods
+and their unit tests removed in one pass. The implementations are
+trivial enough to reconstruct in a few minutes if any future
+direction (rational arithmetic, wider numeric output, debug-only
+formatting) ever needs them.
+
 ### Sat 25 Apr 2026 - `acc diff` argument-count error uses clap's native style
 
 Polish: when called without `--snapshot`, `acc diff` requires
