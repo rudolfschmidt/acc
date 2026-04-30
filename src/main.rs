@@ -185,7 +185,9 @@ enum Command {
         #[arg(long = "no-sort")]
         no_sort: bool,
         /// Files or directories to format. Directories are walked
-        /// recursively for `.ledger` files. `-` reads from stdin,
+        /// recursively for journal files (`.ledger`, `.j`, `.journal`,
+        /// `.hledger`, `.dat`, `.txt`). Files named explicitly are
+        /// formatted regardless of extension. `-` reads from stdin,
         /// writes to stdout.
         paths: Vec<String>,
     },
@@ -300,10 +302,6 @@ fn main() {
     }
 }
 
-fn has_ledger_ext(path: &std::path::Path) -> bool {
-    path.extension().and_then(|e| e.to_str()) == Some("ledger")
-}
-
 /// Print an error to stderr and exit with status 1. Used when a CLI
 /// argument fails validation (e.g. a malformed `-p`/`-b`/`-e` value);
 /// the `!` return type lets `match` arms call it in place of a value.
@@ -354,7 +352,7 @@ fn collect_ledger_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>
         for path in paths {
             if path.is_dir() {
                 collect_ledger_files(&path, out);
-            } else if path.is_file() && has_ledger_ext(&path) {
+            } else if path.is_file() && acc::is_journal_file(&path) {
                 out.push(path);
             }
         }
@@ -497,11 +495,17 @@ fn start() -> Result<(), acc::Error> {
 
     // User-provided paths come after so their declarations win on
     // any later single-pass resolution.
+    //
+    // Explicit `-f FILE` is honoured regardless of extension: when the
+    // user names a path, the loader will try to read it and surface a
+    // proper error if it's missing, instead of silently skipping it.
+    // The extension filter only applies when walking a directory tree,
+    // where we need to skip backups / READMEs / unrelated files.
     for input in &args.paths {
         let path = std::path::Path::new(input);
         if path.is_dir() {
             collect_ledger_files(path, &mut paths);
-        } else if has_ledger_ext(path) {
+        } else {
             paths.push(path.to_path_buf());
         }
     }

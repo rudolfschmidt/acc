@@ -234,7 +234,7 @@ acc [GLOBAL OPTIONS] <COMMAND> [COMMAND OPTIONS] [ARGS]
 
 | Flag                       | Default | Description |
 |----------------------------|---------|-------------|
-| `-f`, `--file PATH`        | —       | Journal file or directory. Directories walked recursively, only `.ledger` files loaded. Repeat `-f` for multiple sources (order preserved). Works at any position — before or after the subcommand. `-f -` reads from stdin — only with `print --raw`; other commands silently ignore it. |
+| `-f`, `--file PATH`        | —       | Journal file or directory. A file named explicitly is read whatever its extension. Directories are walked recursively for journal files (`.ledger`, `.j`, `.journal`, `.hledger`, `.dat`, `.txt`); use a `_` suffix (`foo.ledger_`) to keep a file in the tree but skip it. Repeat `-f` for multiple sources (order preserved). Works at any position — before or after the subcommand. `-f -` reads from stdin — only with `print --raw`; other commands silently ignore it. |
 | `-b`, `--begin DATE`       | —       | Include transactions on or after `DATE`. Accepts `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` — each picks the *start* of the specified period. Conflicts with `-p`. |
 | `-e`, `--end DATE`         | —       | Include transactions strictly before `DATE` (exclusive). Same grammar as `-b`. Conflicts with `-p`. |
 | `-p`, `--period PERIOD`    | —       | Shorthand spanning a full period. `YYYY` = year, `YYYY-MM` = month, `YYYY-MM-DD` = single day. Repeat `-p` to include multiple discrete periods — a transaction is kept if it falls within any. Conflicts with `-b` / `-e`. |
@@ -375,7 +375,7 @@ transactions still format.
 | Flag          | Default | Description |
 |---------------|---------|-------------|
 | `--no-sort`   | off     | Keep transactions in their source order. Default sort is stable-by-date, same-day events keep their original relative position. |
-| `PATHS...`    | —       | Files or directories. Directories are walked recursively for `.ledger` files. Pass `-` to read from stdin and write to stdout (for editor pipes); no other path flag is valid in that mode. |
+| `PATHS...`    | —       | Files or directories. Files named explicitly are formatted whatever their extension; directories are walked recursively for journal files (`.ledger`, `.j`, `.journal`, `.hledger`, `.dat`, `.txt`). Pass `-` to read from stdin and write to stdout (for editor pipes); no other path flag is valid in that mode. |
 
 Writes atomically via a `.tmp` + rename, so a crash mid-write
 never leaves a half-written file.
@@ -407,9 +407,9 @@ Four invocations to illustrate the modes:
 acc diff journal.ledger journal.ledger.bak
 
 # Explicit, two directories: walk both trees recursively, pair
-# `.ledger` files by relative path, diff each pair. Files
-# present on only one side are reported as `- only in OLD` /
-# `+ only in NEW`.
+# journal files (`.ledger`, `.j`, `.journal`, `.hledger`, `.dat`,
+# `.txt`) by relative path, diff each pair. Files present on only
+# one side are reported as `- only in OLD` / `+ only in NEW`.
 acc diff ~/journals /path/to/backup
 
 # Snapshot, single file: acc finds the matching path inside the
