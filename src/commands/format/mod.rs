@@ -11,8 +11,10 @@
 //! mid-write never leaves a half-written file.
 //!
 //! Inputs can mix files and directories; directories are walked
-//! recursively for `.ledger` files, matching the same collector
-//! pattern the main pipeline uses for `-f DIR`.
+//! recursively for journal files (`.ledger`, `.j`, `.journal`,
+//! `.hledger`, `.dat`, `.txt`), matching the same collector pattern
+//! the main pipeline uses for `-f DIR`. Files named explicitly are
+//! kept regardless of extension.
 
 use std::fs;
 use std::io;
@@ -87,9 +89,10 @@ fn run_stdin_stdout(no_sort: bool) -> Result<(), Error> {
     Ok(())
 }
 
-/// Expand each input path: files are kept verbatim, directories are
-/// walked recursively for `.ledger` files, missing paths warn to
-/// stderr.
+/// Expand each input path: files are kept verbatim (extension is not
+/// checked — explicit `-f FILE` is honoured as-is), directories are
+/// walked recursively for journal files (see `JOURNAL_EXTENSIONS`),
+/// missing paths warn to stderr.
 fn collect_files(paths: &[String]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for p in paths {
@@ -112,7 +115,7 @@ fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) {
     for path in paths {
         if path.is_dir() {
             walk_dir(&path, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("ledger") {
+        } else if crate::is_journal_file(&path) {
             out.push(path);
         }
     }

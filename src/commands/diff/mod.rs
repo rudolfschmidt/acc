@@ -223,7 +223,7 @@ fn describe(p: &Path) -> &'static str {
     }
 }
 
-/// Map relative-path → absolute-path for every `.ledger` under `root`.
+/// Map relative-path → absolute-path for every journal file under `root`.
 fn index_dir(root: &Path) -> BTreeMap<PathBuf, PathBuf> {
     let mut out = BTreeMap::new();
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
@@ -233,7 +233,7 @@ fn index_dir(root: &Path) -> BTreeMap<PathBuf, PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("ledger") {
+            } else if crate::is_journal_file(&path) {
                 if let Ok(rel) = path.strip_prefix(root) {
                     out.insert(rel.to_path_buf(), path);
                 }

@@ -1,6 +1,39 @@
 # Changelog
 
-## 0.4.0 — 2026-04-24
+## 0.4.1 — 2026-05-01
+
+### Fri 01 May 2026 - `-f FILE` honours any extension; directory walk recognises common journal extensions
+
+Reported in issue #5 by Simon Michael (hledger author):
+`acc print -f journal.j` printed nothing and exited zero. Same
+silent no-op for `.journal`, `.hledger`, `.dat`, `.txt`. Cause: the
+input collector treated the extension filter (originally a
+directory-walk safeguard against backups and READMEs landing in
+the loader) as a global gate, so explicit `-f FILE` requests with
+non-`.ledger` extensions never made it past argument parsing.
+
+Two changes:
+
+1. **Explicit `-f FILE` bypasses the filter entirely.** When the
+   user names a path, acc reads it whatever the extension. If the
+   file is missing or unreadable, the loader surfaces a normal
+   error instead of swallowing the request. This matches what
+   `ledger` and `hledger` do, and is what the user expects from
+   "I told you to read this file".
+
+2. **Directory walks recognise the common journal extensions.**
+   `acc -f DIR` (and `acc format DIR`, `acc diff DIR DIR`) used to
+   pick up only `*.ledger` while traversing; the recognised set is
+   now `.ledger`, `.j`, `.journal`, `.hledger`, `.dat`, `.txt`.
+   The `.ledger_` underscore-suffix trick to disable a file from
+   being parsed still works — none of those endings are in the
+   list.
+
+Help text and the inline doc-comments around format and diff list
+the recognised extensions explicitly so the rule is no longer
+folklore.
+
+
 
 Three new commands and subsystems landed together: `acc format`
 as an in-place journal formatter that preserves the source byte-
