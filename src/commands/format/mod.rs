@@ -11,10 +11,9 @@
 //! mid-write never leaves a half-written file.
 //!
 //! Inputs can mix files and directories; directories are walked
-//! recursively for journal files (`.ledger`, `.j`, `.journal`,
-//! `.hledger`, `.dat`, `.txt`), matching the same collector pattern
-//! the main pipeline uses for `-f DIR`. Files named explicitly are
-//! kept regardless of extension.
+//! recursively for journal files (`.ledger` only), matching the same
+//! collector pattern the main pipeline uses for `-f DIR`. Files named
+//! explicitly are kept regardless of extension.
 
 use std::fs;
 use std::io;
@@ -274,7 +273,7 @@ fn render_transaction(
     }
     for lp in &tx.postings {
         let src = source_lines.get(lp.line.saturating_sub(1)).copied();
-        render_posting(&lp.value, account_width, amount_width, src, out);
+        render_posting(&lp.value, lp.line, account_width, amount_width, src, out);
     }
 }
 
@@ -289,6 +288,7 @@ fn render_transaction(
 /// parser records `decimals = 0`).
 fn render_posting(
     p: &Posting,
+    posting_line: usize,
     account_width: usize,
     amount_width: usize,
     source_line: Option<&str>,
@@ -317,6 +317,14 @@ fn render_posting(
         out.push('\n');
     }
     for c in &p.comments {
+        // Inline comments share the posting's source line and are already
+        // re-emitted verbatim in the tail by `extract_posting_parts`.
+        // Only own-line comments that follow the posting (a different
+        // source line) render here — otherwise the inline comment is
+        // duplicated, once in the tail and once as a standalone line.
+        if c.line == posting_line {
+            continue;
+        }
         out.push_str(INDENT);
         out.push_str(&format!("; {}\n", c.value.text));
     }

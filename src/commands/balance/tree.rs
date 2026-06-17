@@ -56,9 +56,18 @@ fn print_account(
     let non_zero: Vec<_> = total.iter().filter(|(_, v)| !v.is_zero()).collect();
 
     let child_indent = if non_zero.is_empty() {
-        // Empty branch: show the name alone (caller already checked
-        // `show_empty || has_balance` before descending).
-        indent.to_string()
+        // Account whose total nets to zero. Under `-E`, render a `0`
+        // line + name so the empty account is visible; otherwise keep
+        // the name hidden and let any non-zero descendants render at
+        // the parent's indent (a branch can net to zero while its
+        // children individually offset).
+        if show_empty {
+            print!("{:>w$} ", 0, w = width);
+            println!("{}{}", indent, account.name.blue());
+            format!("{}  ", indent)
+        } else {
+            indent.to_string()
+        }
     } else {
         for (i, (commodity, value)) in non_zero.iter().enumerate() {
             print_commodity_amount(commodity, **value, width, precisions);

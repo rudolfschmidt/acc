@@ -39,6 +39,11 @@ use crate::parser::transaction::Transaction;
 /// dropped; surviving transactions keep only postings that match the
 /// pattern. Transactions that end up empty are dropped too.
 ///
+/// `whole_transactions` flips that posting reduction off: a matched
+/// transaction keeps *all* of its postings. This is what `print`
+/// wants — show the complete entry whenever it matches — as opposed
+/// to `reg` / `bal`, which show only the matched postings.
+///
 /// The non-transaction fields of `Journal` (prices, fx accounts,
 /// precisions) pass through unchanged — they are either global
 /// metadata or derived before the filter runs.
@@ -48,6 +53,7 @@ pub fn filter(
     begin: Option<&str>,
     end: Option<&str>,
     related: bool,
+    whole_transactions: bool,
 ) -> Journal {
     Journal {
         transactions: filter_transactions(
@@ -56,6 +62,7 @@ pub fn filter(
             begin,
             end,
             related,
+            whole_transactions,
         ),
         prices: journal.prices,
         fx_gain: journal.fx_gain,
@@ -76,6 +83,7 @@ fn filter_transactions(
     begin: Option<&str>,
     end: Option<&str>,
     related: bool,
+    whole_transactions: bool,
 ) -> Vec<Located<Transaction>> {
     let matcher = (!patterns.is_empty()).then(|| PatternMatcher::from_parts(patterns));
 
@@ -98,26 +106,35 @@ fn filter_transactions(
             if let Some(m) = &matcher {
                 let desc_lower = lt.value.description.to_lowercase();
                 let code_lower = lt.value.code.as_deref().unwrap_or("").to_lowercase();
-                // `-r`: keep sibling postings of matched txs. Drop the
-                // tx entirely if no posting matches. Otherwise drop
-                // the matched postings and keep the rest.
-                if related {
-                    let any = lt.value.postings.iter().any(|lp| {
-                        m.matches_full(&lp.value, &desc_lower, &code_lower)
-                    });
-                    if !any {
+                // A transaction is kept only if at least one posting
+                // matches. The match dimension can be the posting's own
+                // account/commodity or a tx-wide field (description,
+                // code) shared by every posting.
+                let any = lt.value.postings.iter().any(|lp| {
+                    m.matches_full(&lp.value, &desc_lower, &code_lower)
+                });
+                if !any {
+                    return None;
+                }
+                // How surviving postings are pruned:
+                // - `whole_transactions` (print): keep every posting so
+                //   the entry prints intact.
+                // - `related` (-r): keep the *siblings* of the matched
+                //   postings — drop the matched ones.
+                // - default (reg/bal): keep only the matched postings.
+                if !whole_transactions {
+                    if related {
+                        lt.value.postings.retain(|lp| {
+                            !m.matches_full(&lp.value, &desc_lower, &code_lower)
+                        });
+                    } else {
+                        lt.value.postings.retain(|lp| {
+                            m.matches_full(&lp.value, &desc_lower, &code_lower)
+                        });
+                    }
+                    if lt.value.postings.is_empty() {
                         return None;
                     }
-                    lt.value.postings.retain(|lp| {
-                        !m.matches_full(&lp.value, &desc_lower, &code_lower)
-                    });
-                } else {
-                    lt.value.postings.retain(|lp| {
-                        m.matches_full(&lp.value, &desc_lower, &code_lower)
-                    });
-                }
-                if lt.value.postings.is_empty() {
-                    return None;
                 }
             }
             Some(lt)
@@ -480,7 +497,7 @@ mod tests {
 
     fn run(patterns: &[&str], txs: Vec<Located<Transaction>>) -> Vec<Located<Transaction>> {
         let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
-        filter_transactions(txs, &pats, None, None, false)
+        filter_transactions(txs, &pats, None, None, false, false)
     }
 
     fn account(lt: &Located<Transaction>, idx: usize) -> &str {
@@ -805,7 +822,7 @@ mod tests {
         ];
         let pats: Vec<String> = Vec::new();
         let out =
-            filter_transactions(txs, &pats, Some("2025-01-15"), Some("2025-02-15"), false);
+            filter_transactions(txs, &pats, Some("2025-01-15"), Some("2025-02-15"), false, false);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value.date.to_string(), "2025-02-01");
     }

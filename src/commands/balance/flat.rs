@@ -10,7 +10,7 @@ use crate::commands::util::format_amount;
 use crate::decimal::Decimal;
 use crate::loader::Journal;
 
-pub(super) fn print(journal: &Journal) {
+pub(super) fn print(journal: &Journal, show_empty: bool) {
     let postings = group_postings_by_account(journal);
     let precisions = &journal.precisions;
 
@@ -47,6 +47,12 @@ pub(super) fn print(journal: &Journal) {
     for (account, amounts) in &postings {
         let non_zero: Vec<_> = amounts.iter().filter(|(_, v)| !v.is_zero()).collect();
         if non_zero.is_empty() {
+            // Account nets to zero. Render a `0` line + name only under
+            // `-E`; otherwise skip it.
+            if show_empty {
+                print!("{:>w$} ", 0, w = width);
+                println!("{}", account.blue());
+            }
             continue;
         }
         for (i, (commodity, amount)) in non_zero.iter().enumerate() {
