@@ -185,10 +185,9 @@ enum Command {
         #[arg(long = "no-sort")]
         no_sort: bool,
         /// Files or directories to format. Directories are walked
-        /// recursively for journal files (`.ledger`, `.j`, `.journal`,
-        /// `.hledger`, `.dat`, `.txt`). Files named explicitly are
-        /// formatted regardless of extension. `-` reads from stdin,
-        /// writes to stdout.
+        /// recursively for journal files (`.ledger` only). Files named
+        /// explicitly are formatted regardless of extension. `-` reads
+        /// from stdin, writes to stdout.
         paths: Vec<String>,
     },
     /// Compare two ledger files or directory trees. Whitespace
@@ -665,13 +664,19 @@ fn start() -> Result<(), acc::Error> {
     // Filter phase: scope the journal to the command's pattern and
     // the global --begin / --end date range. Runs once here so every
     // commander sees an already-scoped journal.
+    //
+    // `print` keeps whole matched transactions (every posting), unlike
+    // `reg` / `bal` which reduce to the matched postings only — a
+    // pattern picks *which entries* to print, not which lines of them.
     let related = filter_args.map(|f| f.related).unwrap_or(false);
+    let whole_transactions = matches!(command, Command::Print { .. });
     let mut journal = acc::filter::filter(
         journal,
         command.patterns(),
         begin,
         end,
         related,
+        whole_transactions,
     );
 
     // Multiple `-p`: keep transactions whose date falls within any
