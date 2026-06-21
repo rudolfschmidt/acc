@@ -1,5 +1,131 @@
 # Changelog
 
+## 0.5.0 — 2026-06-21
+
+### Sun 21 Jun 2026 - Currency valuation is historical-only; `-x` renamed to `-X`; market/snapshot modes removed
+
+The `-x` exchange flag was renamed to `-X` to match ledger, and the
+long form `--exchange` stays. That was the uncontroversial part.
+
+The rest of this entry is a design reversal worth recording. The flags
+were first reworked to mirror ledger's valuation model: `-V` /
+`--market` (latest-rate snapshot), `-H` / `--historical` (per-posting
+tx.date), `--now DATE` (snapshot day), with **market as the default**,
+exactly like `ledger -X` without `-H`. The motivation was a real
+report: a pass-through clearing account that nets to zero in its native
+currency still showed a non-zero residual under `-X €`, because inflow
+and outflow were converted at different tx.date rates. Market valuation
+makes such an account read zero.
+
+It was then reverted. Market-as-default breaks the books: a
+foreign-currency position booked against a fixed historical
+counter-amount is worth a different amount at the snapshot rate, and
+that mark-to-market difference has no counter-posting — the grand total
+stops being zero. ledger only gets away with it because of its
+`<Revalued>` mechanism, which acc has no equivalent of. Historical
+per-tx.date valuation is the only balance-consistent default in acc as
+built, and it is also the more honest one for income/expense reporting:
+an expense of 10 € stays 10 € at its booking date, not revalued to
+today's rate a year later (IAS 21 rule 1).
+
+So `-X` now always values each posting at the rate on its own
+transaction date. `-V`, `-H`, `--market`, `--historical`, `--now` are
+gone; there is no mode to switch. The dead `fixed_date` snapshot
+parameter was removed from the rebalancer and translator.
+
+### Sun 21 Jun 2026 - CTA now covers multi-commodity pass-through accounts
+
+The residual that motivated the valuation work above is exactly what
+the Currency Translation Adjustment (CTA) phase is for: it books the
+holding-period drift of a zero-netting pass-through account onto a
+dedicated equity account so the account itself reads zero. CTA already
+existed but deliberately skipped any account that appeared in a
+multi-commodity transaction ("realizer territory"), to avoid
+double-booking with fx gain/loss. That exclusion was too broad — it
+left the drift on every clearing account that also trades currency.
+
+It was proven unnecessary: fx gain/loss books the **trade-day**
+deviation (implied vs market rate), CTA books the **holding-period**
+drift (market-rate movement between inflow and outflow). They measure
+different quantities and never overlap, and the CTA transaction is
+self-balancing (`[account] −drift` / `[cta] +drift`), so it cannot
+unbalance the books. Verified with two scenarios where both fire on the
+same account: the grand total stays zero and the three figures (fx
+gain, fx loss, CTA) match a hand calculation to the cent.
+
+CTA therefore now runs on every account whose native sum is zero,
+single- or multi-commodity. The synthetic transaction's title changed
+from `translation adjustment` to `currency translation adjustment`.
+
+### Sun 21 Jun 2026 - `acc format` validates the whole journal before writing
+
+`acc format` previously ran the parser only — by design, so unbalanced
+work-in-progress journals still formatted. The downside: structurally
+broken input was silently reformatted. A single space between account
+and amount (`account €-35.00` instead of a tab or two spaces) collapses
+both into one account token, leaving two amount-less postings — which
+`acc reg` rejects ("only one posting may omit its amount") but `format`
+reported as fine.
+
+`format` now runs the full pipeline (parse → resolve → book, the same
+checks `acc reg` applies) before writing anything, all-or-nothing: a
+single error in any file aborts the run and **no** file is written, so
+there are never half-formatted batches. The stdin/stdout pipe mode
+(`:%!acc format -`) echoes the input back unchanged on error, so a vim
+buffer is never destroyed.
+
+Also fixed: `format` duplicated an inline posting comment — once
+verbatim in the line tail and again as a standalone comment line —
+because the parser stores inline and own-line comments in one list.
+Inline comments (sharing the posting's source line) are now skipped in
+the standalone pass.
+
+### Sun 21 Jun 2026 - `--related-all`, whole-transaction `print`, `bal -E` in both modes
+
+`--related-all` (matching ledger; no short flag, since ledger's `-A` is
+`--average`) shows **every** posting of a matched transaction — both
+the matched posting and its counter-parties — where `-r` / `--related`
+shows only the counter-parties and the default shows only the matched
+posting.
+
+`acc print PATTERN` now prints the complete matched transaction rather
+than just the matched postings: a pattern selects which entries to
+print, not which lines of them. `reg` / `bal` keep their posting-level
+reduction.
+
+`bal -E` / `--empty` now works in both flat and tree mode. It was
+effectively dead: flat mode never received the flag, and tree mode
+never printed the name of a zero-total account. Empty accounts now
+render as a `0` line followed by the name.
+
+### Wed 17 Jun 2026 - Directory walk recognises `.ledger` only
+
+The 0.4.1 change that taught the directory walk to pick up `.j`,
+`.journal`, `.hledger`, `.dat` and `.txt` swept up non-journal files
+living in the tree (meter readings, notes, data dumps), which then
+failed to parse. The walk recognises `.ledger` only again. Explicit
+`-f FILE` still reads a path whatever its extension — the filter only
+ever applied to recursive directory walks.
+
+### Wed 17 Jun 2026 - `acc check` gains a leaf-account check; colored output
+
+`acc check` flags any posting to a parent account that also has
+sub-accounts elsewhere, whose tree total would otherwise double-count
+the parent's own postings plus its children's. It is a non-blocking
+report listing every offending posting (first built as a hard load
+error, then moved into `check` so a journal with such postings still
+loads). `acc check` output is now fully colored.
+
+### Wed 17 Jun 2026 - `acc update`: rustls TLS backend
+
+`acc update` failed every HTTPS request with "no TLS backend is
+configured". The `ureq` dependency was set to `features =
+["native-tls"]`, but ureq's default agent only wires up rustls; the
+native-tls feature needs the connector built explicitly, which never
+happened. Switched to the `tls` (rustls) feature — the default agent
+works, and the system OpenSSL dependency is dropped. Verified against
+both MEXC (crypto) and openexchangerates (fiat).
+
 ## 0.4.1 — 2026-05-01
 
 ### Fri 01 May 2026 - `-f FILE` honours any extension; directory walk recognises common journal extensions

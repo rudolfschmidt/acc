@@ -1,7 +1,7 @@
 //! Realizer phase — inject FX gain/loss postings.
 //!
 //! Runs after the filter phase, before rebalance, and only when the
-//! user passes `-x TARGET`. For every multi-commodity transaction we
+//! user passes `-X TARGET`. For every multi-commodity transaction we
 //! convert each balance-contributing posting into `target` at the
 //! market rate on `tx.date` (from the price DB). The sum of those
 //! converted amounts is the *realized delta* between what the books

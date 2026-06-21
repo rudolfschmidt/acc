@@ -43,7 +43,7 @@ pub struct Resolved {
     /// regardless of what the posting amounts contain.
     pub precisions: HashMap<String, usize>,
     /// `alias → canonical` map collected from `commodity` directives.
-    /// Handed downstream so CLI targets like `-x EUR` can be resolved
+    /// Handed downstream so CLI targets like `-X EUR` can be resolved
     /// to `€` before they reach the rebalancer or the price DB.
     pub aliases: HashMap<String, String>,
     /// Automated-transaction rules collected from `= /pattern/` blocks.

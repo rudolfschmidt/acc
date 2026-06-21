@@ -52,7 +52,7 @@ struct ReportArgs {
     /// (paren-virtual `(account)` and bracket-virtual `[account]`)
     /// from the output. Realizer and translator still compute their
     /// adjustments for correctness, but their injected postings
-    /// (fx gain / fx loss / translation adjustment) are hidden.
+    /// (fx gain / fx loss / currency translation adjustment) are hidden.
     #[arg(short = 'R', long = "real")]
     real: bool,
 
@@ -64,24 +64,23 @@ struct ReportArgs {
     #[arg(short = 'r', long = "related")]
     related: bool,
 
+    /// Show every posting of a matched transaction — both the matched
+    /// posting and its counter-parties — instead of just the matched
+    /// posting (default) or just the counter-parties (`-r`). A pattern
+    /// then picks *which transactions* to show in full, not which lines
+    /// of them.
+    #[arg(long = "related-all")]
+    related_all: bool,
+
     /// Sort by field: date, amount, account, description. Prefix with - for reverse. (default: date)
     #[arg(short = 'S', long = "sort", default_value = "date")]
     sort: Vec<String>,
 
-    /// Convert all amounts into this commodity using exchange rates
-    #[arg(short = 'x', long = "exchange", value_name = "COMMODITY")]
+    /// Convert all amounts into this commodity using exchange rates.
+    /// Mirrors ledger's `-X`. Each posting is valued at the exchange
+    /// rate on its own transaction date (historical valuation).
+    #[arg(short = 'X', long = "exchange", value_name = "COMMODITY")]
     exchange: Option<String>,
-
-    /// Market-snapshot mode for `-x`: convert every posting at a fixed date
-    /// instead of at its own tx.date. Without a value: today. With a value
-    /// (YYYY-MM-DD): snapshot as of that date.
-    #[arg(
-        long = "market",
-        value_name = "DATE",
-        num_args = 0..=1,
-        default_missing_value = "today",
-    )]
-    market: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -173,9 +172,11 @@ enum Command {
     /// re-evaluated, so no precision drift. Commodity and number
     /// are glued together (`USD -100` → `USD-100`).
     ///
-    /// Only the parser runs: no balance check, so journals with
-    /// unbalanced transactions still format fine. Transactions
-    /// are stably date-sorted by default (`--no-sort` to disable).
+    /// The input is fully validated first (parse, resolve, book — the
+    /// same checks `acc reg` runs); a structural error such as an
+    /// unbalanced transaction or a single-space account/amount aborts
+    /// the run with nothing written (all-or-nothing). Transactions are
+    /// stably date-sorted by default (`--no-sort` to disable).
     /// Writes atomically. Pass `-` as path to pipe via
     /// stdin/stdout (`:%!acc format -` in vim).
     #[command(arg_required_else_help = true)]
@@ -527,8 +528,8 @@ fn start() -> Result<(), acc::Error> {
 
     let mut journal = acc::load(&paths).map_err(|e| acc::Error::from(e.to_string()))?;
 
-    // Resolve the `-x` target through the journal's aliases so
-    // `-x EUR` and `-x €` both collapse to the canonical symbol the
+    // Resolve the `-X` target through the journal's aliases so
+    // `-X EUR` and `-X €` both collapse to the canonical symbol the
     // price DB and postings are stored under. Without this, the
     // lookup silently misses when the CLI uses one spelling and the
     // journal the other.
@@ -552,7 +553,7 @@ fn start() -> Result<(), acc::Error> {
     // transaction's implied rate diverges from the market rate in
     // the price DB. Runs *before* the filter so pattern matches like
     // `acc bal Equity:FxGain` can see the synthetic postings. Needs
-    // `-x TARGET` plus both `fx gain` / `fx loss` accounts
+    // `-X TARGET` plus both `fx gain` / `fx loss` accounts
     // declared in the journal; otherwise silently skipped.
     if let Some(target) = exchange_target.as_deref() {
         if let (Some(gain), Some(loss)) = (
@@ -581,19 +582,11 @@ fn start() -> Result<(), acc::Error> {
             journal.cta_gain.as_deref(),
             journal.cta_loss.as_deref(),
         ) {
-            let fixed_date: Option<String> = filter_args.and_then(|f| f.market.as_deref()).map(|m| {
-                if m == "today" {
-                    acc::date::ms_to_date(acc::date::current_ms())
-                } else {
-                    m.to_string()
-                }
-            });
             let precision = journal.precisions.get(target).copied().unwrap_or(2);
             acc::translator::translate(
                 &mut journal.transactions,
                 target,
                 &journal.prices,
-                fixed_date.as_deref(),
                 cta_gain,
                 cta_loss,
                 precision,
@@ -665,11 +658,14 @@ fn start() -> Result<(), acc::Error> {
     // the global --begin / --end date range. Runs once here so every
     // commander sees an already-scoped journal.
     //
-    // `print` keeps whole matched transactions (every posting), unlike
-    // `reg` / `bal` which reduce to the matched postings only — a
-    // pattern picks *which entries* to print, not which lines of them.
+    // `print` always keeps whole matched transactions (every posting),
+    // and `--related-all` (-A) requests the same for any report command,
+    // unlike `reg` / `bal` which otherwise reduce to the matched
+    // postings only — a pattern then picks *which entries* to show, not
+    // which lines of them.
     let related = filter_args.map(|f| f.related).unwrap_or(false);
-    let whole_transactions = matches!(command, Command::Print { .. });
+    let related_all = filter_args.map(|f| f.related_all).unwrap_or(false);
+    let whole_transactions = related_all || matches!(command, Command::Print { .. });
     let mut journal = acc::filter::filter(
         journal,
         command.patterns(),
@@ -695,22 +691,13 @@ fn start() -> Result<(), acc::Error> {
         });
     }
 
-    // Rebalance phase: convert posting amounts into -x target.
-    // `--market [DATE]` picks a fixed snapshot date; without it each
-    // posting uses its own tx.date.
+    // Rebalance phase: convert posting amounts into the -X target at
+    // each posting's own transaction-date rate (historical valuation).
     if let Some(target) = exchange_target.as_deref() {
-        let fixed_date: Option<String> = filter_args.and_then(|f| f.market.as_deref()).map(|m| {
-            if m == "today" {
-                acc::date::ms_to_date(acc::date::current_ms())
-            } else {
-                m.to_string()
-            }
-        });
         acc::rebalancer::rebalance(
             &mut journal.transactions,
             target,
             &journal.prices,
-            fixed_date.as_deref(),
         );
     }
 

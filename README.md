@@ -146,10 +146,9 @@ assertions and assignments; directives `commodity` (with `alias`,
 (line-leading `= /pattern/` rules that inject scaled postings
 into matching transactions); filter DSL across account /
 description / code / commodity plus `-r` sibling-posting view;
-per-posting currency conversion at `tx.date` with `--market`
-snapshot mode; multi-hop price lookups; **automatic IAS 21 /
-ASC 830 translation adjustment** (CTA) for transit accounts;
-`-R` real-only output.
+per-posting currency conversion at `tx.date`; multi-hop price
+lookups; **automatic IAS 21 / ASC 830 translation adjustment**
+(CTA) for transit accounts; `-R` real-only output.
 
 **Not in scope today:** `include` directive, `apply/end`,
 `define`, the short-form directives `D` / `Y` / `A` / `N`,
@@ -180,8 +179,8 @@ multi-currency reporting without distorting historical records.
 
 | Rule | What the standard says | How acc handles it |
 |------|-----------------------|---------------------|
-| **(1) Income & expense** | Translate at the rate of each transaction (or period average). Must not revalue retroactively — quarterly and annual comparisons would break. | Default: per-posting conversion at `tx.date`. A 2020 expense stays at its 2020 `$`-value forever under `-x $`. |
-| **(2) Monetary balance items** | Cash, receivables, payables are shown at the **current rate** at the report date — what's in the account is worth what it's worth today. | Opt-in: `--market [DATE]`. |
+| **(1) Income & expense** | Translate at the rate of each transaction (or period average). Must not revalue retroactively — quarterly and annual comparisons would break. | Default: per-posting conversion at `tx.date`. A 2020 expense stays at its 2020 `$`-value forever under `-X $`. |
+| **(2) Monetary balance items** | Cash, receivables, payables are shown at the **current rate** at the report date — what's in the account is worth what it's worth today. | Deliberately not done. acc values consistently and historically (rule 1); rather than revalue open balances to a report-date rate, it resolves the valuation difference on transit accounts via CTA (rule 3). |
 | **(3) Cumulative Translation Adjustment (CTA)** | The difference arising from applying different rates under (1) vs (2) is booked to a dedicated equity account under Other Comprehensive Income. | Implemented: declare `cta gain` / `cta loss` accounts. See [`cta gain` / `cta loss`](#cta-gain--cta-loss--currency-translation-adjustment). |
 
 ### Why this matters — and how acc differs
@@ -196,14 +195,16 @@ across periods become incomparable. Neither tool implements CTA.
 account is not wired up — it remains a manual post-processing
 step in both tools.
 
-**acc's default is historical-per-transaction**, which preserves
+**acc values historical-per-transaction**, which preserves
 income/expense stability (rule 1) and matches the temporal method
-of IAS 21. `--market` covers rule (2). `cta gain` / `cta loss`
-closes the loop on rule (3). **acc is the first plaintext-accounting
-tool that implements full IFRS IAS 21 currency translation
-automatically** — the other tools either skip drift by collapsing to
-a single rate (losing historical stability) or carry the option in
-their schema without wiring up the booking.
+of IAS 21. It deliberately does not offer a report-date snapshot
+mode for rule (2); instead `cta gain` / `cta loss` resolves the
+valuation difference on transit accounts to equity under rule (3).
+**acc is the first plaintext-accounting tool that books IFRS IAS 21
+currency translation adjustments automatically** — the other tools
+either skip drift by collapsing to a single rate (losing historical
+stability) or carry the option in their schema without wiring up the
+booking.
 
 ### Professional focus, no ceremony
 
@@ -234,15 +235,14 @@ acc [GLOBAL OPTIONS] <COMMAND> [COMMAND OPTIONS] [ARGS]
 
 | Flag                       | Default | Description |
 |----------------------------|---------|-------------|
-| `-f`, `--file PATH`        | —       | Journal file or directory. A file named explicitly is read whatever its extension. Directories are walked recursively for journal files (`.ledger`, `.j`, `.journal`, `.hledger`, `.dat`, `.txt`); use a `_` suffix (`foo.ledger_`) to keep a file in the tree but skip it. Repeat `-f` for multiple sources (order preserved). Works at any position — before or after the subcommand. `-f -` reads from stdin — only with `print --raw`; other commands silently ignore it. |
+| `-f`, `--file PATH`        | —       | Journal file or directory. A file named explicitly is read whatever its extension. Directories are walked recursively for journal files (only `.ledger`); use a `_` suffix (`foo.ledger_`) to keep a file in the tree but skip it. Repeat `-f` for multiple sources (order preserved). Works at any position — before or after the subcommand. `-f -` reads from stdin — only with `print --raw`; other commands silently ignore it. |
 | `-b`, `--begin DATE`       | —       | Include transactions on or after `DATE`. Accepts `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` — each picks the *start* of the specified period. Conflicts with `-p`. |
 | `-e`, `--end DATE`         | —       | Include transactions strictly before `DATE` (exclusive). Same grammar as `-b`. Conflicts with `-p`. |
 | `-p`, `--period PERIOD`    | —       | Shorthand spanning a full period. `YYYY` = year, `YYYY-MM` = month, `YYYY-MM-DD` = single day. Repeat `-p` to include multiple discrete periods — a transaction is kept if it falls within any. Conflicts with `-b` / `-e`. |
 | `--future`                 | off     | Include transactions dated after today. Hidden by default (rent, subscriptions, recurring forward-dated entries shouldn't clutter "what has happened" reports). When also using `-e` / `-p`, the earlier cutoff wins. |
 | `-S`, `--sort FIELD`       | `date`  | Sort key: `date` (alias `d`), `amount` (`amt`), `account` (`acc`), `description` (`desc`, `payee`). Prefix with `-` for reverse (`--sort -amount`). Repeat `--sort` for secondary / tertiary keys. Unknown fields silently fall back to `date`. |
-| `-x`, `--exchange SYMBOL`  | —       | Convert every amount into `SYMBOL` using the price DB. |
-| `--market [DATE]`          | —       | Snapshot mode for `-x`. No value = today. `YYYY-MM-DD` = that date. Without `--market`, `-x` converts each posting at its own `tx.date`. |
-| `-R`, `--real`             | off     | Drop virtual postings from the output (both `(account)` paren-virtual and `[account]` bracket-virtual). Realizer and translator still compute their adjustments for correctness, but the injected labels (fx gain / fx loss / translation adjustment) are hidden. |
+| `-X`, `--exchange SYMBOL`  | —       | Convert every amount into `SYMBOL` using the price DB. Each posting is converted at its own `tx.date` rate. |
+| `-R`, `--real`             | off     | Drop virtual postings from the output (both `(account)` paren-virtual and `[account]` bracket-virtual). Realizer and translator still compute their adjustments for correctness, but the injected labels (fx gain / fx loss / currency translation adjustment) are hidden. |
 | `-r`, `--related`          | off     | With a pattern filter, show the *other* postings of matched transactions — the counter-parties — instead of the matched postings themselves. `acc reg ^expenses -r` shows which accounts balanced against expenses. Modeled on ledger-cli's `--related`. |
 | `-h`, `--help`             | —       | Print help. Works on `acc` and every subcommand. |
 | `-V`, `--version`          | —       | Print version and exit. |
@@ -375,7 +375,7 @@ transactions still format.
 | Flag          | Default | Description |
 |---------------|---------|-------------|
 | `--no-sort`   | off     | Keep transactions in their source order. Default sort is stable-by-date, same-day events keep their original relative position. |
-| `PATHS...`    | —       | Files or directories. Files named explicitly are formatted whatever their extension; directories are walked recursively for journal files (`.ledger`, `.j`, `.journal`, `.hledger`, `.dat`, `.txt`). Pass `-` to read from stdin and write to stdout (for editor pipes); no other path flag is valid in that mode. |
+| `PATHS...`    | —       | Files or directories. Files named explicitly are formatted whatever their extension; directories are walked recursively for journal files (only `.ledger`). Pass `-` to read from stdin and write to stdout (for editor pipes); no other path flag is valid in that mode. |
 
 Writes atomically via a `.tmp` + rename, so a crash mid-write
 never leaves a half-written file.
@@ -407,9 +407,9 @@ Four invocations to illustrate the modes:
 acc diff journal.ledger journal.ledger.bak
 
 # Explicit, two directories: walk both trees recursively, pair
-# journal files (`.ledger`, `.j`, `.journal`, `.hledger`, `.dat`,
-# `.txt`) by relative path, diff each pair. Files present on only
-# one side are reported as `- only in OLD` / `+ only in NEW`.
+# journal files (only `.ledger`) by relative path, diff each pair.
+# Files present on only one side are reported as
+# `- only in OLD` / `+ only in NEW`.
 acc diff ~/journals /path/to/backup
 
 # Snapshot, single file: acc finds the matching path inside the
@@ -495,7 +495,7 @@ Output locations:
 
 | Variable                    | Used by           | Description |
 |-----------------------------|-------------------|-------------|
-| `ACC_PRICES_DIR`            | main pipeline, `update` | Directory of rate files. When `-x` is set, `.ledger` files under it are auto-loaded before your own `-f` paths. `acc update` writes here. |
+| `ACC_PRICES_DIR`            | main pipeline, `update` | Directory of rate files. When `-X` is set, `.ledger` files under it are auto-loaded before your own `-f` paths. `acc update` writes here. |
 | `OPENEXCHANGERATES_API_KEY` | `update` (fiat)   | API key from [openexchangerates.org](https://openexchangerates.org). Required for fiat fetching. |
 
 ### Exit codes
@@ -536,7 +536,7 @@ $ acc -f journal.ledger reg
 ```
 
 Everything else — `print`, `accounts`, `commodities`, `codes`,
-`check`, filter patterns, `-x` currency conversion, `--market`,
+`check`, filter patterns, `-X` currency conversion,
 fx gain/loss, CTA, lot annotations, balance assertions — is
 covered in topic-specific walkthroughs with journal inline and
 verbatim output:
@@ -546,7 +546,7 @@ verbatim output:
 - [`examples/02-filters.md`](examples/02-filters.md) — the filter
   DSL, `-r`, `-R`, multi-`-p`, date ranges
 - [`examples/03-currency-conversion.md`](examples/03-currency-conversion.md) —
-  `-x`, `--market`, multi-hop
+  `-X`, multi-hop
 - [`examples/04-fx-gain-loss.md`](examples/04-fx-gain-loss.md) —
   realising gain/loss on multi-commodity trades
 - [`examples/05-cta.md`](examples/05-cta.md) — IAS 21 / ASC 830
@@ -916,29 +916,20 @@ acc bal -b 2024-06               # from June 2024 onwards
 
 ## Currency conversion
 
-`-x TARGET` converts every amount into `TARGET` using the price DB.
+`-X TARGET` converts every amount into `TARGET` using the price DB.
 
-### Default: per-posting conversion at `tx.date`
+### Per-posting conversion at `tx.date`
 
 ```
-acc -f journal.ledger bal -x €
+acc -f journal.ledger bal -X €
 ```
 
 Each posting is converted using the latest `P` rate on or before
 its transaction's own date. A $5 coffee from 2020 always shows as
 its 2020 € equivalent, regardless of when the report runs. Reports
 are historically reproducible — same journal + same rate files =
-same result, forever.
-
-### `--market [DATE]` for snapshot revaluation
-
-For year-end statements, current portfolio value, etc. — opt in to
-rolling valuation:
-
-```
-acc bal -x € --market               # rates as of today
-acc bal -x € --market 2024-12-31    # rates as of year-end 2024
-```
+same result, forever. acc always values this way; there is no
+report-date snapshot mode.
 
 ### Multi-hop
 
@@ -955,7 +946,7 @@ remainder visible in the report.
 
 ### `$ACC_PRICES_DIR`
 
-When `-x` is set, every `.ledger` file under the directory the env
+When `-X` is set, every `.ledger` file under the directory the env
 var points to is loaded before your own `-f` paths:
 
 ```
@@ -963,7 +954,7 @@ export ACC_PRICES_DIR=~/accounting/prices/
 ```
 
 You can put both acc-fetched (`acc update`) and hand-written `P`
-directives here. No-op when `-x` is absent.
+directives here. No-op when `-X` is absent.
 
 ### `fx gain` / `fx loss` realisation
 
@@ -977,7 +968,7 @@ account Equity:FxLoss
     fx loss
 ```
 
-With `-x TARGET` and both accounts declared, acc converts every
+With `-X TARGET` and both accounts declared, acc converts every
 posting of a multi-commodity transaction to the target at the
 market rate on `tx.date` and sums them up. If the sum is non-zero,
 the transaction's implied rate differed from the market rate — the
@@ -1004,8 +995,8 @@ At market rate `$1000` is worth `€900`, but the user got `€920` —
 Report on them directly:
 
 ```
-acc bal Equity:FxGain Equity:FxLoss -x €    # total realised gains / losses
-acc reg Equity:FxGain -x €                  # per-transaction breakdown
+acc bal Equity:FxGain Equity:FxLoss -X €    # total realised gains / losses
+acc reg Equity:FxGain -X €                  # per-transaction breakdown
 ```
 
 ### `cta gain` / `cta loss` — Currency Translation Adjustment
@@ -1029,12 +1020,12 @@ converted out-flow don't cancel.
 Concrete: receive `€10000` on 2024-01-15 (rate `EUR/USD = 1.10`,
 so worth `$11000`), pay out `€10000` on 2024-06-15 (rate
 `EUR/USD = 1.05`, so worth `$10500`). Account is empty in `€`, but
-`-x USD` shows a `+$500` phantom. Nothing economically happened —
+`-X USD` shows a `+$500` phantom. Nothing economically happened —
 the money passed through — but the account looks like it gained
 `$500`.
 
 ```
-$ acc bal -x USD               # without cta accounts declared
+$ acc bal -X USD               # without cta accounts declared
   USD500.00 assets
   USD500.00   checking          ← phantom drift
   ...
@@ -1081,7 +1072,7 @@ only one is declared, the translator phase is skipped.
 
 #### What acc does
 
-With both `cta gain` and `cta loss` declared and `-x TARGET` set,
+With both `cta gain` and `cta loss` declared and `-X TARGET` set,
 acc walks every `(account, commodity)` group chronologically. For
 every group whose native amounts sum to exactly zero over the
 reporting period — the definition of a transit account — it tracks
@@ -1090,7 +1081,7 @@ native balance where the running target is non-zero, a synthetic
 transaction is emitted on that date:
 
 ```
-<date> * translation adjustment
+<date> * currency translation adjustment
     [<transit-account>]    TARGET -drift
     [<cta-account>]        TARGET drift
 ```
@@ -1123,7 +1114,7 @@ P 2024-06-15 EUR USD 1.05
 ```
 
 ```
-$ acc bal -x USD
+$ acc bal -X USD
 USD10500.00 expenses
 USD10500.00   services
   USD500.00 equity
@@ -1141,36 +1132,31 @@ stays at its 2024 historical rates — no retroactive revaluation.
 Run the register to see the automatic booking:
 
 ```
-$ acc reg -x USD
+$ acc reg -X USD
 2024-01-15 * salary arrives          assets:checking        USD11000.00
                                      income:salary         USD-11000.00
 2024-06-15 * invoice paid            expenses:services      USD10500.00
                                      assets:checking       USD-10500.00
-2024-06-15 * translation adjustment  [assets:checking]       USD-500.00
-                                     [equity:cta:loss]        USD500.00
+2024-06-15 * currency translation adjustment  [assets:checking]  USD-500.00
+                                              [equity:cta:loss]   USD500.00
 ```
 
 Auditable, reproducible, name-attributable.
 
-#### Interaction with `--market`
-
-`--market` converts every posting at one fixed date's rate. Under a
-single rate, transit accounts net to zero in target automatically —
-there is no drift to book. So the translator emits nothing under
-`--market`. CTA materialises only in the default per-tx-date mode
-where drift is structurally possible.
-
 #### Interaction with `fx gain` / `fx loss`
 
-The two mechanisms are complementary, never overlapping. The
-realizer handles **multi-commodity transactions** where a user's
-implied conversion rate diverges from the market rate — a realized
-trading event. The translator handles **single-commodity transit
-flows** where rate movement between inflow and outflow creates a
-purely unrealized holding-period difference. acc tags
-`(account, commodity)` groups touched by any multi-commodity
-transaction as "realizer territory" and excludes them from CTA to
-prevent double-booking.
+The two mechanisms are complementary, never overlapping — they
+measure different quantities. The realizer handles the **trade-day
+deviation** on a multi-commodity transaction: the user's implied
+conversion rate against the market rate on `tx.date`, a realized
+trading event. The translator handles the **holding-period drift**:
+the market rate moving between a transit account's inflow and
+outflow, a purely unrealized translation difference. Because these
+are distinct amounts, CTA books drift for **every** transit account
+whose native sum is zero — including multi-commodity pass-through
+accounts such as a clearing account that trades a foreign currency.
+The CTA transaction is self-balancing in the target currency, so it
+never double-books the realizer's gain/loss.
 
 #### Position in the plaintext-accounting ecosystem
 
@@ -1178,9 +1164,8 @@ As of this writing, acc is the only plaintext-accounting tool that
 implements IAS 21 / ASC 830 translation adjustment automatically:
 
 - **ledger-cli** and **hledger** default to single-rate valuation
-  under `-V` / `-X`, which sidesteps the drift at the cost of
-  historical income-statement stability. Neither tool has a CTA
-  concept.
+  under `-X`, which sidesteps the drift at the cost of historical
+  income-statement stability. Neither tool has a CTA concept.
 - **beancount** exposes `account_previous_conversions` and
   `account_current_conversions` options but does not populate them
   automatically — they require explicit invocation of
@@ -1188,11 +1173,13 @@ implements IAS 21 / ASC 830 translation adjustment automatically:
 - **rustledger** carries the beancount option schema forward but
   the booking logic is not wired into the pipeline.
 
-acc's default per-posting-tx.date conversion preserves IAS 21
-rule (1) (historical income/expense). `--market` covers rule (2)
-(current rate for monetary items). The `cta gain` / `cta loss`
-pair covers rule (3) (translation differences to OCI / equity).
-The three together close the loop.
+acc's per-posting-tx.date conversion preserves IAS 21 rule (1)
+(historical income/expense). It deliberately omits the report-date
+snapshot of rule (2) (current rate for monetary items), valuing
+everything historically instead. The `cta gain` / `cta loss` pair
+covers rule (3) (translation differences to OCI / equity), routing
+the valuation difference on transit accounts to equity rather than
+revaluing open balances.
 
 ---
 
@@ -1322,7 +1309,7 @@ P 2024-06-15 BTC USDT 63210.50
 ```
 
 Date, base commodity, quote commodity, rate. The rate is
-units-of-quote per unit-of-base. Populates the price DB that `-x`
+units-of-quote per unit-of-base. Populates the price DB that `-X`
 queries.
 
 ### Comments
@@ -1359,11 +1346,11 @@ edited with whatever editor you already use. No database, no
 sync service, no lock-in. `git diff` is your audit log.
 
 **Reproducible reports.** Same journal + same rate files produce
-the same output today and a year from now. By default every
-amount converts at its own transaction date's rate, not at "right
-now" — last year's numbers don't silently shift every time the
-report runs. `--market` opts into rolling revaluation when that's
-what you want.
+the same output today and a year from now. Every amount converts
+at its own transaction date's rate, not at "right now" — last
+year's numbers don't silently shift every time the report runs.
+There is no rolling-revaluation mode; valuation is always
+historical.
 
 **`P` directives are the source of truth.** Unlike ledger-cli, acc
 does not infer rates from the amounts of 2-commodity transactions.
@@ -1454,14 +1441,8 @@ ledger-cli converts every posting using the rate as of the *report
 date*. acc converts each posting using the rate as of its own
 *transaction date*. So a 2020 expense re-prices under ledger-cli
 whenever exchange rates move; under acc it stays fixed at the 2020
-rate forever.
-
-If you want ledger-cli-style rolling revaluation, use `--market`:
-
-```
-acc bal -x € --market               # rates as of today
-acc bal -x € --market 2024-12-31    # rates as of a specific date
-```
+rate forever. acc has no rolling-revaluation mode — valuation is
+always historical, by design.
 
 ### Can acc read my hledger or beancount journal?
 
@@ -1499,10 +1480,10 @@ effective amount on the cost side.
 ### How do I see realised FX gain/loss?
 
 Declare `fx gain` and `fx loss` accounts (see [Currency
-conversion](#currency-conversion)) and run with `-x`:
+conversion](#currency-conversion)) and run with `-X`:
 
 ```
-acc bal Equity:FxGain Equity:FxLoss -x €
+acc bal Equity:FxGain Equity:FxLoss -X €
 ```
 
 The realiser automatically injects the gain/loss postings for
@@ -1578,7 +1559,7 @@ The test suite is structured as:
   variants
 - `tests/lot_and_expression.rs` — lot annotations, expressions,
   multi-commodity split
-- `tests/conversion.rs` — `-x`, `--market`, inverse + multi-hop
+- `tests/conversion.rs` — `-X`, inverse + multi-hop
   rebalance
 
 Before sending a patch, please `cargo test` and `cargo clippy` locally.

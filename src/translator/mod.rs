@@ -10,7 +10,7 @@
 //! synthetic transaction is emitted at that date:
 //!
 //! ```text
-//! <date> * translation adjustment
+//! <date> * currency translation adjustment
 //!     [<transit-account>]   -drift TARGET
 //!     [<cta-account>]       +drift TARGET
 //! ```
@@ -23,10 +23,14 @@
 //! would misrepresent the event. A separate transaction with its
 //! own date and description keeps the audit trail clean.
 //!
-//! Multi-commodity transactions are handled by the realizer
-//! (fx gain / fx loss); any (account, commodity) group that appears
-//! on such a transaction is excluded from CTA to avoid double-
-//! booking. Groups with any missing price-DB rate are also skipped
+//! CTA and the realizer (fx gain / fx loss) are complementary, not
+//! mutually exclusive: the realizer books the trade-day deviation
+//! (implied vs market rate) on multi-commodity transactions, while CTA
+//! books the holding-period drift (market-rate movement between inflow
+//! and outflow) on any account whose native sum is zero — including
+//! multi-commodity clearing accounts. The two measure different
+//! quantities and never double-book; the CTA transaction is
+//! self-balancing. Groups with any missing price-DB rate are skipped
 //! (drift cannot be reliably computed).
 
 use std::collections::{HashMap, HashSet};
@@ -39,17 +43,19 @@ use crate::parser::located::Located;
 use crate::parser::posting::{Amount, Posting};
 use crate::parser::transaction::{State, Transaction};
 
-/// Inject translation-adjustment transactions into `txs` for every
-/// transit account whose native sum is zero but whose per-posting-
-/// tx.date target sum drifts. Positive drift routes to `cta_gain`,
-/// negative drift to `cta_loss`. `fixed_date` mirrors the
-/// rebalancer: None = per-posting `tx.date`, Some(d) = the market-
-/// snapshot date.
+/// Inject currency-translation-adjustment transactions into `txs` for
+/// every transit account whose native sum is zero but whose
+/// per-posting-tx.date target sum drifts. Positive drift routes to
+/// `cta_loss`, negative drift to `cta_gain`.
+///
+/// Applies to every pass-through account, single- or multi-commodity:
+/// CTA books the holding-period drift (market-rate movement between
+/// inflow and outflow), which is independent of the realizer's
+/// trade-day fx gain/loss — the two never double-book the same amount.
 pub fn translate(
     txs: &mut Vec<Located<Transaction>>,
     target: &str,
     db: &Index,
-    fixed_date: Option<&str>,
     cta_gain: &str,
     cta_loss: &str,
     precision: usize,
@@ -59,14 +65,7 @@ pub fn translate(
         return;
     }
 
-    let adjustments = collect_adjustments(
-        txs,
-        &transit,
-        target,
-        db,
-        fixed_date,
-        precision,
-    );
+    let adjustments = collect_adjustments(txs, &transit, target, db, precision);
 
     for adj in adjustments {
         // Sign convention: running_target (drift) > 0 means the
@@ -85,47 +84,26 @@ pub fn translate(
 fn identify_transit_groups(
     txs: &[Located<Transaction>],
 ) -> HashSet<(String, String)> {
+    // A transit (pass-through) account is one whose native amounts sum
+    // to exactly zero per (account, commodity) over the journal — money
+    // came in and went back out. Both single- and multi-commodity
+    // accounts qualify: CTA books only the holding-period drift, which
+    // is a different quantity than the realizer's trade-day fx gain/loss
+    // (proven 2026-06-21), so the two never double-book.
     let mut sums: HashMap<(String, String), Decimal> = HashMap::new();
-    // (account, commodity) pairs touched by any multi-commodity tx
-    // belong to the realizer's domain (fx gain/loss). Exclude them
-    // from CTA to avoid double-booking the same drift.
-    let mut tainted: HashSet<(String, String)> = HashSet::new();
     for lt in txs {
-        let multi = !is_single_commodity(&lt.value);
         for lp in &lt.value.postings {
             if let Some(a) = &lp.value.amount {
                 let key = (lp.value.account.clone(), a.commodity.clone());
-                if multi {
-                    tainted.insert(key.clone());
-                }
                 let v = sums.entry(key).or_insert(Decimal::zero());
                 *v = *v + a.value;
             }
         }
     }
     sums.into_iter()
-        .filter(|(k, v)| v.is_zero() && !tainted.contains(k))
+        .filter(|(_k, v)| v.is_zero())
         .map(|(k, _)| k)
         .collect()
-}
-
-/// Single-commodity iff every balance-contributing posting uses the
-/// same commodity. Paren-virtual postings (realizer-injected gain/
-/// loss labels) are informational and ignored in this check.
-fn is_single_commodity(tx: &Transaction) -> bool {
-    let mut seen: Option<String> = None;
-    for lp in &tx.postings {
-        if lp.value.is_virtual && !lp.value.balanced {
-            continue;
-        }
-        let Some(a) = &lp.value.amount else { continue };
-        match &seen {
-            None => seen = Some(a.commodity.clone()),
-            Some(c) if *c == a.commodity => {}
-            _ => return false,
-        }
-    }
-    true
 }
 
 struct Adjustment {
@@ -141,7 +119,6 @@ fn collect_adjustments(
     transit: &HashSet<(String, String)>,
     target: &str,
     db: &Index,
-    fixed_date: Option<&str>,
     precision: usize,
 ) -> Vec<Adjustment> {
     // Per-group running (native_sum, target_sum, rate_missing).
@@ -150,9 +127,7 @@ fn collect_adjustments(
     let mut out = Vec::new();
 
     for lt in txs.iter() {
-        let lookup_date: String = fixed_date
-            .map(str::to_string)
-            .unwrap_or_else(|| lt.value.date.to_string());
+        let lookup_date: String = lt.value.date.to_string();
         for lp in &lt.value.postings {
             let Some(a) = &lp.value.amount else { continue };
             let key = (lp.value.account.clone(), a.commodity.clone());
@@ -197,7 +172,7 @@ fn build_release_tx(
     cta_account: &str,
     precision: usize,
 ) -> Located<Transaction> {
-    let description = "translation adjustment".to_string();
+    let description = "currency translation adjustment".to_string();
     // Bracket-virtual (`[account]`): virtual (rendered in brackets)
     // and balance-contributing. The tx balances against itself and
     // the transit account's target sum returns to zero.
@@ -280,13 +255,13 @@ mod tests {
             \texpenses:food     10 EUR\n\
             \tassets:checking  -10 EUR\n";
         let (mut txs, db) = setup(src);
-        translate(&mut txs, "USD", &db, None, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
 
         // Three txs now: 2 originals + 1 synthetic release.
         assert_eq!(txs.len(), 3);
         let release = txs
             .iter()
-            .find(|lt| lt.value.description == "translation adjustment")
+            .find(|lt| lt.value.description == "currency translation adjustment")
             .expect("release tx missing");
         assert_eq!(release.value.postings.len(), 2);
         // +$11 - $10.50 = +$0.50 drift on checking.
@@ -316,7 +291,7 @@ mod tests {
             \tincome:salary    -10 EUR\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, None, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
         assert_eq!(txs.len(), original);
     }
 
@@ -333,7 +308,7 @@ mod tests {
             \tassets:checking  -10 EUR\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, None, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
         assert_eq!(txs.len(), original);
     }
 
@@ -348,41 +323,38 @@ mod tests {
             \tassets:checking  -10 EUR\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, None, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
         assert_eq!(txs.len(), original);
     }
 
     #[test]
-    fn multi_commodity_tx_skipped_to_avoid_double_booking_with_realizer() {
+    fn multi_commodity_pass_through_account_gets_cta() {
+        // A pass-through account in a foreign commodity that nets to
+        // zero natively must still get its holding-period drift booked,
+        // even though every leg is a multi-commodity trade (fx) — the
+        // taint exclusion was proven unnecessary (2026-06-21). USD flows
+        // in @1.10 and back out @1.05; native sum 0, target drift 0.50.
         let src = "\
-            P 2024-06-15 EUR USD 1.05\n\
-            2024-06-15 * fx trade\n\
-            \tassets:usd   -100 USD\n\
-            \tassets:eur     95 EUR\n";
+            P 2024-01-15 USD EUR 1.10\n\
+            P 2024-06-15 USD EUR 1.05\n\
+            2024-01-15 * in\n\
+            \tcp:partner    -100 USD\n\
+            \tincome:sales   110 EUR\n\
+            2024-06-15 * out\n\
+            \tcp:partner     100 USD\n\
+            \tassets:bank   -105 EUR\n";
         let (mut txs, db) = setup(src);
-        let original = txs.len();
-        translate(&mut txs, "USD", &db, None, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "EUR", &db, "in:cta", "ex:cta", 2);
+        let release = txs
+            .iter()
+            .find(|lt| lt.value.description == "currency translation adjustment")
+            .expect("CTA must fire on a multi-commodity pass-through account");
+        // cp:partner: -100×1.10 + 100×1.05 = -110 + 105 = -5 drift.
+        let debit = &release.value.postings[0].value;
+        assert_eq!(debit.account, "cp:partner");
         assert_eq!(
-            txs.len(),
-            original,
-            "CTA must not fire on multi-commodity tx"
+            debit.amount.as_ref().unwrap().value,
+            Decimal::parse("5").unwrap()
         );
-    }
-
-    #[test]
-    fn market_snapshot_single_rate_produces_no_drift() {
-        let src = "\
-            P 2024-01-15 EUR USD 1.10\n\
-            P 2024-06-15 EUR USD 1.05\n\
-            2024-01-15 * receive\n\
-            \tassets:checking   10 EUR\n\
-            \tincome:salary    -10 EUR\n\
-            2024-06-15 * spend\n\
-            \texpenses:food     10 EUR\n\
-            \tassets:checking  -10 EUR\n";
-        let (mut txs, db) = setup(src);
-        let original = txs.len();
-        translate(&mut txs, "USD", &db, Some("2024-06-15"), "in:cta", "ex:cta", 2);
-        assert_eq!(txs.len(), original);
     }
 }
