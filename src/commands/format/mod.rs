@@ -1,12 +1,19 @@
-//! `format` command — parse, validate syntax, re-emit aligned.
+//! `format` command — validate, then re-emit aligned.
 //!
-//! Semantics: **print --raw but aligned**. Runs the parser only,
-//! no resolve / no book / no rebalance. Missing amounts stay missing
-//! (nothing is computed), comments are preserved, directives keep
-//! their canonical form, transactions are stably date-sorted so
-//! same-day events keep their original relative order.
+//! Semantics: **print --raw but aligned**. The whole input is first run
+//! through the full load pipeline (parse → resolve → book), the same
+//! checks `acc reg` applies, so structurally broken input is reported
+//! instead of silently reformatted — a single space between account and
+//! amount that collapses into one token, an unbalanced transaction, a
+//! failed assertion. The aligned *output* is still produced verbatim
+//! from source (missing amounts stay missing, nothing is recomputed,
+//! comments and directives are preserved, transactions are stably
+//! date-sorted).
 //!
-//! Always writes back in place. Atomic: each file is written to
+//! All-or-nothing: if any file fails validation, nothing is written —
+//! no half-formatted batches.
+//!
+//! Writes back in place. Atomic: each file is written to
 //! `<path>.ledger.tmp` and then renamed over the target, so a crash
 //! mid-write never leaves a half-written file.
 //!
@@ -52,14 +59,26 @@ pub fn run(paths: &[String], no_sort: bool) -> Result<(), Error> {
     }
 
     let files = collect_files(paths);
+
+    // All-or-nothing: validate the entire set through the full pipeline
+    // (parse → resolve → book) — the same checks `acc reg` runs — before
+    // writing anything. A plain parse accepts structurally broken input
+    // that the booker rejects: a single space between account and amount
+    // collapses both into one account token (leaving two amount-less
+    // postings), an unbalanced transaction, a failed assertion. Catching
+    // it here means no file is ever rewritten from a journal that
+    // wouldn't load, and a single error aborts the whole run so there
+    // are never half-formatted batches.
+    crate::load(&files).map_err(|e| Error::from(e.to_string()))?;
+
     let total = files.len();
-    for path in files {
-        let source = fs::read_to_string(&path)
+    for path in &files {
+        let source = fs::read_to_string(path)
             .map_err(|e| Error::from(format!("read {}: {}", path.display(), e)))?;
         let entries = parser::parse(&source)
             .map_err(|e| Error::from(format!("parse {}: {}", path.display(), e)))?;
         let formatted = render(&entries, &source, no_sort);
-        write_atomic(&path, &formatted)
+        write_atomic(path, &formatted)
             .map_err(|e| Error::from(format!("write {}: {}", path.display(), e)))?;
         println!("{} {}", "✓".green(), path.display());
     }
@@ -79,12 +98,35 @@ fn run_stdin_stdout(no_sort: bool) -> Result<(), Error> {
     io::stdin()
         .read_to_string(&mut source)
         .map_err(|e| Error::from(format!("read stdin: {}", e)))?;
+
+    // Full validation, same contract as the file path. On error, echo
+    // the input back unchanged so a `:%!acc format -` pipe in vim never
+    // replaces the buffer with a half-formatted or empty result, and
+    // report the problem on stderr.
+    if let Err(e) = validate_source(&source) {
+        io::stdout().write_all(source.as_bytes()).ok();
+        return Err(e);
+    }
+
     let entries = parser::parse(&source)
         .map_err(|e| Error::from(format!("parse stdin: {}", e)))?;
     let formatted = render(&entries, &source, no_sort);
     io::stdout()
         .write_all(formatted.as_bytes())
         .map_err(|e| Error::from(format!("write stdout: {}", e)))?;
+    Ok(())
+}
+
+/// Run the full pipeline (parse → resolve → book) over an in-memory
+/// source and return the first error. Used for stdin, where the bytes
+/// are already consumed so `load` (which reads from disk) can't be
+/// reused. File inputs validate via `load` directly.
+fn validate_source(source: &str) -> Result<(), Error> {
+    let entries = parser::parse_with_file(source, std::sync::Arc::from("<stdin>"))
+        .map_err(|e| Error::from(format!("parse stdin: {}", e)))?;
+    let resolved =
+        crate::resolver::resolve(entries).map_err(|e| Error::from(e.to_string()))?;
+    crate::booker::book(resolved.transactions).map_err(|e| Error::from(e.to_string()))?;
     Ok(())
 }
 
