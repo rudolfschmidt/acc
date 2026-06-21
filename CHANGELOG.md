@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.6.0 — 2026-06-21
+
+### Sun 21 Jun 2026 - `--commodities N` / `--mixed`: filter by commodity count
+
+A new report filter keeps only transactions that touch at least `N`
+distinct commodities. `--commodities 2` surfaces every currency-mixing
+entry; `--mixed` is the shorthand for exactly that (`--commodities 2`),
+the case that comes up in practice — finding the postings where fx
+gain/loss or CTA could be in play.
+
+The count is taken on the **native** commodities, before any `-X`
+conversion (otherwise `-X €` would collapse everything to one commodity
+and the filter would match nothing). Paren-virtual fx labels are
+excluded from the count, so a synthetic fx-gain posting doesn't inflate
+a single-currency transaction to "mixed". The filter runs after the
+pattern/date filter and before the rebalancer, so it composes with
+`-X`, periods and account patterns. Available on every report command
+via the shared report args.
+
+### Sun 21 Jun 2026 - `acc format` no longer reorders by default
+
+`acc format` used to date-sort transactions unless you passed
+`--no-sort`. That default was wrong for the tool's main job: an
+editor-pipe (`:%!acc format -`) or a quick whitespace cleanup should
+align columns and nothing else, never silently reorder the file. A
+formatter that moves entries around is a diff hazard.
+
+So the default is reversed. `format` now preserves source order
+untouched; the new `--sort` flag opts into stable date-sorting when you
+actually want it. `--no-sort` is gone — it was the old default and is
+now simply the behavior. The vim integration drops the flag
+accordingly (`:%!acc format -`). Breaking for any script that passed
+`--no-sort`; the fix is to delete the flag.
+
 ## 0.5.0 — 2026-06-21
 
 ### Sun 21 Jun 2026 - Currency valuation is historical-only; `-x` renamed to `-X`; market/snapshot modes removed

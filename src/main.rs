@@ -81,6 +81,19 @@ struct ReportArgs {
     /// rate on its own transaction date (historical valuation).
     #[arg(short = 'X', long = "exchange", value_name = "COMMODITY")]
     exchange: Option<String>,
+
+    /// Keep only transactions whose balance-contributing postings use
+    /// at least N distinct commodities (paren-virtual fx labels are
+    /// ignored). Counts native commodities — applied before `-X`
+    /// conversion. `--commodities 2` finds every currency-mixing
+    /// transaction; `3` those mixing at least three.
+    #[arg(long = "commodities", value_name = "N", conflicts_with = "mixed")]
+    commodities: Option<usize>,
+
+    /// Alias for `--commodities 2`: keep only transactions that mix at
+    /// least two commodities.
+    #[arg(long = "mixed")]
+    mixed: bool,
 }
 
 #[derive(Subcommand)]
@@ -175,16 +188,16 @@ enum Command {
     /// The input is fully validated first (parse, resolve, book — the
     /// same checks `acc reg` runs); a structural error such as an
     /// unbalanced transaction or a single-space account/amount aborts
-    /// the run with nothing written (all-or-nothing). Transactions are
-    /// stably date-sorted by default (`--no-sort` to disable).
+    /// the run with nothing written (all-or-nothing). Transactions keep
+    /// their source order by default (`--sort` to date-sort them).
     /// Writes atomically. Pass `-` as path to pipe via
     /// stdin/stdout (`:%!acc format -` in vim).
     #[command(arg_required_else_help = true)]
     Format {
-        /// Skip the chronological sort and keep transactions in their
-        /// source order.
-        #[arg(long = "no-sort")]
-        no_sort: bool,
+        /// Stably date-sort transactions. Off by default — source order
+        /// is preserved unless this flag is given.
+        #[arg(long = "sort")]
+        sort: bool,
         /// Files or directories to format. Directories are walked
         /// recursively for journal files (`.ledger` only). Files named
         /// explicitly are formatted regardless of extension. `-` reads
@@ -359,6 +372,24 @@ fn collect_ledger_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>
     }
 }
 
+/// Number of distinct commodities used by a transaction's
+/// balance-contributing postings (real and bracket-virtual). Paren-
+/// virtual postings — the realizer's informational fx gain/loss labels
+/// — are skipped, so they never inflate the count. Drives
+/// `--commodities N` / `--mixed`.
+fn distinct_commodities(tx: &acc::parser::transaction::Transaction) -> usize {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for lp in &tx.postings {
+        if lp.value.is_virtual && !lp.value.balanced {
+            continue;
+        }
+        if let Some(a) = &lp.value.amount {
+            seen.insert(a.commodity.as_str());
+        }
+    }
+    seen.len()
+}
+
 /// Pull every `-f` / `--file PATH` pair out of the raw argv before
 /// clap sees it. Works around a clap-derive limitation: global +
 /// `Vec<String>` args are bound to a single subcommand level, so
@@ -394,10 +425,10 @@ fn start() -> Result<(), acc::Error> {
     };
 
     // Format is standalone — does its own file IO, bypasses the main
-    // load pipeline. Parse-only, no resolve / book / rebalance, so a
-    // journal with balance errors still formats without complaining.
-    if let Command::Format { no_sort, paths } = &command {
-        return acc::commands::format::run(paths, *no_sort);
+    // report pipeline. It runs the full validation (parse → resolve →
+    // book) itself before writing, all-or-nothing.
+    if let Command::Format { sort, paths } = &command {
+        return acc::commands::format::run(paths, *sort);
     }
 
     // Diff is standalone — source-level file/tree comparison, no
@@ -689,6 +720,19 @@ fn start() -> Result<(), acc::Error> {
         journal.transactions.retain(|lt| {
             parsed.iter().any(|(b, e)| lt.value.date >= *b && lt.value.date < *e)
         });
+    }
+
+    // `--commodities N` / `--mixed`: keep only transactions whose
+    // balance-contributing postings span at least N distinct (native)
+    // commodities. Runs before rebalance so it sees the original
+    // commodities, not the single `-X` target.
+    let min_commodities: Option<usize> = filter_args.and_then(|f| {
+        if f.mixed { Some(2) } else { f.commodities }
+    });
+    if let Some(min) = min_commodities {
+        journal
+            .transactions
+            .retain(|lt| distinct_commodities(&lt.value) >= min);
     }
 
     // Rebalance phase: convert posting amounts into the -X target at
