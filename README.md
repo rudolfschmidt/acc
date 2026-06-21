@@ -244,6 +244,9 @@ acc [GLOBAL OPTIONS] <COMMAND> [COMMAND OPTIONS] [ARGS]
 | `-X`, `--exchange SYMBOL`  | —       | Convert every amount into `SYMBOL` using the price DB. Each posting is converted at its own `tx.date` rate. |
 | `-R`, `--real`             | off     | Drop virtual postings from the output (both `(account)` paren-virtual and `[account]` bracket-virtual). Realizer and translator still compute their adjustments for correctness, but the injected labels (fx gain / fx loss / currency translation adjustment) are hidden. |
 | `-r`, `--related`          | off     | With a pattern filter, show the *other* postings of matched transactions — the counter-parties — instead of the matched postings themselves. `acc reg ^expenses -r` shows which accounts balanced against expenses. Modeled on ledger-cli's `--related`. |
+| `--related-all`            | off     | Show *every* posting of a matched transaction — the matched posting **and** its counter-parties — not just the counter-parties (`-r`) or just the match (default). Modeled on ledger-cli's `--related-all`. |
+| `--commodities N`          | —       | Keep only transactions whose balance-contributing postings use at least `N` distinct commodities. Counts the *native* commodities (before `-X` conversion); paren-virtual fx labels are ignored. `--commodities 2` finds every currency-mixing transaction. |
+| `--mixed`                  | off     | Alias for `--commodities 2`: keep only transactions that mix at least two commodities. |
 | `-h`, `--help`             | —       | Print help. Works on `acc` and every subcommand. |
 | `-V`, `--version`          | —       | Print version and exit. |
 
@@ -374,7 +377,7 @@ transactions still format.
 
 | Flag          | Default | Description |
 |---------------|---------|-------------|
-| `--no-sort`   | off     | Keep transactions in their source order. Default sort is stable-by-date, same-day events keep their original relative position. |
+| `--sort`      | off     | Stable date-sort the transactions. Off by default: source order is preserved exactly, so formatting only ever touches whitespace and never reorders your entries. With `--sort`, same-day events keep their original relative position. |
 | `PATHS...`    | —       | Files or directories. Files named explicitly are formatted whatever their extension; directories are walked recursively for journal files (only `.ledger`). Pass `-` to read from stdin and write to stdout (for editor pipes); no other path flag is valid in that mode. |
 
 Writes atomically via a `.tmp` + rename, so a crash mid-write
@@ -594,7 +597,7 @@ pushes it.
 **Vim integration** — drop this in your `ftplugin/ledger.vim`:
 
 ```vim
-autocmd FileType ledger nnoremap <leader>f :%!acc format --no-sort -<cr>
+autocmd FileType ledger nnoremap <leader>f :%!acc format -<cr>
 ```
 
 Then in any ledger buffer, `<leader>f` pipes the buffer through

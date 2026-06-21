@@ -7,8 +7,8 @@
 //! amount that collapses into one token, an unbalanced transaction, a
 //! failed assertion. The aligned *output* is still produced verbatim
 //! from source (missing amounts stay missing, nothing is recomputed,
-//! comments and directives are preserved, transactions are stably
-//! date-sorted).
+//! comments and directives are preserved, transactions keep their
+//! source order unless `--sort` is given).
 //!
 //! All-or-nothing: if any file fails validation, nothing is written —
 //! no half-formatted batches.
@@ -49,13 +49,13 @@ const INDENT: &str = "\t";
 /// differing account-name lengths.
 const GAP: usize = 8;
 
-pub fn run(paths: &[String], no_sort: bool) -> Result<(), Error> {
+pub fn run(paths: &[String], sort: bool) -> Result<(), Error> {
     // stdin/stdout mode: `-` reads the journal from stdin and writes
     // the formatted output to stdout without touching the filesystem.
     // Used by vim's `:%!acc format -` pipe so buffer-editing stays
     // reversible under undo.
     if paths.iter().any(|p| p == "-") {
-        return run_stdin_stdout(no_sort);
+        return run_stdin_stdout(sort);
     }
 
     let files = collect_files(paths);
@@ -77,7 +77,7 @@ pub fn run(paths: &[String], no_sort: bool) -> Result<(), Error> {
             .map_err(|e| Error::from(format!("read {}: {}", path.display(), e)))?;
         let entries = parser::parse(&source)
             .map_err(|e| Error::from(format!("parse {}: {}", path.display(), e)))?;
-        let formatted = render(&entries, &source, no_sort);
+        let formatted = render(&entries, &source, sort);
         write_atomic(path, &formatted)
             .map_err(|e| Error::from(format!("write {}: {}", path.display(), e)))?;
         println!("{} {}", "✓".green(), path.display());
@@ -92,7 +92,7 @@ pub fn run(paths: &[String], no_sort: bool) -> Result<(), Error> {
 
 /// Stdin → stdout pipe mode. Parse what comes in on stdin as a
 /// journal, emit the aligned render on stdout. No filesystem I/O.
-fn run_stdin_stdout(no_sort: bool) -> Result<(), Error> {
+fn run_stdin_stdout(sort: bool) -> Result<(), Error> {
     use std::io::{Read, Write};
     let mut source = String::new();
     io::stdin()
@@ -110,7 +110,7 @@ fn run_stdin_stdout(no_sort: bool) -> Result<(), Error> {
 
     let entries = parser::parse(&source)
         .map_err(|e| Error::from(format!("parse stdin: {}", e)))?;
-    let formatted = render(&entries, &source, no_sort);
+    let formatted = render(&entries, &source, sort);
     io::stdout()
         .write_all(formatted.as_bytes())
         .map_err(|e| Error::from(format!("write stdout: {}", e)))?;
@@ -170,13 +170,13 @@ fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-fn render(entries: &[Located<Entry>], source: &str, no_sort: bool) -> String {
+fn render(entries: &[Located<Entry>], source: &str, sort: bool) -> String {
     let source_lines: Vec<&str> = source.lines().collect();
     let (account_width, amount_width) = column_widths(entries, &source_lines);
-    // Stable date-sort of transactions only. Non-transaction entries
-    // (price directives, commodity blocks, top-level comments) keep
-    // their original positions; the transaction slots get repopulated in
-    // date order. With `no_sort`, transactions stay in source order.
+    // Transactions keep their source order by default. With `sort`,
+    // stably date-sort them: non-transaction entries (price directives,
+    // commodity blocks, top-level comments) keep their original
+    // positions and the transaction slots get repopulated in date order.
     let mut sorted_transactions: Vec<&Transaction> = entries
         .iter()
         .filter_map(|e| match &e.value {
@@ -184,7 +184,7 @@ fn render(entries: &[Located<Entry>], source: &str, no_sort: bool) -> String {
             _ => None,
         })
         .collect();
-    if !no_sort {
+    if sort {
         sorted_transactions.sort_by_key(|t| t.date);
     }
     let mut transaction_iter = sorted_transactions.into_iter();
