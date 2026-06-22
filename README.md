@@ -380,6 +380,11 @@ transactions still format.
 | `--sort`      | off     | Stable date-sort the transactions. Off by default: source order is preserved exactly, so formatting only ever touches whitespace and never reorders your entries. With `--sort`, same-day events keep their original relative position. |
 | `PATHS...`    | —       | Files or directories. Files named explicitly are formatted whatever their extension; directories are walked recursively for journal files (only `.ledger`). Pass `-` to read from stdin and write to stdout (for editor pipes); no other path flag is valid in that mode. |
 
+A comment block (e.g. a commented-out transaction) is surrounded by a
+blank line so it stays visually separate from neighbouring entries —
+except at the very start or end of the file, where no extra blank line
+is added.
+
 Writes atomically via a `.tmp` + rename, so a crash mid-write
 never leaves a half-written file.
 
@@ -430,6 +435,50 @@ acc diff --snapshot /path/to/backup .
 Both files and directories work in either mode. The snapshot form
 saves you from typing the tree path twice and works regardless of
 where in the working tree you stand.
+
+### `acc sweep`
+
+```
+acc [GLOBAL OPTIONS] sweep <ACCOUNT> <SEGMENT> <INCOME> <EXPENSE>
+```
+
+Close the open balance of a pass-through (clearing) account by
+generating offsetting entries. Conceptually `reg ACCOUNT`: sweep pairs
+equal-and-opposite amounts on the account across the whole account (per
+commodity, over all dates), and for every posting that stays open it
+writes one offsetting entry — at that posting's date — that brings the
+account back to zero. A debit remainder (`> 0`) books to
+`EXPENSE:SEGMENT`, a credit remainder (`< 0`) to `INCOME:SEGMENT`. Each
+entry is marked cleared (`*`) and titled with the account's last segment.
+
+| Argument   | Description |
+|------------|-------------|
+| `ACCOUNT`  | The pass-through account to close — a filter pattern (e.g. `^assets:clearing$`). |
+| `SEGMENT`  | Appended after the income / expense account (`INCOME:SEGMENT`). |
+| `INCOME`   | Account used when the remainder is a credit (`< 0`). |
+| `EXPENSE`  | Account used when the remainder is a debit (`> 0`). |
+
+All four arguments are required. Output is appended to
+`<segment-tail>.ledger` in the current directory (`<segment-tail>` is
+the account's last segment) and then aligned and date-sorted via
+`acc format`.
+
+**Idempotent and file-agnostic.** Because the generated offsets are
+part of the loaded journal, each posting cancels against its offset on
+the account, so re-running only closes newly-opened postings — never
+duplicates. It does not matter which file an offset lives in, so
+renaming or moving the generated file is safe. A genuine round-trip —
+an invoice one day, its payment weeks later — cancels the same way and
+is left alone; only real open balances are swept. Pairing happens
+within the same date first, then across dates, so an offset removed for
+one date is re-pulled at that very date even when same-amount postings
+elsewhere are still settled.
+
+```
+# Close everything sitting on assets:clearing into income / expenses,
+# under the `misc` segment.
+acc -f journal.ledger sweep '^assets:clearing$' misc income expenses
+```
 
 ### `acc navigate` (aliases `nav`, `ui`)
 

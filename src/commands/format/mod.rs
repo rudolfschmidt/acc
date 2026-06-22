@@ -73,13 +73,7 @@ pub fn run(paths: &[String], sort: bool) -> Result<(), Error> {
 
     let total = files.len();
     for path in &files {
-        let source = fs::read_to_string(path)
-            .map_err(|e| Error::from(format!("read {}: {}", path.display(), e)))?;
-        let entries = parser::parse(&source)
-            .map_err(|e| Error::from(format!("parse {}: {}", path.display(), e)))?;
-        let formatted = render(&entries, &source, sort);
-        write_atomic(path, &formatted)
-            .map_err(|e| Error::from(format!("write {}: {}", path.display(), e)))?;
+        format_in_place(path, sort)?;
         println!("{} {}", "✓".green(), path.display());
     }
     let label = if total == 1 { "file" } else { "files" };
@@ -88,6 +82,20 @@ pub fn run(paths: &[String], sort: bool) -> Result<(), Error> {
     }
     println!("{} {} formatted", total, label);
     Ok(())
+}
+
+/// Format a single file in place — read, parse, render aligned, write
+/// atomically — without printing anything. The caller is responsible for
+/// validation (this skips the `load` check that `run` does up front).
+/// Used by `sweep` to align its generated file silently.
+pub fn format_in_place(path: &Path, sort: bool) -> Result<(), Error> {
+    let source = fs::read_to_string(path)
+        .map_err(|e| Error::from(format!("read {}: {}", path.display(), e)))?;
+    let entries = parser::parse(&source)
+        .map_err(|e| Error::from(format!("parse {}: {}", path.display(), e)))?;
+    let formatted = render(&entries, &source, sort);
+    write_atomic(path, &formatted)
+        .map_err(|e| Error::from(format!("write {}: {}", path.display(), e)))
 }
 
 /// Stdin → stdout pipe mode. Parse what comes in on stdin as a
@@ -191,11 +199,18 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool) -> String {
 
     let mut out = String::new();
     let mut prev_was_tx = false;
+    let mut prev_was_comment = false;
+    let mut first = true;
 
     for entry in entries {
         let is_tx = matches!(entry.value, Entry::Transaction(_));
-        // Blank line between consecutive transactions for readability.
-        if is_tx && prev_was_tx {
+        let is_comment = matches!(entry.value, Entry::Comment(_));
+        // Blank line for readability: between consecutive transactions,
+        // and at the boundary between a comment block and the surrounding
+        // content (so a commented-out transaction gets breathing room).
+        // Never before the first entry, and not between adjacent comment
+        // lines — a multi-line comment block stays together.
+        if !first && ((is_tx && prev_was_tx) || (is_comment != prev_was_comment)) {
             out.push('\n');
         }
         match &entry.value {
@@ -284,6 +299,8 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool) -> String {
             }
         }
         prev_was_tx = is_tx;
+        prev_was_comment = is_comment;
+        first = false;
     }
     out
 }

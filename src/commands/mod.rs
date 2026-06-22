@@ -12,6 +12,7 @@ pub mod format;
 pub mod navigate;
 pub mod print;
 pub mod register;
+pub mod sweep;
 pub mod update;
 
 pub(crate) mod util;

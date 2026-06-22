@@ -232,6 +232,33 @@ enum Command {
         /// the current directory if none given.
         paths: Vec<String>,
     },
+    /// Close the open balance of a pass-through account.
+    ///
+    /// Sweep pairs equal-and-opposite amounts on ACCOUNT across the whole
+    /// account (per commodity, over all dates) — like reading `reg
+    /// ACCOUNT` — and writes one offsetting entry per still-open posting,
+    /// at that posting's date, to bring the account back to zero. A debit
+    /// posting (> 0) books to EXPENSE:SEGMENT, a credit posting (< 0) to
+    /// INCOME:SEGMENT. Each entry takes the account's last segment as its
+    /// title and is cleared.
+    ///
+    /// Idempotent and file-agnostic: a posting whose offset already
+    /// exists anywhere in the loaded journal cancels and is skipped, so
+    /// re-running only closes newly-opened postings — no markers, no
+    /// file-name tracking. A round-trip settled later (invoice then
+    /// payment) cancels too. All four arguments are required. Output is
+    /// appended to `<title>.ledger` and aligned via `acc format`.
+    #[command(arg_required_else_help = true)]
+    Sweep {
+        /// Pass-through account to close (filter pattern, e.g. `^a:b:c$`).
+        account: String,
+        /// Segment appended after the income / expense account.
+        segment: String,
+        /// Income account — used when the remainder is a credit (< 0).
+        income: String,
+        /// Expense account — used when the remainder is a debit (> 0).
+        expense: String,
+    },
     /// Update exchange rate data (MEXC for crypto, openexchangerates for fiat).
     /// Standalone — does not read the journal.
     Update {
@@ -284,7 +311,8 @@ impl Command {
             Self::Update { .. }
             | Self::Check
             | Self::Format { .. }
-            | Self::Diff { .. } => &[],
+            | Self::Diff { .. }
+            | Self::Sweep { .. } => &[],
         }
     }
 
@@ -303,7 +331,8 @@ impl Command {
             Self::Update { .. }
             | Self::Check
             | Self::Format { .. }
-            | Self::Diff { .. } => None,
+            | Self::Diff { .. }
+            | Self::Sweep { .. } => None,
         }
     }
 }
@@ -498,6 +527,33 @@ fn start() -> Result<(), acc::Error> {
             *skip,
             flags,
         );
+    }
+
+    // Sweep is standalone — it loads and books the journal, scopes it to
+    // the pass-through account itself, and writes offsetting entries to a
+    // file. It does not use the report flags (-X, sort, date ranges).
+    if let Command::Sweep {
+        account,
+        segment,
+        income,
+        expense,
+    } = &command
+    {
+        if args.paths.is_empty() {
+            eprintln!("Error: No files specified. Use -f PATH.");
+            std::process::exit(1);
+        }
+        let mut sweep_paths: Vec<std::path::PathBuf> = Vec::new();
+        for input in &args.paths {
+            let path = std::path::Path::new(input);
+            if path.is_dir() {
+                collect_ledger_files(path, &mut sweep_paths);
+            } else {
+                sweep_paths.push(path.to_path_buf());
+            }
+        }
+        let journal = acc::load(&sweep_paths).map_err(|e| acc::Error::from(e.to_string()))?;
+        return acc::commands::sweep::run(journal, account, segment, income, expense);
     }
 
     if args.paths.is_empty() {

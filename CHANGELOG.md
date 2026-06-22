@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.7.0 — 2026-06-22
+
+### Mon 22 Jun 2026 - `acc sweep`: close a pass-through account's open balance
+
+New subcommand that clears a pass-through / clearing account by
+generating offsetting entries. `acc sweep ACCOUNT SEGMENT INCOME
+EXPENSE` reads the account like `reg ACCOUNT`, finds what has not been
+balanced to zero, and writes one offsetting entry per open posting — at
+that posting's date — booking the remainder to `INCOME:SEGMENT` (credit
+remainder, `< 0`) or `EXPENSE:SEGMENT` (debit remainder, `> 0`). Output
+is appended to `<segment-tail>.ledger` and then aligned and date-sorted
+via the formatter.
+
+The design went through a few iterations worth recording. The first cut
+mirrored each matched transaction one-to-one and tracked "already swept"
+by reading the generated file by name — which broke the moment the file
+was renamed or moved: the offsets stopped being recognised and got
+duplicated. A marker comment was considered and rejected. The settled
+design is pure double-entry: sweep pairs equal-and-opposite amounts on
+the account across the whole journal, so a posting and its offset cancel
+no matter which file the offset lives in. That makes it idempotent and
+file-agnostic for free — re-running closes only newly-opened postings —
+and a genuine round-trip (an invoice settled weeks later) cancels the
+same way, so only real durable balances are swept.
+
+One subtlety surfaced with several identical amounts (recurring
+same-value fees are common): pairing purely by amount put the reopened
+posting on the wrong date. Pairing now runs within the same date first,
+then across dates, so an offset removed for one date is re-pulled at
+that very date.
+
+### Mon 22 Jun 2026 - `acc format`: blank lines around comment blocks
+
+A comment block (such as a commented-out transaction) is now surrounded
+by a blank line so it stays visually separate from neighbouring entries
+— except at the very start or end of the file, where no extra blank line
+is added. The per-file formatting was also split into a silent
+`format_in_place` helper (used by `sweep`) and the reporting wrapper, so
+`sweep` can align its output without emitting `format`'s own
+"✓ … formatted" lines.
+
 ## 0.6.0 — 2026-06-21
 
 ### Sun 21 Jun 2026 - `--commodities N` / `--mixed`: filter by commodity count
