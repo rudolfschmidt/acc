@@ -91,3 +91,106 @@ fn first_amount(tx: &Transaction) -> f64 {
         .map(|a| a.value.to_f64())
         .unwrap_or(0.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{booker, parser, resolver};
+
+    fn setup(src: &str) -> Vec<Located<Transaction>> {
+        let entries = parser::parse(src).unwrap();
+        let resolved = resolver::resolve(entries).unwrap();
+        booker::book(resolved.transactions).unwrap()
+    }
+
+    /// Descriptions in transaction order after sorting by `fields`.
+    fn order(txs: &[Located<Transaction>]) -> Vec<&str> {
+        txs.iter().map(|t| t.value.description.as_str()).collect()
+    }
+
+    const SRC: &str = "\
+        2024-03-01 * banana\n\
+        \tassets:checking   30 USD\n\
+        \tincome:x         -30 USD\n\
+        2024-01-01 * cherry\n\
+        \tassets:savings    10 USD\n\
+        \tincome:x         -10 USD\n\
+        2024-02-01 * apple\n\
+        \tassets:brokerage  20 USD\n\
+        \tincome:x         -20 USD\n";
+
+    #[test]
+    fn empty_fields_is_a_noop() {
+        let mut txs = setup(SRC);
+        sort(&mut txs, &[]);
+        // Booker keeps natural date order; an empty sort must not touch it.
+        assert_eq!(order(&txs), ["cherry", "apple", "banana"]);
+    }
+
+    #[test]
+    fn sort_by_date_ascending() {
+        let mut txs = setup(SRC);
+        sort(&mut txs, &["date".into()]);
+        assert_eq!(order(&txs), ["cherry", "apple", "banana"]);
+    }
+
+    #[test]
+    fn sort_by_date_reverse() {
+        let mut txs = setup(SRC);
+        sort(&mut txs, &["-date".into()]);
+        assert_eq!(order(&txs), ["banana", "apple", "cherry"]);
+    }
+
+    #[test]
+    fn sort_by_amount_uses_first_posting() {
+        let mut txs = setup(SRC);
+        sort(&mut txs, &["amount".into()]);
+        // First postings: 10, 20, 30 → cherry, apple, banana.
+        assert_eq!(order(&txs), ["cherry", "apple", "banana"]);
+    }
+
+    #[test]
+    fn sort_by_account_uses_first_posting() {
+        let mut txs = setup(SRC);
+        sort(&mut txs, &["account".into()]);
+        // assets:brokerage < assets:checking < assets:savings.
+        assert_eq!(order(&txs), ["apple", "banana", "cherry"]);
+    }
+
+    #[test]
+    fn sort_by_description() {
+        let mut txs = setup(SRC);
+        sort(&mut txs, &["description".into()]);
+        assert_eq!(order(&txs), ["apple", "banana", "cherry"]);
+    }
+
+    #[test]
+    fn payee_is_an_alias_for_description() {
+        let mut txs = setup(SRC);
+        sort(&mut txs, &["payee".into()]);
+        assert_eq!(order(&txs), ["apple", "banana", "cherry"]);
+    }
+
+    #[test]
+    fn unknown_field_falls_back_to_date() {
+        let mut txs = setup(SRC);
+        sort(&mut txs, &["nonsense".into()]);
+        assert_eq!(order(&txs), ["cherry", "apple", "banana"]);
+    }
+
+    #[test]
+    fn later_criteria_break_ties() {
+        // Two transactions on the same date, different descriptions:
+        // primary key (date) ties, secondary (description) decides.
+        let src = "\
+            2024-01-01 * zebra\n\
+            \ta  1 USD\n\
+            \tb -1 USD\n\
+            2024-01-01 * alpha\n\
+            \ta  2 USD\n\
+            \tb -2 USD\n";
+        let mut txs = setup(src);
+        sort(&mut txs, &["date".into(), "description".into()]);
+        assert_eq!(order(&txs), ["alpha", "zebra"]);
+    }
+}
