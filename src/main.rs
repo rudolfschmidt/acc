@@ -442,6 +442,106 @@ fn split_file_args() -> (Vec<String>, Vec<String>) {
     (files, rest)
 }
 
+/// Run the standalone commands that bypass the report pipeline — each
+/// does its own file IO and returns directly. Returns `Some(result)` when
+/// `command` was one of them (and has now run), `None` for a report-style
+/// command (`balance`, `register`, …) the caller must drive through
+/// load → enrich → filter → rebalance → sort itself.
+fn try_standalone(
+    command: &Command,
+    paths: &[String],
+) -> Option<Result<(), acc::Error>> {
+    match command {
+        // Format does its own validation (parse → resolve → book) before
+        // writing, all-or-nothing.
+        Command::Format { sort, paths } => Some(acc::commands::format::run(paths, *sort)),
+
+        // Diff is a source-level file/tree comparison. Its path-count rule
+        // is conditional on `--snapshot` and not expressible via clap
+        // alone, so it is checked here with a clap-styled error (the usual
+        // `error: …` + Usage block) before dispatching.
+        Command::Diff { snapshot, paths } => {
+            if snapshot.is_none() && paths.len() != 2 {
+                use clap::CommandFactory;
+                let mut cmd = Args::command();
+                cmd.find_subcommand_mut("diff")
+                    .unwrap()
+                    .error(
+                        clap::error::ErrorKind::WrongNumberOfValues,
+                        format!(
+                            "expected 2 paths (OLD NEW) without --snapshot, got {}",
+                            paths.len()
+                        ),
+                    )
+                    .exit();
+            }
+            Some(acc::commands::diff::run(snapshot.as_deref(), paths))
+        }
+
+        // Update fetches exchange rates; it does not read the journal.
+        Command::Update {
+            pairs,
+            since,
+            date,
+            monthly,
+            yearly,
+            skip,
+            crypto,
+            fiat,
+            ..
+        } => {
+            let flags = if *crypto || *fiat {
+                acc::commands::update::UpdateFlags { crypto: *crypto, fiat: *fiat }
+            } else if !pairs.is_empty() {
+                acc::commands::update::UpdateFlags { crypto: true, fiat: false }
+            } else {
+                acc::commands::update::UpdateFlags { crypto: true, fiat: true }
+            };
+            let cadence = if *yearly {
+                acc::commands::update::Cadence::Yearly
+            } else if *monthly {
+                acc::commands::update::Cadence::Monthly
+            } else {
+                acc::commands::update::Cadence::Daily
+            };
+            Some(acc::commands::update::run(
+                pairs,
+                since.as_deref(),
+                date.as_deref(),
+                cadence,
+                *skip,
+                flags,
+            ))
+        }
+
+        // Sweep loads and books the journal, scopes it to the pass-through
+        // account, and writes offsetting entries to a file. It ignores the
+        // report flags (-X, sort, date ranges).
+        Command::Sweep { account, segment, income, expense } => {
+            if paths.is_empty() {
+                eprintln!("Error: No files specified. Use -f PATH.");
+                std::process::exit(1);
+            }
+            let mut sweep_paths: Vec<std::path::PathBuf> = Vec::new();
+            for input in paths {
+                let path = std::path::Path::new(input);
+                if path.is_dir() {
+                    collect_ledger_files(path, &mut sweep_paths);
+                } else {
+                    sweep_paths.push(path.to_path_buf());
+                }
+            }
+            Some(
+                acc::load(&sweep_paths)
+                    .map_err(|e| acc::Error::from(e.to_string()))
+                    .and_then(|j| acc::commands::sweep::run(j, account, segment, income, expense)),
+            )
+        }
+
+        _ => None,
+    }
+}
+
 fn start() -> Result<(), acc::Error> {
     let (files, argv) = split_file_args();
     let mut args = Args::parse_from(argv);
@@ -453,107 +553,10 @@ fn start() -> Result<(), acc::Error> {
         return Ok(());
     };
 
-    // Format is standalone — does its own file IO, bypasses the main
-    // report pipeline. It runs the full validation (parse → resolve →
-    // book) itself before writing, all-or-nothing.
-    if let Command::Format { sort, paths } = &command {
-        return acc::commands::format::run(paths, *sort);
-    }
-
-    // Diff is standalone — source-level file/tree comparison, no
-    // downstream pipeline. Path-count validation is conditional on
-    // `--snapshot` and not expressible via clap-derive alone, so the
-    // check runs here with a clap-styled error so the user sees the
-    // usual `error: …` + Usage block.
-    if let Command::Diff { snapshot, paths } = &command {
-        if snapshot.is_none() && paths.len() != 2 {
-            use clap::CommandFactory;
-            let mut cmd = Args::command();
-            cmd.find_subcommand_mut("diff")
-                .unwrap()
-                .error(
-                    clap::error::ErrorKind::WrongNumberOfValues,
-                    format!(
-                        "expected 2 paths (OLD NEW) without --snapshot, got {}",
-                        paths.len()
-                    ),
-                )
-                .exit();
-        }
-        return acc::commands::diff::run(snapshot.as_deref(), paths);
-    }
-
-    // Update is standalone — does not read the journal.
-    if let Command::Update {
-        pairs,
-        since,
-        date,
-        monthly,
-        yearly,
-        skip,
-        crypto,
-        fiat,
-        ..
-    } = &command
-    {
-        let flags = if *crypto || *fiat {
-            acc::commands::update::UpdateFlags {
-                crypto: *crypto,
-                fiat: *fiat,
-            }
-        } else if !pairs.is_empty() {
-            acc::commands::update::UpdateFlags {
-                crypto: true,
-                fiat: false,
-            }
-        } else {
-            acc::commands::update::UpdateFlags {
-                crypto: true,
-                fiat: true,
-            }
-        };
-        let cadence = if *yearly {
-            acc::commands::update::Cadence::Yearly
-        } else if *monthly {
-            acc::commands::update::Cadence::Monthly
-        } else {
-            acc::commands::update::Cadence::Daily
-        };
-        return acc::commands::update::run(
-            pairs,
-            since.as_deref(),
-            date.as_deref(),
-            cadence,
-            *skip,
-            flags,
-        );
-    }
-
-    // Sweep is standalone — it loads and books the journal, scopes it to
-    // the pass-through account itself, and writes offsetting entries to a
-    // file. It does not use the report flags (-X, sort, date ranges).
-    if let Command::Sweep {
-        account,
-        segment,
-        income,
-        expense,
-    } = &command
-    {
-        if args.paths.is_empty() {
-            eprintln!("Error: No files specified. Use -f PATH.");
-            std::process::exit(1);
-        }
-        let mut sweep_paths: Vec<std::path::PathBuf> = Vec::new();
-        for input in &args.paths {
-            let path = std::path::Path::new(input);
-            if path.is_dir() {
-                collect_ledger_files(path, &mut sweep_paths);
-            } else {
-                sweep_paths.push(path.to_path_buf());
-            }
-        }
-        let journal = acc::load(&sweep_paths).map_err(|e| acc::Error::from(e.to_string()))?;
-        return acc::commands::sweep::run(journal, account, segment, income, expense);
+    // Standalone commands (format, diff, update, sweep) bypass the report
+    // pipeline entirely and return here.
+    if let Some(result) = try_standalone(&command, &args.paths) {
+        return result;
     }
 
     if args.paths.is_empty() {
@@ -630,98 +633,13 @@ fn start() -> Result<(), acc::Error> {
                 .unwrap_or_else(|| t.to_string())
         });
 
-    // Expander phase: apply `= /pattern/` auto-rules by injecting
-    // their postings into every matching transaction (scaled by the
-    // triggering posting's amount). Runs before realizer so later
-    // phases see the full, expanded journal.
-    acc::expander::expand(&mut journal.transactions, &journal.auto_rules);
-
-    // Realizer phase: inject fx gain/loss postings where the
-    // transaction's implied rate diverges from the market rate in
-    // the price DB. Needs `-X TARGET` plus both `fx gain` / `fx loss`
-    // accounts. Skipped when capital-tracking is active: the lotter then
-    // owns the fx spread (split per disposal at the realization rate),
-    // so a per-transaction realizer would double-book it.
-    let capital_active =
-        journal.capital_gain.is_some() && journal.capital_loss.is_some();
-    if let Some(target) = exchange_target.as_deref() {
-        if let (Some(gain), Some(loss)) = (
-            journal.fx_gain.as_deref(),
-            journal.fx_loss.as_deref(),
-        ) {
-            if !capital_active {
-                acc::realizer::realize(
-                    &mut journal.transactions,
-                    target,
-                    &journal.prices,
-                    &journal.precisions,
-                    gain,
-                    loss,
-                );
-            }
-        }
-    }
-
-    // Lotter phase (capital gains): FIFO lot tracking. Runs whenever both
-    // `capital gain` / `capital loss` accounts are declared — with or
-    // without `-X`. The gain is always computed in the counter-commodity
-    // (booked/implied rate); the rebalancer converts it to the target at
-    // each disposal's own date (the realization rate). Under `-X` the gain
-    // is split into a market-movement part (capital account) and a
-    // trade-day spread (fx account, if declared). Returns the
-    // (account, commodity) pairs it realized a gain on so CTA can exclude
-    // them (else both book the same drift and double-count).
-    let capital_tracked = if let (Some(cg), Some(cl)) = (
-        journal.capital_gain.as_deref(),
-        journal.capital_loss.as_deref(),
-    ) {
-        acc::lotter::realize_capital(
-            &mut journal.transactions,
-            cg,
-            cl,
-            journal.fx_gain.as_deref(),
-            journal.fx_loss.as_deref(),
-            exchange_target.as_deref(),
-            &journal.prices,
-            &journal.precisions,
-        )
-    } else {
-        std::collections::HashSet::new()
-    };
-
-    // Translator phase (CTA): emit synthetic translation-adjustment
-    // transactions for transit accounts whose native sum is zero but
-    // whose target drift is non-zero. Both `cta gain` and `cta loss`
-    // accounts must be declared so positive and negative drifts can
-    // be routed separately. Runs *before* filter so `acc bal in:cta`
-    // pattern matches the injected postings.
-    //
-    // CTA runs on *every* pass-through account, including ones the lotter
-    // realized a capital gain on — no exclusion. The lotter pins its
-    // realized legs to the booked rate, so a lot-tracked account's legs
-    // already sum to zero under conversion (the gain sits on the capital
-    // account, not the transit account). CTA therefore sees no drift
-    // there and books nothing — while still balancing the *un*-realized
-    // part of a mixed account (e.g. a single-commodity transfer that
-    // opened no lot). No double-count.
-    let _ = &capital_tracked;
-    if let Some(target) = exchange_target.as_deref() {
-        if let (Some(cta_gain), Some(cta_loss)) = (
-            journal.cta_gain.as_deref(),
-            journal.cta_loss.as_deref(),
-        ) {
-            let precision = journal.precisions.get(target).copied().unwrap_or(2);
-            acc::translator::translate(
-                &mut journal.transactions,
-                target,
-                &journal.prices,
-                cta_gain,
-                cta_loss,
-                precision,
-                &std::collections::HashSet::new(),
-            );
-        }
-    }
+    // Enrichment phases (expander → realizer → lotter → translator). These
+    // must see the whole journal — the lotter tracks lots FIFO across all
+    // transactions and the translator identifies pass-through accounts by
+    // their journal-wide native sum — so they run before any filtering and
+    // live together in `pipeline::enrich`, which also encodes the
+    // realizer/lotter exclusivity and the CTA-without-exclusion rule.
+    acc::pipeline::enrich(&mut journal, exchange_target.as_deref());
 
     // Expand `-p` / `-b` / `-e` with the same period grammar: a year
     // (`YYYY`), a month (`YYYY-MM`) or a day (`YYYY-MM-DD`). Both

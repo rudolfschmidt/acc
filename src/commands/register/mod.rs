@@ -18,10 +18,9 @@ use std::collections::BTreeMap;
 
 use colored::Colorize;
 
-use super::util::{format_amount, print_spaces};
+use super::util::{format_amount, print_spaces, render_account, shows_nonzero};
 use crate::decimal::Decimal;
 use crate::loader::Journal;
-use crate::parser::posting::Posting;
 use crate::parser::transaction::{State, Transaction};
 
 const GAP: usize = 2;
@@ -146,8 +145,7 @@ fn compute_widths(
             // Only commodities that would actually print (non-display-zero)
             // count toward the total column's width.
             for (c, v) in &entry.total {
-                let prec = precisions.get(c).copied().unwrap_or(2);
-                if v.is_display_zero(prec) {
+                if !shows_nonzero(c, v, precisions) {
                     continue;
                 }
                 let w = format_amount(c, v, precisions).chars().count();
@@ -170,10 +168,7 @@ fn non_zero_commodities(
 ) -> Vec<(String, Decimal)> {
     total
         .iter()
-        .filter(|(c, v)| {
-            let prec = precisions.get(*c).copied().unwrap_or(2);
-            !v.is_display_zero(prec)
-        })
+        .filter(|&(c, v)| shows_nonzero(c, v, precisions))
         .map(|(c, v)| (c.clone(), *v))
         .collect()
 }
@@ -187,13 +182,6 @@ fn format_title(tx: &Transaction) -> String {
     format!("{}{}{}", tx.date, marker, tx.description)
 }
 
-fn render_account(p: &Posting) -> String {
-    match (p.is_virtual, p.balanced) {
-        (true, true) => format!("[{}]", p.account),
-        (true, false) => format!("({})", p.account),
-        (false, _) => p.account.clone(),
-    }
-}
 
 fn print_line(
     title: &str,

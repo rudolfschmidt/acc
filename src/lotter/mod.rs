@@ -42,11 +42,14 @@
 //! disposal transaction, balancing against the `{}` cost-basis on the
 //! asset legs. So `print` is 1:1 copy-pasteable and survives a reload.
 //!
-//! `realize_capital` returns the (account, commodity) pairs it realized a
-//! gain on, so the translator can exclude them from CTA — both would
-//! otherwise book the same holding-period drift and double-count.
+//! The lotter pins each realized leg to its booked rate, so a tracked
+//! account's legs already sum to zero under conversion (the gain lands on
+//! the capital account, not the transit account). CTA can therefore run
+//! over every pass-through account without excluding lot-tracked ones —
+//! it sees no drift where the lotter already booked it, and no
+//! double-count results.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use crate::date::Date;
 use crate::decimal::Decimal;
@@ -113,9 +116,7 @@ struct Disposal {
 }
 
 /// Track lots FIFO and inject one capital-gain/loss transaction per
-/// realized disposal. Returns the (account, commodity) pairs a gain was
-/// realized on, for the translator to exclude from CTA. See module docs
-/// for the valuation semantics.
+/// realized disposal. See module docs for the valuation semantics.
 #[allow(clippy::too_many_arguments)]
 pub fn realize_capital(
     txs: &mut Vec<Located<Transaction>>,
@@ -126,9 +127,8 @@ pub fn realize_capital(
     target: Option<&str>,
     db: &Index,
     precisions: &HashMap<String, usize>,
-) -> HashSet<(String, String)> {
+) {
     let mut lots: HashMap<(String, String), VecDeque<Lot>> = HashMap::new();
-    let mut tracked: HashSet<(String, String)> = HashSet::new();
     let mut disposals: Vec<Disposal> = Vec::new();
     // (tx_idx, posting_idx, implied_rate, commodity) of tracked legs that
     // carry only an *implied* rate (no explicit `@`/`{}`). Under `-X` we
@@ -290,7 +290,6 @@ pub fn realize_capital(
             if gain.is_display_zero(prec) {
                 continue;
             }
-            tracked.insert(key.clone());
             // Under `-X`, split the gain: `market` is the market move,
             // spread is the rest. If a market rate was missing for any
             // lot, attribute the whole gain to market (no spread).
@@ -347,8 +346,6 @@ pub fn realize_capital(
             precisions,
         );
     }
-
-    tracked
 }
 
 /// Rewrite a transaction's disposal postings: each becomes one leg per
@@ -673,10 +670,9 @@ mod tests {
             \tassets:btc   -1 BTC @ 50000 USD\n\
             \tassets:cash   50000 USD\n";
         let (mut txs, db, prec) = setup(src);
-        let tracked = realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
         // Gain booked on the capital account, income negative.
         assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-20000").unwrap());
-        assert!(tracked.contains(&("assets:btc".to_string(), "BTC".to_string())));
     }
 
     #[test]
@@ -780,9 +776,8 @@ mod tests {
             \tassets:btc   -1 BTC\n\
             \tassets:cash   30000 USD\n";
         let (mut txs, db, prec) = setup(src);
-        let tracked = realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
         assert!(!any_capital(&txs));
-        assert!(tracked.is_empty());
     }
 
     #[test]

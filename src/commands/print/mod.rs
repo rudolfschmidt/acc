@@ -19,7 +19,7 @@
 
 use colored::Colorize;
 
-use super::util::{format_amount, print_spaces};
+use super::util::{format_amount, print_spaces, render_account};
 use crate::loader::Journal;
 use crate::parser::posting::{Costs, Posting};
 use crate::parser::transaction::{State, Transaction};
@@ -118,17 +118,6 @@ fn print_posting(
     }
 }
 
-/// Account column content: real `account`, balanced-virtual
-/// `[account]`, or paren-virtual `(account)` — matching ledger's own
-/// print/reg output (verified against ledger 3.4.1), and consistent
-/// with acc's own `register` / `format` rendering.
-fn render_account(p: &Posting) -> String {
-    match (p.is_virtual, p.balanced) {
-        (true, true) => format!("[{}]", p.account),
-        (true, false) => format!("({})", p.account),
-        (false, _) => p.account.clone(),
-    }
-}
 
 fn max_account_width(journal: &Journal) -> usize {
     journal
