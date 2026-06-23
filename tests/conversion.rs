@@ -80,6 +80,26 @@ fn same_commodity_is_noop() {
     assert_eq!(amt.commodity, "EUR");
 }
 
+#[test]
+fn rebalance_lot_posting_converts_via_cost_weight() {
+    // A posting held at cost `{}` converts via its balance weight
+    // (quantity × cost-basis), NOT its market value: -10 ASSET {95 EUR}
+    // → €-950, even though the ASSET market price is 200. The lot/cost
+    // annotations are dropped after conversion.
+    let mut j = common::load(
+        "P 2024-06-01 ASSET EUR 200\n\
+         2024-06-01 * sell\n\
+         \tassets:broker  -10 ASSET {95 EUR}\n\
+         \tassets:cash    1900 EUR\n\
+         \tincome:capital -950 EUR\n",
+    );
+    acc::rebalancer::rebalance(&mut j.transactions, "EUR", &j.prices);
+    let broker = j.transactions[0].value.postings[0].value.amount.as_ref().unwrap();
+    assert_eq!(broker.value, Decimal::from(-950)); // weight, not market -2000
+    assert_eq!(broker.commodity, "EUR");
+    assert!(j.transactions[0].value.postings[0].value.lot_cost.is_none());
+}
+
 /// Transit accounts that net to zero in their native commodity
 /// accumulate drift under per-posting historical conversion. The
 /// translator phase appends a paren-virtual posting on the declared

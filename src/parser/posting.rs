@@ -1,3 +1,4 @@
+use crate::date::Date;
 use crate::decimal::Decimal;
 
 use super::comment::Comment;
@@ -20,6 +21,11 @@ pub struct Posting {
     pub amount: Option<Amount>,
     pub costs: Option<Costs>,
     pub lot_cost: Option<LotCost>,
+    /// Acquisition date of the closed lot, in `[YYYY-MM-DD]` form.
+    /// Never parsed from source (acc ignores a written `[date]`) — it
+    /// is set only by the lotter when it splits a disposal per lot, so
+    /// `print`/`reg` can show which lot each leg closed.
+    pub lot_date: Option<Date>,
     pub balance_assertion: Option<Amount>,
     pub is_virtual: bool,
     pub balanced: bool,

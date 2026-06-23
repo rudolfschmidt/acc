@@ -139,12 +139,16 @@ fn collect_adjustments(
             if !transit.contains(&key) {
                 continue;
             }
-            let target_val = if a.commodity == target {
-                Some(a.value)
-            } else {
-                db.find(&a.commodity, target, &lookup_date)
-                    .map(|r| a.value.mul_rounded(r))
-            };
+            // Use the same weight-based valuation as the rebalancer, so
+            // the drift CTA books matches what the rebalancer will leave
+            // on the account (a posting with `@`/`{}` converts via its
+            // booked rate, not its market value — they must agree).
+            let target_val = crate::rebalancer::target_value(
+                &lp.value,
+                target,
+                db,
+                &lookup_date,
+            );
             let entry = running
                 .entry(key.clone())
                 .or_insert((Decimal::zero(), Decimal::zero(), false));
@@ -190,6 +194,7 @@ fn build_release_tx(
         }),
         costs: None,
         lot_cost: None,
+        lot_date: None,
         balance_assertion: None,
         is_virtual: true,
         balanced: true,
@@ -204,6 +209,7 @@ fn build_release_tx(
         }),
         costs: None,
         lot_cost: None,
+        lot_date: None,
         balance_assertion: None,
         is_virtual: true,
         balanced: true,

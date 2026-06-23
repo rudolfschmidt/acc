@@ -48,6 +48,7 @@ pub fn expand(transactions: &mut [Located<Transaction>], auto_rules: &[AutoRule]
                         }),
                         costs: None,
                         lot_cost: None,
+                        lot_date: None,
                         balance_assertion: None,
                         is_virtual: auto_posting.is_virtual,
                         balanced: auto_posting.balanced,
