@@ -546,6 +546,9 @@ fn parse_posting(body: &str, line: usize) -> Result<Posting, ParseError> {
         amount,
         costs,
         lot_cost,
+        // A `[date]` in source is consumed by the lot parser but not
+        // stored — acc derives lot dates via FIFO, never from input.
+        lot_date: None,
         balance_assertion,
         is_virtual,
         balanced,

@@ -465,6 +465,7 @@ mod tests {
                 }),
                 costs: None,
                 lot_cost: None,
+                lot_date: None,
                 balance_assertion: None,
                 is_virtual: false,
                 balanced: true,

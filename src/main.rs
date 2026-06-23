@@ -638,35 +638,39 @@ fn start() -> Result<(), acc::Error> {
 
     // Realizer phase: inject fx gain/loss postings where the
     // transaction's implied rate diverges from the market rate in
-    // the price DB. Runs *before* the filter so pattern matches like
-    // `acc bal Equity:FxGain` can see the synthetic postings. Needs
-    // `-X TARGET` plus both `fx gain` / `fx loss` accounts
-    // declared in the journal; otherwise silently skipped.
+    // the price DB. Needs `-X TARGET` plus both `fx gain` / `fx loss`
+    // accounts. Skipped when capital-tracking is active: the lotter then
+    // owns the fx spread (split per disposal at the realization rate),
+    // so a per-transaction realizer would double-book it.
+    let capital_active =
+        journal.capital_gain.is_some() && journal.capital_loss.is_some();
     if let Some(target) = exchange_target.as_deref() {
         if let (Some(gain), Some(loss)) = (
             journal.fx_gain.as_deref(),
             journal.fx_loss.as_deref(),
         ) {
-            acc::realizer::realize(
-                &mut journal.transactions,
-                target,
-                &journal.prices,
-                &journal.precisions,
-                gain,
-                loss,
-            );
+            if !capital_active {
+                acc::realizer::realize(
+                    &mut journal.transactions,
+                    target,
+                    &journal.prices,
+                    &journal.precisions,
+                    gain,
+                    loss,
+                );
+            }
         }
     }
 
-    // Lotter phase (capital gains): FIFO lot tracking. Runs whenever
-    // both `capital gain` / `capital loss` accounts are declared —
-    // unlike the realizer/translator it works with *or* without `-X`.
-    // With `-X` it values lots at market (price DB) and books the
-    // holding-period movement (the trade-day deviation stays with the
-    // realizer's fx gain/loss); without `-X` it books the total native
-    // gain straight from the books. Returns the (account, commodity)
-    // pairs it realized a gain on so CTA can exclude them (else both
-    // book the same drift and double-count).
+    // Lotter phase (capital gains): FIFO lot tracking. Runs whenever both
+    // `capital gain` / `capital loss` accounts are declared — with or
+    // without `-X`. The gain is always computed in the counter-commodity
+    // (booked/implied rate); the rebalancer converts it to the target at
+    // each disposal's own date (the realization rate). Under `-X` the gain
+    // is split into a market-movement part (capital account) and a
+    // trade-day spread (fx account, if declared). Returns the
+    // (account, commodity) pairs it realized a gain on so CTA can exclude
+    // them (else both book the same drift and double-count).
     let capital_tracked = if let (Some(cg), Some(cl)) = (
         journal.capital_gain.as_deref(),
         journal.capital_loss.as_deref(),
@@ -675,6 +679,8 @@ fn start() -> Result<(), acc::Error> {
             &mut journal.transactions,
             cg,
             cl,
+            journal.fx_gain.as_deref(),
+            journal.fx_loss.as_deref(),
             exchange_target.as_deref(),
             &journal.prices,
             &journal.precisions,
@@ -688,8 +694,17 @@ fn start() -> Result<(), acc::Error> {
     // whose target drift is non-zero. Both `cta gain` and `cta loss`
     // accounts must be declared so positive and negative drifts can
     // be routed separately. Runs *before* filter so `acc bal in:cta`
-    // pattern matches the injected postings. Lot-tracked pairs are
-    // excluded — the lotter already booked their holding-period drift.
+    // pattern matches the injected postings.
+    //
+    // CTA runs on *every* pass-through account, including ones the lotter
+    // realized a capital gain on — no exclusion. The lotter pins its
+    // realized legs to the booked rate, so a lot-tracked account's legs
+    // already sum to zero under conversion (the gain sits on the capital
+    // account, not the transit account). CTA therefore sees no drift
+    // there and books nothing — while still balancing the *un*-realized
+    // part of a mixed account (e.g. a single-commodity transfer that
+    // opened no lot). No double-count.
+    let _ = &capital_tracked;
     if let Some(target) = exchange_target.as_deref() {
         if let (Some(cta_gain), Some(cta_loss)) = (
             journal.cta_gain.as_deref(),
@@ -703,7 +718,7 @@ fn start() -> Result<(), acc::Error> {
                 cta_gain,
                 cta_loss,
                 precision,
-                &capital_tracked,
+                &std::collections::HashSet::new(),
             );
         }
     }
@@ -821,11 +836,17 @@ fn start() -> Result<(), acc::Error> {
     // Rebalance phase: convert posting amounts into the -X target at
     // each posting's own transaction-date rate (historical valuation).
     if let Some(target) = exchange_target.as_deref() {
-        acc::rebalancer::rebalance(
-            &mut journal.transactions,
-            target,
-            &journal.prices,
-        );
+        acc::rebalancer::rebalance(&mut journal.transactions, target, &journal.prices);
+        // `print -X` needs rounded, balanced lines so the output reloads
+        // cleanly. `bal`/`reg` keep full precision so pass-through accounts
+        // sum to zero exactly — rounding is display-only, print-only.
+        if matches!(command, Command::Print { .. }) {
+            acc::rebalancer::round_for_print(
+                &mut journal.transactions,
+                target,
+                &journal.precisions,
+            );
+        }
     }
 
     // `-R` / `--real`: drop every virtual posting from the output.

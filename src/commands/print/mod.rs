@@ -21,7 +21,7 @@ use colored::Colorize;
 
 use super::util::{format_amount, print_spaces};
 use crate::loader::Journal;
-use crate::parser::posting::Posting;
+use crate::parser::posting::{Costs, Posting};
 use crate::parser::transaction::{State, Transaction};
 
 const GAP: usize = 4;
@@ -87,10 +87,28 @@ fn print_posting(
         }
     }
 
-    // `@` / `@@` cost annotations and `=` balance assertions are
-    // internal to the booker and not rendered here: costs drive the
-    // balance math, assertions are verified during load, neither
-    // carries new information for the reader.
+    // Lot annotations follow the amount, ledger-style:
+    //   AMOUNT {cost} [lot-date] @ price
+    // `{cost}` is the lot basis, `[lot-date]` the (acc-generated)
+    // acquisition date of the closed lot, `@`/`@@` the unit/total cost.
+    // `= assertion` stays internal (verified at load, not rendered).
+    if let Some(lot) = &p.lot_cost {
+        let a = lot.amount();
+        print!(" {{{}}}", format_amount(&a.commodity, &a.value, precisions));
+    }
+    if let Some(d) = &p.lot_date {
+        print!(" [{}]", d);
+    }
+    if let Some(costs) = &p.costs {
+        match costs {
+            Costs::PerUnit(a) => {
+                print!(" @ {}", format_amount(&a.commodity, &a.value, precisions))
+            }
+            Costs::Total(a) => {
+                print!(" @@ {}", format_amount(&a.commodity, &a.value, precisions))
+            }
+        }
+    }
 
     println!();
 

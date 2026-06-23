@@ -114,11 +114,13 @@ fn augment(
             }),
             costs: None,
             lot_cost: None,
+            lot_date: None,
             balance_assertion: None,
-            // Paren-style virtual: informational, does not participate
-            // in any later balance check. The realizer itself already
-            // verified the delta is real.
-            is_virtual: true,
+            // Real posting: the spread is the trade-day delta between the
+            // legs' market value (after `-X` conversion). It sits next to
+            // the converted amounts and makes the transaction balance in
+            // the target currency, so the output is 1:1 copyable.
+            is_virtual: false,
             balanced: false,
             comments: Vec::new(),
         },
