@@ -58,6 +58,8 @@ where
         fx_loss: resolved.fx_loss,
         cta_gain: resolved.cta_gain,
         cta_loss: resolved.cta_loss,
+        capital_gain: resolved.capital_gain,
+        capital_loss: resolved.capital_loss,
         precisions,
         aliases: resolved.aliases,
         auto_rules: resolved.auto_rules,

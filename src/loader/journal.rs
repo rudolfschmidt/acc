@@ -24,6 +24,11 @@ pub struct Journal {
     /// Account for negative Cumulative Translation Adjustments.
     /// Declared via `account NAME / cta loss`.
     pub cta_loss: Option<String>,
+    /// Realized-capital-gains accounts, declared via
+    /// `account NAME / capital gain` / `capital loss`. Both must be
+    /// declared for the lot/capital-gains phase to run.
+    pub capital_gain: Option<String>,
+    pub capital_loss: Option<String>,
     /// Maximum fractional digits observed for each commodity across
     /// every posting amount / cost / balance-assertion. Reports use
     /// this to render all amounts of a commodity consistently.

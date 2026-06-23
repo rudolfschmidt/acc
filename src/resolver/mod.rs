@@ -37,6 +37,10 @@ pub struct Resolved {
     pub fx_loss: Option<String>,
     pub cta_gain: Option<String>,
     pub cta_loss: Option<String>,
+    /// Declared via `account NAME / capital gain` / `capital loss`.
+    /// Both must be present for the lot/capital-gains phase to run.
+    pub capital_gain: Option<String>,
+    pub capital_loss: Option<String>,
     /// Explicit `precision N` values from `commodity` directives.
     /// The loader merges these over the amount-derived `Journal.precisions`
     /// so declared commodities render with exactly N fractional digits,
@@ -55,7 +59,7 @@ pub struct Resolved {
 }
 
 pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
-    let (aliases, fx_gain, fx_loss, cta_gain, cta_loss, precisions) =
+    let (aliases, fx_gain, fx_loss, cta_gain, cta_loss, capital_gain, capital_loss, precisions) =
         collect_declarations(&entries)?;
 
     // Parallel Arc-based alias table for the Price path. Each alias
@@ -152,6 +156,8 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         fx_loss,
         cta_gain,
         cta_loss,
+        capital_gain,
+        capital_loss,
         precisions,
         aliases,
         auto_rules,
@@ -200,6 +206,8 @@ fn collect_declarations(
         Option<String>,
         Option<String>,
         Option<String>,
+        Option<String>,
+        Option<String>,
         HashMap<String, usize>,
     ),
     ResolveError,
@@ -209,6 +217,8 @@ fn collect_declarations(
     let mut fx_loss: Option<Declaration> = None;
     let mut cta_gain: Option<Declaration> = None;
     let mut cta_loss: Option<Declaration> = None;
+    let mut capital_gain: Option<Declaration> = None;
+    let mut capital_loss: Option<Declaration> = None;
     let mut precisions: HashMap<String, usize> = HashMap::new();
 
     for e in entries {
@@ -293,6 +303,36 @@ fn collect_declarations(
                 }
                 cta_loss = Some(Declaration { line: e.line, name: name.clone() });
             }
+            Entry::CapitalGainAccount(name) => {
+                if let Some(prev) = &capital_gain {
+                    if prev.name != *name {
+                        return Err(ResolveError::new(
+                            e.file.clone(),
+                            e.line,
+                            format!(
+                                "capital gain account already set to `{}` at line {}",
+                                prev.name, prev.line
+                            ),
+                        ));
+                    }
+                }
+                capital_gain = Some(Declaration { line: e.line, name: name.clone() });
+            }
+            Entry::CapitalLossAccount(name) => {
+                if let Some(prev) = &capital_loss {
+                    if prev.name != *name {
+                        return Err(ResolveError::new(
+                            e.file.clone(),
+                            e.line,
+                            format!(
+                                "capital loss account already set to `{}` at line {}",
+                                prev.name, prev.line
+                            ),
+                        ));
+                    }
+                }
+                capital_loss = Some(Declaration { line: e.line, name: name.clone() });
+            }
             _ => {}
         }
     }
@@ -303,6 +343,8 @@ fn collect_declarations(
         fx_loss.map(|d| d.name),
         cta_gain.map(|d| d.name),
         cta_loss.map(|d| d.name),
+        capital_gain.map(|d| d.name),
+        capital_loss.map(|d| d.name),
         precisions,
     ))
 }

@@ -59,8 +59,13 @@ pub fn translate(
     cta_gain: &str,
     cta_loss: &str,
     precision: usize,
+    exclude: &HashSet<(String, String)>,
 ) {
-    let transit = identify_transit_groups(txs);
+    let mut transit = identify_transit_groups(txs);
+    // Drop (account, commodity) pairs the lotter already realized a
+    // capital gain on: CTA and capital both book the holding-period
+    // drift, so leaving them in would double-count.
+    transit.retain(|k| !exclude.contains(k));
     if transit.is_empty() {
         return;
     }
@@ -255,7 +260,7 @@ mod tests {
             \texpenses:food     10 EUR\n\
             \tassets:checking  -10 EUR\n";
         let (mut txs, db) = setup(src);
-        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2, &HashSet::new());
 
         // Three txs now: 2 originals + 1 synthetic release.
         assert_eq!(txs.len(), 3);
@@ -291,7 +296,7 @@ mod tests {
             \tincome:salary    -10 EUR\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2, &HashSet::new());
         assert_eq!(txs.len(), original);
     }
 
@@ -308,7 +313,7 @@ mod tests {
             \tassets:checking  -10 EUR\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2, &HashSet::new());
         assert_eq!(txs.len(), original);
     }
 
@@ -323,7 +328,7 @@ mod tests {
             \tassets:checking  -10 EUR\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2, &HashSet::new());
         assert_eq!(txs.len(), original);
     }
 
@@ -344,7 +349,7 @@ mod tests {
             \tcp:partner     100 USD\n\
             \tassets:bank   -105 EUR\n";
         let (mut txs, db) = setup(src);
-        translate(&mut txs, "EUR", &db, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "EUR", &db, "in:cta", "ex:cta", 2, &HashSet::new());
         let release = txs
             .iter()
             .find(|lt| lt.value.description == "currency translation adjustment")

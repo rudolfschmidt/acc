@@ -58,6 +58,15 @@ pub enum Entry {
     /// Adjustments — symmetric counterpart to `cta gain`.
     CtaLossAccount(String),
 
+    /// Produced when `account NAME` is followed by indented
+    /// `capital gain`. Target for realized capital gains booked by the
+    /// lot/FIFO phase when a held position is sold above its cost basis.
+    CapitalGainAccount(String),
+
+    /// Produced when `account NAME` is followed by indented
+    /// `capital loss`. Symmetric counterpart to `capital gain`.
+    CapitalLossAccount(String),
+
     /// A top-level comment line (`;` or `#` at column 0).
     Comment(String),
 

@@ -69,6 +69,8 @@ pub fn filter(
         fx_loss: journal.fx_loss,
         cta_gain: journal.cta_gain,
         cta_loss: journal.cta_loss,
+        capital_gain: journal.capital_gain,
+        capital_loss: journal.capital_loss,
         precisions: journal.precisions,
         aliases: journal.aliases,
         auto_rules: journal.auto_rules,

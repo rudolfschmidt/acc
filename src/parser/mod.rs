@@ -396,10 +396,17 @@ fn extend_block(
                 (Some("cta"), Some("loss"), None) => {
                     upgrade = Some(Entry::CtaLossAccount(std::mem::take(name)));
                 }
+                (Some("capital"), Some("gain"), None) => {
+                    upgrade = Some(Entry::CapitalGainAccount(std::mem::take(name)));
+                }
+                (Some("capital"), Some("loss"), None) => {
+                    upgrade = Some(Entry::CapitalLossAccount(std::mem::take(name)));
+                }
                 _ => return Err(ParseError::new(
                     line,
                     1,
-                    "expected `fx gain`, `fx loss`, `cta gain`, or `cta loss`",
+                    "expected `fx gain`, `fx loss`, `cta gain`, `cta loss`, \
+                     `capital gain`, or `capital loss`",
                 )),
             }
         }

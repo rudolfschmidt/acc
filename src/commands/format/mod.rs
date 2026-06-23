@@ -271,6 +271,16 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool) -> String {
                 out.push_str(INDENT);
                 out.push_str("cta loss\n");
             }
+            Entry::CapitalGainAccount(name) => {
+                out.push_str(&format!("account {}\n", name));
+                out.push_str(INDENT);
+                out.push_str("capital gain\n");
+            }
+            Entry::CapitalLossAccount(name) => {
+                out.push_str(&format!("account {}\n", name));
+                out.push_str(INDENT);
+                out.push_str("capital loss\n");
+            }
             Entry::Comment(text) => {
                 out.push_str(text);
                 if !text.ends_with('\n') {
