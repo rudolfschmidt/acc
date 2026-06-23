@@ -544,6 +544,12 @@ fn posting_value(
     sums: &HashMap<String, Decimal>,
 ) -> Option<(Decimal, String)> {
     let a = p.amount.as_ref()?;
+    // A zero-quantity leg has no per-unit value — and dividing a total
+    // cost by it would panic. It contributes nothing to any position, so
+    // skip it.
+    if a.value.is_zero() {
+        return None;
+    }
     // An explicit cost annotation wins.
     if let Some(costs) = &p.costs {
         return Some(match costs {
@@ -966,5 +972,20 @@ mod tests {
         realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, Some("EUR"), &db, &prec);
         // Exactly one covered lot; no short lot for the uncovered 1 BTC.
         assert_eq!(split_legs(&txs, "BTC").len(), 1);
+    }
+
+    #[test]
+    fn zero_quantity_leg_does_not_divide_by_zero() {
+        // A degenerate `0 BTC @@ 50 USD` leg balances via its cost weight
+        // but has no per-unit value — dividing the total cost by the zero
+        // quantity would panic. It must be skipped instead.
+        let src = "\
+            2024-06-01 degenerate\n\
+            \tassets:btc    0 BTC @@ 50 USD\n\
+            \tassets:cash  -50 USD\n";
+        let (mut txs, db, prec) = setup(src);
+        // Must not panic, and realizes nothing.
+        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        assert!(!any_capital(&txs));
     }
 }

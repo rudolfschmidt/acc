@@ -160,7 +160,38 @@ pub fn date_to_days(date: &str) -> Result<u32, String> {
     let y: i64 = parts[0].parse().map_err(|_| format!("invalid year: {}", parts[0]))?;
     let m: i64 = parts[1].parse().map_err(|_| format!("invalid month: {}", parts[1]))?;
     let d: i64 = parts[2].parse().map_err(|_| format!("invalid day: {}", parts[2]))?;
+    // Reject out-of-range calendar fields. Without this a typo like
+    // `2024-13-01` or `2024-02-30` would silently roll over into the
+    // next month/year (via civil_to_days), mis-filing the transaction.
+    if !(1..=12).contains(&m) {
+        return Err(format!("month out of range (expected 1-12): {}", date));
+    }
+    let max_day = days_in_month(y, m);
+    if !(1..=max_day).contains(&d) {
+        return Err(format!("day out of range (expected 1-{}): {}", max_day, date));
+    }
+    // Days are stored as u32 since the Unix epoch; pre-1970 dates would
+    // saturate to 1970-01-01 and compare/sort identically.
+    if y < 1970 {
+        return Err(format!("year before 1970 is not supported: {}", date));
+    }
     Ok(civil_to_days(y, m, d) as u32)
+}
+
+/// Whether `y` is a leap year (proleptic Gregorian).
+fn is_leap_year(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+/// Number of days in month `m` (1-12) of year `y`.
+fn days_in_month(y: i64, m: i64) -> i64 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(y) => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 /// Howard Hinnant's days-from-civil algorithm (inverse of days_to_date).
@@ -207,6 +238,35 @@ mod tests {
         assert!(Date::parse("not-a-date").is_err());
         assert!(Date::parse("2020/01/01").is_err());
         assert!(Date::parse("2020-01").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_out_of_range_fields() {
+        // Months and days outside the calendar must error, not silently
+        // roll over into the next month/year.
+        assert!(Date::parse("2024-13-01").is_err(), "month 13");
+        assert!(Date::parse("2024-00-01").is_err(), "month 0");
+        assert!(Date::parse("2024-01-32").is_err(), "day 32");
+        assert!(Date::parse("2024-01-00").is_err(), "day 0");
+        assert!(Date::parse("2024-04-31").is_err(), "April has 30 days");
+        assert!(Date::parse("2021-02-29").is_err(), "2021 is not a leap year");
+        assert!(Date::parse("2024-02-30").is_err(), "Feb never has 30");
+    }
+
+    #[test]
+    fn parse_accepts_valid_leap_day() {
+        // The flip side: a real leap day must still parse.
+        assert!(Date::parse("2024-02-29").is_ok());
+        assert!(Date::parse("2000-02-29").is_ok()); // divisible by 400
+        assert!(Date::parse("1900-02-29").is_err()); // divisible by 100, not 400
+    }
+
+    #[test]
+    fn parse_rejects_pre_epoch_year() {
+        // Days are u32 since 1970; pre-epoch dates would saturate to
+        // 1970-01-01 and compare identically.
+        assert!(Date::parse("1969-12-31").is_err());
+        assert!(Date::parse("1970-01-01").is_ok());
     }
 
     #[test]
