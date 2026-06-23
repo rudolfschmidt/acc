@@ -115,6 +115,7 @@ fn cta_labels_transit_drift_on_declared_account() {
         "in:cta",
         "ex:cta",
         2,
+        &std::collections::HashSet::new(),
     );
     acc::rebalancer::rebalance(&mut j.transactions, "USD", &j.prices);
 

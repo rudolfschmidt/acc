@@ -1,8 +1,8 @@
 //! Pipeline:
 //!
 //! ```text
-//! parser → resolver → booker → indexer → loader → realizer → filter → translator → rebalancer → sorter → commands
-//!                                                 (realizer/translator/rebalancer only with -x)
+//! parser → resolver → booker → indexer → loader → realizer → lotter → translator → filter → rebalancer → sorter → commands
+//!                                                 (realizer/translator/rebalancer only with -x; lotter needs capital accounts)
 //! ```
 
 pub mod booker;
@@ -14,6 +14,7 @@ pub mod expander;
 pub mod filter;
 pub mod indexer;
 pub mod loader;
+pub mod lotter;
 pub mod parser;
 pub mod realizer;
 pub mod rebalancer;

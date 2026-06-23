@@ -658,12 +658,38 @@ fn start() -> Result<(), acc::Error> {
         }
     }
 
+    // Lotter phase (capital gains): FIFO lot tracking. Runs whenever
+    // both `capital gain` / `capital loss` accounts are declared —
+    // unlike the realizer/translator it works with *or* without `-X`.
+    // With `-X` it values lots at market (price DB) and books the
+    // holding-period movement (the trade-day deviation stays with the
+    // realizer's fx gain/loss); without `-X` it books the total native
+    // gain straight from the books. Returns the (account, commodity)
+    // pairs it realized a gain on so CTA can exclude them (else both
+    // book the same drift and double-count).
+    let capital_tracked = if let (Some(cg), Some(cl)) = (
+        journal.capital_gain.as_deref(),
+        journal.capital_loss.as_deref(),
+    ) {
+        acc::lotter::realize_capital(
+            &mut journal.transactions,
+            cg,
+            cl,
+            exchange_target.as_deref(),
+            &journal.prices,
+            &journal.precisions,
+        )
+    } else {
+        std::collections::HashSet::new()
+    };
+
     // Translator phase (CTA): emit synthetic translation-adjustment
     // transactions for transit accounts whose native sum is zero but
     // whose target drift is non-zero. Both `cta gain` and `cta loss`
     // accounts must be declared so positive and negative drifts can
     // be routed separately. Runs *before* filter so `acc bal in:cta`
-    // pattern matches the injected postings.
+    // pattern matches the injected postings. Lot-tracked pairs are
+    // excluded — the lotter already booked their holding-period drift.
     if let Some(target) = exchange_target.as_deref() {
         if let (Some(cta_gain), Some(cta_loss)) = (
             journal.cta_gain.as_deref(),
@@ -677,6 +703,7 @@ fn start() -> Result<(), acc::Error> {
                 cta_gain,
                 cta_loss,
                 precision,
+                &capital_tracked,
             );
         }
     }

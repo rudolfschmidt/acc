@@ -44,10 +44,12 @@ pub fn run(journal: &Journal) {
 }
 
 fn print_header(tx: &Transaction) {
-    // Uniform 3-char state marker keeps the description column stable.
+    // State marker mirrors ledger: cleared `* `, pending `! `, and no
+    // marker at all when the state is absent — just `date description`,
+    // not an artificial blank column.
     let marker = match tx.state {
         State::Cleared => " * ".green().to_string(),
-        State::Uncleared => "   ".to_string(),
+        State::Uncleared => " ".to_string(),
         State::Pending => " ! ".yellow().to_string(),
     };
     let code = tx
@@ -98,14 +100,15 @@ fn print_posting(
     }
 }
 
-/// Virtual postings are wrapped in `(...)`. The parser distinguishes
-/// `[balanced]` vs `(unbalanced)`, but print collapses both to `(...)`
-/// following the old reference output.
+/// Account column content: real `account`, balanced-virtual
+/// `[account]`, or paren-virtual `(account)` — matching ledger's own
+/// print/reg output (verified against ledger 3.4.1), and consistent
+/// with acc's own `register` / `format` rendering.
 fn render_account(p: &Posting) -> String {
-    if p.is_virtual {
-        format!("({})", p.account)
-    } else {
-        p.account.clone()
+    match (p.is_virtual, p.balanced) {
+        (true, true) => format!("[{}]", p.account),
+        (true, false) => format!("({})", p.account),
+        (false, _) => p.account.clone(),
     }
 }
 
