@@ -25,7 +25,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::*;
 
 use crate::commands::account::Account;
-use crate::commands::util::format_amount;
+use crate::commands::util::{format_amount, shows_nonzero};
 use crate::decimal::Decimal;
 use crate::filter::PatternMatcher;
 use crate::loader::Journal;
@@ -289,10 +289,7 @@ fn row_display_lines(row: &Row, precisions: &HashMap<String, usize>) -> usize {
     row.account
         .total()
         .iter()
-        .filter(|(c, v)| {
-            let prec = precisions.get(*c).copied().unwrap_or(2);
-            !v.is_display_zero(prec)
-        })
+        .filter(|(c, v)| shows_nonzero(c, v, precisions))
         .count()
         .max(1)
 }
@@ -304,10 +301,7 @@ fn format_balance(
 ) -> String {
     let parts: Vec<_> = balance
         .iter()
-        .filter(|(c, v)| {
-            let prec = precisions.get(*c).copied().unwrap_or(2);
-            !v.is_display_zero(prec)
-        })
+        .filter(|(c, v)| shows_nonzero(c, v, precisions))
         .map(|(c, v)| format_amount(c, v, precisions))
         .collect();
     if parts.is_empty() {
@@ -370,10 +364,7 @@ fn draw(frame: &mut Frame, app: &App) {
             .account
             .total()
             .into_iter()
-            .filter(|(c, v)| {
-                let prec = app.precisions.get(c).copied().unwrap_or(2);
-                !v.is_display_zero(prec)
-            })
+            .filter(|(c, v)| shows_nonzero(c, v, app.precisions))
             .map(|(c, v)| (format_amount(&c, &v, app.precisions), v.is_negative()))
             .collect();
 

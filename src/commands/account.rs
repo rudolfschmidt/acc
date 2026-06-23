@@ -90,10 +90,11 @@ impl Account {
     /// display-rounded balance? `precisions` is the per-commodity
     /// display precision table from `Journal`.
     pub fn has_balance(&self, precisions: &HashMap<String, usize>) -> bool {
-        if self.balance.iter().any(|(commodity, v)| {
-            let precision = precisions.get(commodity).copied().unwrap_or(2);
-            !v.is_display_zero(precision)
-        }) {
+        if self
+            .balance
+            .iter()
+            .any(|(c, v)| crate::commands::util::shows_nonzero(c, v, precisions))
+        {
             return true;
         }
         self.children

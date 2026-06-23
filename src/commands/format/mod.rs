@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use colored::Colorize;
 
-use super::util::push_spaces;
+use super::util::{push_spaces, render_account};
 use crate::error::Error;
 use crate::parser::{
     self,
@@ -396,16 +396,6 @@ fn render_posting(
         }
         out.push_str(INDENT);
         out.push_str(&format!("; {}\n", c.value.text));
-    }
-}
-
-/// Account column content: `account`, `(account)`, or `[account]`
-/// depending on virtual flags.
-fn render_account(p: &Posting) -> String {
-    match (p.is_virtual, p.balanced) {
-        (true, true) => format!("[{}]", p.account),
-        (true, false) => format!("({})", p.account),
-        (false, _) => p.account.clone(),
     }
 }
 
