@@ -169,3 +169,178 @@ fn convert(p: &mut Posting, target: &str, db: &Index, date: &str) {
     p.costs = None;
     p.lot_date = None;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::posting::Posting;
+    use crate::{booker, indexer, parser, resolver};
+
+    /// Parse → resolve → book a source string and index its prices.
+    fn setup(src: &str) -> (Vec<Located<Transaction>>, Index) {
+        let entries = parser::parse(src).unwrap();
+        let resolved = resolver::resolve(entries).unwrap();
+        let txs = booker::book(resolved.transactions).unwrap();
+        let db = indexer::index(resolved.prices);
+        (txs, db)
+    }
+
+    /// The first posting whose account starts with `prefix`.
+    fn leg<'a>(txs: &'a [Located<Transaction>], prefix: &str) -> &'a Posting {
+        txs.iter()
+            .flat_map(|t| t.value.postings.iter())
+            .map(|lp| &lp.value)
+            .find(|p| p.account.starts_with(prefix))
+            .expect("posting not found")
+    }
+
+    fn dec(s: &str) -> Decimal {
+        Decimal::parse(s).unwrap()
+    }
+
+    // ── target_value: the get_weight ladder ──────────────────────────
+
+    #[test]
+    fn target_value_plain_amount_converts_at_txdate_rate() {
+        let (txs, db) = setup(
+            "P 2024-06-01 USD EUR 0.9\n\
+             2024-06-01 * x\n\
+             \tassets:usd   100 USD\n\
+             \tequity:open -100 USD\n",
+        );
+        let v = target_value(leg(&txs, "assets:usd"), "EUR", &db, "2024-06-01");
+        assert_eq!(v, Some(dec("90"))); // 100 × 0.9
+    }
+
+    #[test]
+    fn target_value_lot_cost_weights_by_cost_not_market() {
+        // `{95 EUR}` cost-basis weight is quantity × cost (-950), NOT the
+        // market value (-10 × 200 = -2000).
+        let (txs, db) = setup(
+            "P 2024-06-01 ASSET EUR 200\n\
+             2024-06-01 * sell\n\
+             \tassets:broker  -10 ASSET {95 EUR}\n\
+             \tassets:cash    950 EUR\n",
+        );
+        let v = target_value(leg(&txs, "assets:broker"), "EUR", &db, "2024-06-01");
+        assert_eq!(v, Some(dec("-950")));
+    }
+
+    #[test]
+    fn target_value_per_unit_price_weight() {
+        // `@ 95 EUR` per-unit price: quantity × price.
+        let (txs, db) = setup(
+            "2024-06-01 * sell\n\
+             \tassets:broker  -10 ASSET @ 95 EUR\n\
+             \tassets:cash    950 EUR\n",
+        );
+        let v = target_value(leg(&txs, "assets:broker"), "EUR", &db, "2024-06-01");
+        assert_eq!(v, Some(dec("-950")));
+    }
+
+    #[test]
+    fn target_value_total_cost_carries_amount_sign() {
+        // `@@ 950 EUR` total cost on a negative leg weighs -950.
+        let (txs, db) = setup(
+            "2024-06-01 * sell\n\
+             \tassets:broker  -10 ASSET @@ 950 EUR\n\
+             \tassets:cash    950 EUR\n",
+        );
+        let v = target_value(leg(&txs, "assets:broker"), "EUR", &db, "2024-06-01");
+        assert_eq!(v, Some(dec("-950")));
+    }
+
+    #[test]
+    fn target_value_same_commodity_is_identity() {
+        let (txs, db) = setup(
+            "2024-06-01 * x\n\
+             \tassets:eur   100 EUR\n\
+             \tequity:open -100 EUR\n",
+        );
+        let v = target_value(leg(&txs, "assets:eur"), "EUR", &db, "2024-06-01");
+        assert_eq!(v, Some(dec("100"))); // no rate lookup needed
+    }
+
+    #[test]
+    fn target_value_missing_rate_is_none() {
+        let (txs, db) = setup(
+            "2024-06-01 * x\n\
+             \tassets:usd   100 USD\n\
+             \tequity:open -100 USD\n",
+        );
+        // No P-directive for USD→EUR.
+        assert_eq!(target_value(leg(&txs, "assets:usd"), "EUR", &db, "2024-06-01"), None);
+    }
+
+    // ── round_for_print: display rounding + residual absorption ───────
+
+    fn eur_leg<'a>(tx: &'a Transaction, prefix: &str) -> &'a Posting {
+        tx.postings
+            .iter()
+            .map(|lp| &lp.value)
+            .find(|p| p.account.starts_with(prefix))
+            .unwrap()
+    }
+
+    #[test]
+    fn round_for_print_rounds_to_display_precision() {
+        let (mut txs, db) = setup(
+            "P 2024-06-01 USD EUR 0.93331\n\
+             2024-06-01 * x\n\
+             \tassets:usd   100 USD\n\
+             \tequity:open -100 USD\n",
+        );
+        rebalance(&mut txs, "EUR", &db);
+        let prec = HashMap::from([("EUR".to_string(), 2usize)]);
+        round_for_print(&mut txs, "EUR", &prec);
+        // 100 × 0.93331 = 93.331 → 93.33 at 2 decimals.
+        let v = eur_leg(&txs[0].value, "assets:usd").amount.as_ref().unwrap();
+        assert_eq!(v.value, dec("93.33"));
+    }
+
+    #[test]
+    fn round_for_print_absorbs_residual_into_largest_leg() {
+        // Three legs that each round independently can leave a sub-cent
+        // residual; it must be absorbed into the largest leg so the
+        // printed amounts still sum to zero.
+        let (mut txs, db) = setup(
+            "P 2024-06-01 USD EUR 0.33335\n\
+             2024-06-01 * split\n\
+             \texpenses:a    10 USD\n\
+             \texpenses:b    10 USD\n\
+             \tassets:cash  -20 USD\n",
+        );
+        rebalance(&mut txs, "EUR", &db);
+        let prec = HashMap::from([("EUR".to_string(), 2usize)]);
+        round_for_print(&mut txs, "EUR", &prec);
+        let sum: Decimal = txs[0]
+            .value
+            .postings
+            .iter()
+            .filter_map(|lp| lp.value.amount.as_ref())
+            .fold(Decimal::zero(), |acc, a| acc + a.value);
+        assert!(sum.is_zero(), "rounded legs must still sum to zero, got {:?}", sum);
+    }
+
+    #[test]
+    fn round_for_print_leaves_unconverted_leg_alone() {
+        // A leg with no rate path stays in its native commodity, so the
+        // transaction is not fully in the target — the residual is real,
+        // not round-off, and must not be absorbed.
+        let (mut txs, db) = setup(
+            "P 2024-06-01 USD EUR 0.9\n\
+             2024-06-01 * mixed\n\
+             \tassets:usd   100 USD\n\
+             \tassets:gbp  -100 GBP\n",
+        );
+        rebalance(&mut txs, "EUR", &db);
+        let prec = HashMap::from([("EUR".to_string(), 2usize)]);
+        round_for_print(&mut txs, "EUR", &prec);
+        // GBP leg has no rate → stays GBP; USD leg became 90 EUR. The
+        // mismatch is untouched (no spurious absorption).
+        let usd = eur_leg(&txs[0].value, "assets:usd").amount.as_ref().unwrap();
+        assert_eq!(usd.value, dec("90"));
+        let gbp = eur_leg(&txs[0].value, "assets:gbp").amount.as_ref().unwrap();
+        assert_eq!(gbp.commodity, "GBP");
+    }
+}

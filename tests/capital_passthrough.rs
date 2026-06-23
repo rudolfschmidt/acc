@@ -233,6 +233,50 @@ fn native_capital_gain_no_conversion() {
     assert_eq!(common::balance(&txs, "in:cap", "USD"), dec("-20000"));
 }
 
+// ─── Realizer ↔ lotter exclusivity (pipeline::enrich) ─────────────────
+
+/// fx gain/loss account declarations.
+const FX_ACCOUNTS: &str = "\
+    account in:fx\n    fx gain\n\
+    account ex:fx\n    fx loss\n";
+
+#[test]
+fn enrich_runs_realizer_without_capital_accounts() {
+    // Only fx accounts declared (no capital): enrich runs the realizer,
+    // which books the implied-vs-market deviation. Implied rate is
+    // 95/100 = 0.95 €/$, market is 0.90 → €5 gain on the fx account.
+    let src = format!(
+        "{FX_ACCOUNTS}\
+         P 2024-06-01 USD EUR 0.90\n\
+         2024-06-01 * trade\n\
+         \tassets:eur    95 EUR\n\
+         \tassets:usd  -100 USD\n"
+    );
+    let txs = common::run_x(&src, "EUR");
+    let fx = common::balance(&txs, "in:fx", "EUR")
+        + common::balance(&txs, "ex:fx", "EUR");
+    assert_eq!(fx, dec("-5"), "realizer must book the €5 fx gain");
+}
+
+#[test]
+fn enrich_skips_realizer_when_capital_active() {
+    // Same transaction, but capital accounts are also declared. The
+    // lotter now owns the spread, so the realizer is skipped. The USD
+    // disposal opens an (unclosed) short and realizes nothing, so NO fx
+    // posting appears — proving the realizer did not run.
+    let src = format!(
+        "{FX_ACCOUNTS}{ACCOUNTS}\
+         P 2024-06-01 USD EUR 0.90\n\
+         2024-06-01 * trade\n\
+         \tassets:eur    95 EUR\n\
+         \tassets:usd  -100 USD\n"
+    );
+    let txs = common::run_x(&src, "EUR");
+    let fx = common::balance(&txs, "in:fx", "EUR")
+        + common::balance(&txs, "ex:fx", "EUR");
+    assert_eq!(fx, Decimal::zero(), "realizer must be skipped when capital is active");
+}
+
 // ─── Whole-journal invariant: every converted tx still balances ───────
 
 #[test]
