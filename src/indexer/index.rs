@@ -36,8 +36,12 @@ impl Index {
 
     /// Store a single rate. Only the given direction is stored — the
     /// inverse is computed on demand by `find`.
+    ///
+    /// Non-positive rates are dropped: a zero rate carries no information,
+    /// and a negative one is economically meaningless — keeping it would
+    /// let `find` propagate a sign-flipped conversion through the graph.
     pub(super) fn add(&mut self, from: Arc<str>, to: Arc<str>, day: u32, rate: Decimal) {
-        if rate.is_zero() || from == to {
+        if rate.is_zero() || rate.is_negative() || from == to {
             return;
         }
         self.prices

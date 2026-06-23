@@ -92,6 +92,33 @@ mod tests {
     }
 
     #[test]
+    fn negative_rate_ignored() {
+        // A negative exchange rate is economically meaningless; storing it
+        // would let `find` propagate a sign-flipped conversion. It is
+        // dropped, so the pair stays unconvertible (and the amount native).
+        let db = build("P 2024-06-15 USD EUR -0.5\n");
+        assert!(db.is_empty());
+        assert_eq!(db.find("USD", "EUR", "2024-06-16"), None);
+    }
+
+    #[test]
+    fn query_before_first_price_falls_back_to_earliest() {
+        // Documented behaviour: a lookup dated before the earliest known
+        // price falls back to that earliest rate rather than returning
+        // None. (This is the one non-historical fallback in `find`.)
+        let db = build("P 2024-06-01 USD EUR 0.90\nP 2024-12-01 USD EUR 0.95\n");
+        assert_eq!(db.find("USD", "EUR", "2020-01-01"), Some(Decimal::parse("0.90").unwrap()));
+    }
+
+    #[test]
+    fn same_day_last_price_wins() {
+        // Two prices for the same pair on the same day: the later P
+        // directive in the file overwrites the earlier one.
+        let db = build("P 2024-01-01 USD EUR 0.90\nP 2024-01-01 USD EUR 0.95\n");
+        assert_eq!(db.find("USD", "EUR", "2024-01-01"), Some(Decimal::parse("0.95").unwrap()));
+    }
+
+    #[test]
     fn applies_aliases_from_resolver() {
         let src = "commodity USD\n    alias $\nP 2024-06-15 $ EUR 0.92\n";
         let db = build(src);
