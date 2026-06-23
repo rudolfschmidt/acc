@@ -10,16 +10,18 @@
 //!     ; posting comment
 //! ```
 //!
-//! Every indent and gap is emitted via `print_spaces(GAP)` so column
+//! Every indent and gap is emitted via `write_spaces(GAP)` so column
 //! alignment is consistent across rows. Accounts and amounts have
 //! global max-widths: the account column is left-aligned within
 //! `account_max`, the amount column right-aligned within `amount_max`.
 //!
 //! Runs after the filter phase — the journal is already scoped.
 
+use std::io::{self, BufWriter, Write};
+
 use colored::Colorize;
 
-use super::util::{format_amount, print_spaces, render_account};
+use super::util::{format_amount, render_account, write_spaces};
 use crate::loader::Journal;
 use crate::parser::posting::{Costs, Posting};
 use crate::parser::transaction::{State, Transaction};
@@ -29,21 +31,28 @@ const GAP: usize = 4;
 pub fn run(journal: &Journal) {
     let account_max = max_account_width(journal);
     let amount_max = max_amount_width(journal);
-    let mut iter = journal.transactions.iter().peekable();
 
+    // Stream through one locked, buffered writer: rendering a large
+    // journal emits hundreds of thousands of lines, and an unbuffered
+    // `println!` would do a locked write syscall per line.
+    let stdout = io::stdout();
+    let mut out = BufWriter::new(stdout.lock());
+
+    let mut iter = journal.transactions.iter().peekable();
     while let Some(lt) = iter.next() {
         let tx = &lt.value;
-        print_header(tx);
+        let _ = print_header(&mut out, tx);
         for lp in &tx.postings {
-            print_posting(&lp.value, account_max, amount_max, &journal.precisions);
+            let _ = print_posting(&mut out, &lp.value, account_max, amount_max, &journal.precisions);
         }
         if iter.peek().is_some() {
-            println!();
+            let _ = writeln!(out);
         }
     }
+    let _ = out.flush();
 }
 
-fn print_header(tx: &Transaction) {
+fn print_header<W: Write>(out: &mut W, tx: &Transaction) -> io::Result<()> {
     // State marker mirrors ledger: cleared `* `, pending `! `, and no
     // marker at all when the state is absent — just `date description`,
     // not an artificial blank column.
@@ -57,33 +66,35 @@ fn print_header(tx: &Transaction) {
         .as_deref()
         .map(|c| format!("({}) ", c).yellow().to_string())
         .unwrap_or_default();
-    println!("{}{}{}{}", tx.date, marker, code, tx.description.bold());
+    writeln!(out, "{}{}{}{}", tx.date, marker, code, tx.description.bold())?;
     for comment in &tx.comments {
-        print_spaces(GAP);
-        println!("{}", format!("; {}", comment.value.text).dimmed());
+        write_spaces(out, GAP)?;
+        writeln!(out, "{}", format!("; {}", comment.value.text).dimmed())?;
     }
+    Ok(())
 }
 
-fn print_posting(
+fn print_posting<W: Write>(
+    out: &mut W,
     p: &Posting,
     account_max: usize,
     amount_max: usize,
     precisions: &std::collections::HashMap<String, usize>,
-) {
+) -> io::Result<()> {
     let display = render_account(p);
     let display_width = display.chars().count();
 
-    print_spaces(GAP);
-    print!("{}", display.blue());
+    write_spaces(out, GAP)?;
+    write!(out, "{}", display.blue())?;
 
     if let Some(amount) = &p.amount {
-        print_spaces(account_max.saturating_sub(display_width) + GAP);
+        write_spaces(out, account_max.saturating_sub(display_width) + GAP)?;
         let formatted = format_amount(&amount.commodity, &amount.value, precisions);
-        print_spaces(amount_max.saturating_sub(formatted.chars().count()));
+        write_spaces(out, amount_max.saturating_sub(formatted.chars().count()))?;
         if amount.value.is_negative() {
-            print!("{}", formatted.red());
+            write!(out, "{}", formatted.red())?;
         } else {
-            print!("{}", formatted);
+            write!(out, "{}", formatted)?;
         }
     }
 
@@ -94,28 +105,29 @@ fn print_posting(
     // `= assertion` stays internal (verified at load, not rendered).
     if let Some(lot) = &p.lot_cost {
         let a = lot.amount();
-        print!(" {{{}}}", format_amount(&a.commodity, &a.value, precisions));
+        write!(out, " {{{}}}", format_amount(&a.commodity, &a.value, precisions))?;
     }
     if let Some(d) = &p.lot_date {
-        print!(" [{}]", d);
+        write!(out, " [{}]", d)?;
     }
     if let Some(costs) = &p.costs {
         match costs {
             Costs::PerUnit(a) => {
-                print!(" @ {}", format_amount(&a.commodity, &a.value, precisions))
+                write!(out, " @ {}", format_amount(&a.commodity, &a.value, precisions))?
             }
             Costs::Total(a) => {
-                print!(" @@ {}", format_amount(&a.commodity, &a.value, precisions))
+                write!(out, " @@ {}", format_amount(&a.commodity, &a.value, precisions))?
             }
         }
     }
 
-    println!();
+    writeln!(out)?;
 
     for comment in &p.comments {
-        print_spaces(GAP);
-        println!("{}", format!("; {}", comment.value.text).dimmed());
+        write_spaces(out, GAP)?;
+        writeln!(out, "{}", format!("; {}", comment.value.text).dimmed())?;
     }
+    Ok(())
 }
 
 

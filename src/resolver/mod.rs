@@ -146,8 +146,14 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         }
     }
 
+    // Transactions must be date-sorted: the booker validates balance
+    // assertions in chronological order.
     transactions.sort_by(|a, b| a.value.date.cmp(&b.value.date));
-    prices.sort_by(|a, b| a.value.date.cmp(&b.value.date));
+    // Prices are NOT sorted here: the indexer stores each pair's series
+    // in a `BTreeMap<day, rate>` that orders itself, and a same-day
+    // collision resolves to the last directive in file order either way
+    // (a stable sort wouldn't change it). Sorting ~800k price directives
+    // is pure overhead — skip it.
 
     Ok(Resolved {
         transactions,

@@ -15,10 +15,11 @@
 //! Runs after the filter phase — the journal is already scoped.
 
 use std::collections::BTreeMap;
+use std::io::{self, BufWriter, Write};
 
 use colored::Colorize;
 
-use super::util::{format_amount, print_spaces, render_account, shows_nonzero};
+use super::util::{format_amount, render_account, shows_nonzero, write_spaces};
 use crate::decimal::Decimal;
 use crate::loader::Journal;
 use crate::parser::transaction::{State, Transaction};
@@ -30,13 +31,18 @@ pub fn run(journal: &Journal) {
     let rows = build_rows(journal);
     let widths = compute_widths(&rows, precisions, terminal_cols());
 
+    // One locked, buffered writer for the whole register — see `print`.
+    let stdout = io::stdout();
+    let mut out = BufWriter::new(stdout.lock());
+
     for row in &rows {
         let title_truncated = truncate(&row.title, widths.title);
         for (i, entry) in row.entries.iter().enumerate() {
             let title = if i == 0 { title_truncated.as_str() } else { "" };
             let totals = non_zero_commodities(&entry.total, precisions);
             if totals.is_empty() {
-                print_line(
+                let _ = print_line(
+                    &mut out,
                     title,
                     &entry.account,
                     &entry.amount,
@@ -49,7 +55,8 @@ pub fn run(journal: &Journal) {
                 for (j, (commodity, value)) in totals.iter().enumerate() {
                     let total_str = format_amount(commodity, value, precisions);
                     if j == 0 {
-                        print_line(
+                        let _ = print_line(
+                            &mut out,
                             title,
                             &entry.account,
                             &entry.amount,
@@ -59,12 +66,13 @@ pub fn run(journal: &Journal) {
                             &widths,
                         );
                     } else {
-                        print_continuation(&total_str, value.is_negative(), &widths);
+                        let _ = print_continuation(&mut out, &total_str, value.is_negative(), &widths);
                     }
                 }
             }
         }
     }
+    let _ = out.flush();
 }
 
 struct Row {
@@ -183,7 +191,9 @@ fn format_title(tx: &Transaction) -> String {
 }
 
 
-fn print_line(
+#[allow(clippy::too_many_arguments)]
+fn print_line<W: Write>(
+    out: &mut W,
     title: &str,
     account: &str,
     amount: &str,
@@ -191,38 +201,44 @@ fn print_line(
     total: &str,
     total_negative: bool,
     widths: &Widths,
-) {
-    print_left(title, title.chars().count(), widths.title + GAP);
+) -> io::Result<()> {
+    print_left(out, title, title.chars().count(), widths.title + GAP)?;
     print_left(
+        out,
         &account.blue().to_string(),
         account.chars().count(),
         widths.account + GAP,
-    );
-    print_right(amount, amount_negative, widths.amount);
-    print_spaces(GAP);
-    print_right(total, total_negative, widths.total);
-    println!();
+    )?;
+    print_right(out, amount, amount_negative, widths.amount)?;
+    write_spaces(out, GAP)?;
+    print_right(out, total, total_negative, widths.total)?;
+    writeln!(out)
 }
 
-fn print_continuation(total: &str, total_negative: bool, widths: &Widths) {
+fn print_continuation<W: Write>(
+    out: &mut W,
+    total: &str,
+    total_negative: bool,
+    widths: &Widths,
+) -> io::Result<()> {
     let prefix = widths.title + GAP + widths.account + GAP + widths.amount + GAP;
-    print_spaces(prefix);
-    print_right(total, total_negative, widths.total);
-    println!();
+    write_spaces(out, prefix)?;
+    print_right(out, total, total_negative, widths.total)?;
+    writeln!(out)
 }
 
-fn print_left(text: &str, visible: usize, width: usize) {
-    print!("{}", text);
-    print_spaces(width.saturating_sub(visible));
+fn print_left<W: Write>(out: &mut W, text: &str, visible: usize, width: usize) -> io::Result<()> {
+    write!(out, "{}", text)?;
+    write_spaces(out, width.saturating_sub(visible))
 }
 
-fn print_right(text: &str, negative: bool, width: usize) {
+fn print_right<W: Write>(out: &mut W, text: &str, negative: bool, width: usize) -> io::Result<()> {
     let visible = text.chars().count();
-    print_spaces(width.saturating_sub(visible));
+    write_spaces(out, width.saturating_sub(visible))?;
     if negative {
-        print!("{}", text.red());
+        write!(out, "{}", text.red())
     } else {
-        print!("{}", text);
+        write!(out, "{}", text)
     }
 }
 

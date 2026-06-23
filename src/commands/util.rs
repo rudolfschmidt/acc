@@ -1,6 +1,6 @@
 //! Shared rendering helpers for the commander subcommands.
 //!
-//! `print_spaces` is the single source of column-alignment: every
+//! `write_spaces` is the single source of column-alignment: every
 //! commander that needs padding calls this helper so layouts stay
 //! consistent. `format_amount` is the canonical amount renderer:
 //! commodity-first, per-commodity precision, "-0.00" suppressed.
@@ -23,11 +23,13 @@ pub(crate) fn render_account(p: &Posting) -> String {
     }
 }
 
-/// Print `n` space characters to stdout. No-op when `n == 0`.
-pub(crate) fn print_spaces(n: usize) {
-    if n > 0 {
-        print!("{}", " ".repeat(n));
+/// Write `n` space characters to a `Write` sink. Commands stream their
+/// output through a `BufWriter`, so padding goes through the same writer.
+pub(crate) fn write_spaces<W: std::io::Write>(out: &mut W, n: usize) -> std::io::Result<()> {
+    for _ in 0..n {
+        out.write_all(b" ")?;
     }
+    Ok(())
 }
 
 /// Append `n` space characters to a `String` buffer. Same idea as
