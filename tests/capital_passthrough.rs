@@ -93,22 +93,22 @@ fn short_closed_above_open_routes_to_loss() {
 
 #[test]
 fn pure_trade_passthrough_is_all_capital_no_cta() {
-    // A foreign commodity flows in and out entirely against the target
+    // A foreign currency flows in and out entirely against the target
     // money (every leg is 2-commodity). The lotter realizes the whole
     // holding-period drift as a capital gain and pins both legs, so CTA
     // sees no drift and books nothing — no double-count.
     let src = format!(
         "{ACCOUNTS}\
          2024-05-02 * out\n\
-         \tcp:partner   -1000000 AAD\n\
-         \texpenses:work    12000 EUR\n\
+         \tcp:partner   -10000 USD\n\
+         \texpenses:work   9000 EUR\n\
          2024-05-03 * back\n\
-         \tassets:bank    -11900 EUR\n\
-         \tcp:partner    1000000 AAD\n"
+         \tassets:bank    -8900 EUR\n\
+         \tcp:partner    10000 USD\n"
     );
     let txs = common::run_x(&src, "EUR");
     assert_eq!(common::balance(&txs, "cp:partner", "EUR"), Decimal::zero());
-    // The full €100 drift lands on capital (12000 out, 11900 back in).
+    // The full €100 drift lands on capital (9000 out, 8900 back in).
     assert_eq!(common::balance(&txs, "in:cap", "EUR"), dec("-100"));
     // CTA must NOT also book it.
     assert_eq!(common::balance(&txs, "in:cta", "EUR"), Decimal::zero());
@@ -161,7 +161,7 @@ fn mixed_passthrough_splits_capital_and_cta_and_zeroes() {
          P 2018-06-01 USD EUR 0.862\n\
          P 2018-09-01 USD EUR 0.851\n\
          2018-01-01 * fund (single-commodity)\n\
-         \tassets:payproc     -32.88 USD\n\
+         \tassets:wallet     -32.88 USD\n\
          \tcp:vendor          32.88 USD\n\
          2018-06-01 * spend (2-commodity → short)\n\
          \tcp:vendor         -32.88 USD\n\
@@ -291,7 +291,7 @@ fn mixed_passthrough_whole_journal_balances_in_target() {
          P 2018-06-01 USD EUR 0.862\n\
          P 2018-09-01 USD EUR 0.851\n\
          2018-01-01 * fund\n\
-         \tassets:payproc     -32.88 USD\n\
+         \tassets:wallet     -32.88 USD\n\
          \tcp:vendor          32.88 USD\n\
          2018-06-01 * spend\n\
          \tcp:vendor         -32.88 USD\n\

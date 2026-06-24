@@ -891,7 +891,7 @@ mod tests {
     fn parse_posting_with_lot_cost_annotation() {
         // `{€58.11}` is a Ledger lot cost-basis tag — acc parses and
         // discards it, keeping the amount and the @market price.
-        let src = "2024-06-15 * Sell\n    assets:btc  -4 ABC {€58.11} @ €250.00\n    income:cap  4 ABC\n";
+        let src = "2024-06-15 * Sell\n    assets:broker  -4 ABC {€58.11} @ €250.00\n    income:cap  4 ABC\n";
         let got = parse(src).unwrap();
         if let Entry::Transaction(tx) = &got[0].value {
             let p = &tx.postings[0].value;
@@ -905,12 +905,12 @@ mod tests {
     fn parse_posting_with_lot_date_annotation() {
         // `[2017-12-31]` is a lot-date tag. Like cost basis it's
         // parsed and dropped.
-        let src = "2024-06-15 * Move\n    assets:pln  AAC 20 {=€0.2395} [2017-12-31]\n    income:x  -20 AAC\n";
+        let src = "2024-06-15 * Move\n    assets:broker  ABC 20 {=€0.2395} [2017-12-31]\n    income:x  -20 ABC\n";
         let got = parse(src).unwrap();
         if let Entry::Transaction(tx) = &got[0].value {
             let p = &tx.postings[0].value;
             let amt = p.amount.as_ref().unwrap();
-            assert_eq!(amt.commodity, "AAC");
+            assert_eq!(amt.commodity, "ABC");
             assert!(p.costs.is_none());
         }
     }

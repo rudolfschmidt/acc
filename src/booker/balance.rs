@@ -361,13 +361,13 @@ mod tests {
 
     #[test]
     fn high_precision_lot_cost_does_not_tighten_tolerance() {
-        // `AAB -7524 {=€0.0380117}` computes a lot cost of
+        // `AAF -7524 {=€0.0380117}` computes a lot cost of
         // €-286.0000308 against `€286.00` → residual 0.0000308 €.
         // That must round to display-zero at the amount's 0 decimals
         // (and the journal-wide 2 decimals for €), not at the cost's
         // 7 decimals.
-        let src = "2020-09-02 * airline\n\
-                   \tassets:czk   AAB-7524 {=€0.0380117}\n\
+        let src = "2020-09-02 * x\n\
+                   \tassets:fx    AAF-7524 {=€0.0380117}\n\
                    \texpenses:t   €286.00\n";
         assert!(balance_one(src).is_ok());
     }
@@ -378,7 +378,7 @@ mod tests {
         // Against -3001.00 + 44.06 € the residual is ~0.00051216 €,
         // which must round to display-zero at the explicit €-posting
         // decimals (2), not inherit BTC's 8 decimals.
-        let src = "2018-01-11 * payee\n\
+        let src = "2018-01-11 * x\n\
                    \tassets:btc   BTC 0.26184800 @ €11292.58\n\
                    \tassets:eur   €-3001.00\n\
                    \texpenses:t   €44.06\n";
