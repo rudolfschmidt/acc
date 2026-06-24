@@ -170,10 +170,13 @@ pub fn date_to_days(date: &str) -> Result<u32, String> {
     if !(1..=max_day).contains(&d) {
         return Err(format!("day out of range (expected 1-{}): {}", max_day, date));
     }
-    // Days are stored as u32 since the Unix epoch; pre-1970 dates would
-    // saturate to 1970-01-01 and compare/sort identically.
-    if y < 1970 {
-        return Err(format!("year before 1970 is not supported: {}", date));
+    // Days are stored as u32 since the Unix epoch. Pre-1970 dates would
+    // saturate to 1970-01-01 and compare/sort identically; years past
+    // 9999 would overflow the u32 day count on the `as u32` cast below
+    // and silently wrap to a wrong date. Reject both — the upper bound
+    // also matches the 4-digit `{:04}` year display.
+    if !(1970..=9999).contains(&y) {
+        return Err(format!("year out of range (expected 1970-9999): {}", date));
     }
     Ok(civil_to_days(y, m, d) as u32)
 }
@@ -267,6 +270,16 @@ mod tests {
         // 1970-01-01 and compare identically.
         assert!(Date::parse("1969-12-31").is_err());
         assert!(Date::parse("1970-01-01").is_ok());
+    }
+
+    #[test]
+    fn parse_rejects_far_future_year() {
+        // Years past 9999 would overflow the u32 day count and silently
+        // wrap to a wrong date — a typo like an 8-digit year must error,
+        // not be mis-filed.
+        assert!(Date::parse("9999-12-31").is_ok());
+        assert!(Date::parse("10000-01-01").is_err());
+        assert!(Date::parse("50000000-01-01").is_err());
     }
 
     #[test]

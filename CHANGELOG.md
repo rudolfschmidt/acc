@@ -1,5 +1,154 @@
 # Changelog
 
+## 0.8.0 — 2026-06-24
+
+### Tue 23 Jun 2026 - capital gains: a FIFO lot engine
+
+New `lotter` phase that realises capital gains and losses by tracking a
+FIFO lot queue per `(account, commodity)`, declared through `capital
+gain` / `capital loss` account directives (analogous to `fx gain` /
+`fx loss` and `cta gain` / `cta loss`).
+
+Every acquisition — a positive posting carrying its cost via `@` / `@@`
+— opens a lot; every disposal closes lots oldest-first and books the
+realised result. The disposal is written at its market price with `@`
+and balances against its proceeds on its own; the lotter then rewrites
+the disposal leg in place with the lot it closed (`{cost}
+[acquisition-date]`) and appends the gain as a posting. A sale that
+spans several lots splits FIFO into one leg per lot, each with its own
+basis and holding period. An explicit `{cost}` on a disposal is read as
+"the user is booking the gain by hand" — the lot is consumed for FIFO
+consistency but nothing is injected.
+
+Valuation follows what the data supports:
+
+- **without `-X`** — the total realised gain from the booked rates, in
+  the native commodity. Mixed-currency disposals are skipped, since cost
+  and proceeds in different commodities can't be netted natively.
+- **with `-X`** — the gain decomposes. The **market** part is the
+  asset's price movement against its cost commodity over the holding
+  period (the genuine investment performance); the **spread** part is
+  the trade-day execution deviation (booked price vs. market spot),
+  which routes to `fx gain` / `fx loss` if declared, else folds back
+  into capital. Together, capital and fx are the full realised profit.
+
+The split matters because the two numbers answer different questions: a
+position can show a small gain in the reporting currency while the asset
+itself was a poor pick, rescued only by the denomination currency
+appreciating. Separating market from spread — and, below, from CTA —
+keeps a currency tailwind from masking that.
+
+### Tue 23 Jun 2026 - short lots, and CTA without double-counting
+
+The engine handles short positions: a disposal before any acquisition
+opens a short lot, closed by a later purchase. A short is only opened
+when the counter-commodity is the target money — for an asset traded
+against another commodity, an unmatched disposal is just the other side
+of a normal trade, so opening a short there would double-count the gain
+already on the asset leg. Lot-tracked holdings are excluded from the CTA
+walk so the holding-period drift is never counted twice — once by the
+lotter, once by the translator.
+
+### Tue 23 Jun 2026 - pipeline::enrich, validation, output buffering
+
+Supporting work around the engine:
+
+- the enrich stage (expander → realizer → lotter → translator) lifts
+  into its own `pipeline::enrich`, with the realizer and lotter made
+  mutually exclusive (capital accounts declared → the lotter owns gains;
+  otherwise the realizer handles the trade-day deviation).
+- invalid dates (out-of-range month/day) and negative `P` rates are now
+  rejected at load instead of rolling over silently; a zero-quantity lot
+  leg no longer divides by zero.
+- `print` / `register` buffer their output through one locked write
+  instead of streaming per line, and a redundant price-table sort was
+  dropped — both visible on a 50k-transaction journal.
+- new unit coverage for the sorter, rebalancer, checker, and the
+  realizer/lotter exclusivity. Test fixtures that carried personal
+  identifiers (account prefixes, payee and vendor names, exotic
+  currencies) were rewritten with generic placeholders.
+
+### Tue 23 Jun 2026 - print: ledger-aligned virtual-posting rendering
+
+`print` now renders balanced virtual postings as `[account]` and
+paren-virtual as `(account)` rather than collapsing both to `(...)`, and
+drops the artificial blank state marker on uncleared transactions — both
+matching ledger 3.4.1.
+
+### Wed 24 Jun 2026 - lot annotations: `{{}}` total cost and `[date]`
+
+`{{TOTAL}}` (whole-lot cost) was accepted by the parser and then thrown
+away, so a total cost silently fell back to the implied per-unit rate.
+It is now modelled properly: `LotCost` became a struct `{ amount, total,
+fixed }` with a `weight(qty)` method — `qty × cost` for per-unit `{}`,
+the figure itself (sign-carried) for total `{{}}`, exactly as `@@` is to
+`@`. The booker and rebalancer weigh legs through `weight()`, and `print`
+round-trips the form the user wrote (`{}` vs `{{}}`, with `=` if locked).
+The value is stored exactly as written — no total↔per-unit normalisation,
+no precision loss either way.
+
+A written `[date]` was likewise parsed and discarded; it is now kept so
+`print` round-trips it (display only — it feeds no computation; the
+lotter still derives its own FIFO lot dates). But a bare `[date]` without
+a lot cost is a trap: the moment the lotter realises a gain on that
+posting it splits the leg and overwrites the date with the FIFO
+acquisition date, silently discarding what the user wrote. So a `[date]`
+is now rejected unless it accompanies a `{}` or `{{}}` cost. This matches
+ledger-cli, where `{price}` / `[date]` / `(note)` are each independent
+and optional.
+
+### Wed 24 Jun 2026 - real postings, not bracket-virtual
+
+The currency-translation-adjustment release transaction emitted its two
+legs as bracket-virtual `[account]`, and the lotter's capital posting did
+the same. Both are now real postings: the legs already sum to zero, so
+the transaction balances on its own and reloads 1:1, exactly like any
+hand-written entry. `print` renders them as plain accounts, and `-R` /
+`--real` keeps them (they are real economic postings) rather than hiding
+them.
+
+This also settled a latent inconsistency: a real (non-virtual) posting
+must carry `balanced: true` — that is what the parser sets for every
+plain account, and every reader keys off `is_virtual && !balanced` to
+skip only paren-virtual `(account)` legs. The CTA legs, the lotter's
+capital posting, and the realizer's fx posting were all setting
+`balanced: false` on real postings — harmless (the flag is ignored when
+`is_virtual` is false) but wrong by convention. All now set it true.
+
+### Wed 24 Jun 2026 - mixed-currency disposals: proceeds translation
+
+A disposal whose lot is costed in a foreign commodity but sold for the
+reporting currency (e.g. an asset bought for BTC, sold for €) previously
+dumped its entire move onto CTA — misclassifying a real capital result
+as a translation effect. acc now translates the proceeds into the lot's
+cost commodity at the disposal date and runs the normal market/spread
+split there; the cost basis's own drift against the target then surfaces
+as CTA, as it should.
+
+The translation is scoped to proceeds in the target currency. A
+crypto-to-crypto trade — proceeds in another non-target commodity (BTC
+sold for ETH) — is a different problem whose gain can't be split with a
+single counter rate, so it falls through to the mixed-skip as before. An
+earlier, broader version fired on those too and left transactions a few
+cents unbalanced (the whole-journal target balance drifted); narrowing
+the trigger to target-currency proceeds, translated via the inverse of
+the rate the rebalancer later uses, restored it exactly.
+
+### Wed 24 Jun 2026 - cleanup: determinism, date bounds, doc drift
+
+- **Deterministic price paths.** The price-graph BFS iterated a
+  `HashMap`, so when two conversion routes of equal hop count existed
+  between two commodities, the same journal could resolve different rates
+  on different runs. Neighbours are now sorted (explicit edges before
+  reciprocals, each alphabetical), making `-X` output reproducible.
+- **Date upper bound.** `date_to_days` validated month, day, and the 1970
+  floor but cast the day count to `u32` without an upper bound, so a
+  far-future typo (an eight-digit year) wrapped silently to a wrong date.
+  Years are now bounded to `1970..=9999`, matching the four-digit display.
+- a sweep of stale doc comments was pulled back in line with the code:
+  the `-R` behaviour, the realizer's phase position, "paren-virtual"
+  labels on now-real postings, `[date]` origin, and the CTA expansion.
+
 ## 0.7.0 — 2026-06-22
 
 ### Mon 22 Jun 2026 - `acc sweep`: close a pass-through account's open balance

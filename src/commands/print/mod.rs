@@ -100,8 +100,9 @@ fn print_posting<W: Write>(
 
     // Lot annotations follow the amount, ledger-style:
     //   AMOUNT {cost} [lot-date] @ price
-    // `{cost}` is the lot basis, `[lot-date]` the (acc-generated)
-    // acquisition date of the closed lot, `@`/`@@` the unit/total cost.
+    // `{cost}` is the lot basis, `[lot-date]` the lot's acquisition
+    // date (acc-generated when splitting a disposal, or copied from a
+    // user-written `[date]`), `@`/`@@` the unit/total cost.
     // `= assertion` stays internal (verified at load, not rendered).
     if let Some(lot) = &p.lot_cost {
         let s = format_amount(&lot.amount.commodity, &lot.amount.value, precisions);

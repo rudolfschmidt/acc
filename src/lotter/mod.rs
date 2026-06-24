@@ -198,12 +198,49 @@ pub fn realize_capital(
             // (ledger style) — acc consumes lots for FIFO consistency but
             // injects nothing and opens no lot.
             let manual = lp.value.lot_cost.is_some();
-            // Market rate of the commodity in the counter-commodity on
-            // this date — feeds the market/spread split (open + close).
-            let market_here =
-                target.and_then(|t| market_rate(&a.commodity, &value_commodity, t, db, &date));
 
             let queue = lots.entry(key.clone()).or_default();
+
+            // Mixed-currency disposal: the proceeds are in `value_commodity`
+            // but the lot being closed is costed in another commodity (e.g.
+            // ETH bought for BTC, sold for €). Translate the proceeds rate
+            // into the lot's cost commodity at the disposal date, so gain,
+            // market and spread are all computed there — exactly as if the
+            // asset had traded against the cost commodity. The cost basis'
+            // own drift against the target then surfaces as CTA, instead of
+            // the whole move being misclassified as a capital gain.
+            //
+            // Scoped to proceeds in the *target* currency (`€`-denominated
+            // disposals of a foreign-costed lot). A crypto-to-crypto trade —
+            // proceeds in another non-target commodity (BTC sold for ETH) —
+            // is a different beast: its gain can't be split with a single
+            // counter rate, so it falls through to the mixed-skip in the
+            // loop below, exactly as before. Likewise when no rate is found.
+            let (value_commodity, unit_value) = match queue.front() {
+                Some(front)
+                    if front.cost_commodity != value_commodity
+                        && target == Some(value_commodity.as_str()) =>
+                {
+                    // Translate via the INVERSE of `cost → proceeds`, the
+                    // same rate the rebalancer later uses to convert the
+                    // cost-basis and gain back to the target. Using a
+                    // separate `proceeds → cost` lookup would pick a
+                    // possibly non-reciprocal graph path and leave the
+                    // transaction a few cents unbalanced.
+                    match db.find(&front.cost_commodity, &value_commodity, &date) {
+                        Some(rate) if !rate.is_zero() => {
+                            (front.cost_commodity.clone(), unit_value.div_rounded(rate))
+                        }
+                        _ => (value_commodity, unit_value),
+                    }
+                }
+                _ => (value_commodity, unit_value),
+            };
+
+            // Market rate of the commodity in the (possibly translated)
+            // counter-commodity on this date — feeds the market/spread split.
+            let market_here =
+                target.and_then(|t| market_rate(&a.commodity, &value_commodity, t, db, &date));
             let mut remaining = a.value; // signed: + acquires, − disposes
             let mut gain = Decimal::zero();
             let mut market = Decimal::zero();
@@ -348,7 +385,7 @@ pub fn realize_capital(
 
 /// Rewrite a transaction's disposal postings: each becomes one leg per
 /// closed lot (carrying `{cost}`, `[lot-date]` and an `@` proceeds
-/// cost), and one paren-virtual capital posting per disposal carries the
+/// cost), and one real capital posting per disposal carries the
 /// realized gain (`income` for a gain, `expense` for a loss). Original
 /// non-disposal postings pass through unchanged; capital postings are
 /// appended after, so the sale and its gain read together.
@@ -801,7 +838,7 @@ mod tests {
     #[test]
     fn disposal_leg_gets_lot_annotation_and_gain() {
         // The disposal posting is annotated in place with `{cost} [date]`
-        // and the gain is booked as a paren-virtual capital posting.
+        // and the gain is booked as a real capital posting.
         let src = "\
             2024-01-01 buy\n\
             \tassets:btc    1 BTC @ 100 USD\n\

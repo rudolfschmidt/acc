@@ -147,8 +147,9 @@ pub(super) fn balance_tx(
 ///    the effective value is `amount × lot_cost` in the lot's
 ///    commodity. This is Ledger's sell-from-lot semantics: the books
 ///    move at cost basis, not at the current market. Any `@` on the
-///    same posting is the market sale price and participates in the
-///    realizer (for gain tracking), not in the balance.
+///    same posting is the market sale price; it feeds conversion and
+///    gain tracking (the rebalancer, or the realizer when no capital
+///    accounts are declared), not the balance.
 /// 2. **Per-unit cost** `@ UNIT` — effective is `amount × UNIT`.
 /// 3. **Total cost** `@@ TOTAL` — effective is `TOTAL`, carrying
 ///    the posting's sign.

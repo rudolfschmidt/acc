@@ -17,11 +17,11 @@ pub struct Journal {
     pub prices: Index,
     pub fx_gain: Option<String>,
     pub fx_loss: Option<String>,
-    /// Account for positive Cumulative Translation Adjustments.
+    /// Account for positive Currency Translation Adjustments.
     /// Declared via `account NAME / cta gain`. Both `cta_gain` and
     /// `cta_loss` must be declared for the translator phase to run.
     pub cta_gain: Option<String>,
-    /// Account for negative Cumulative Translation Adjustments.
+    /// Account for negative Currency Translation Adjustments.
     /// Declared via `account NAME / cta loss`.
     pub cta_loss: Option<String>,
     /// Realized-capital-gains accounts, declared via
