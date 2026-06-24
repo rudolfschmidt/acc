@@ -29,33 +29,6 @@ pub fn parse(text: &str) -> Result<(String, Decimal, usize), String> {
     Ok((commodity, value, close + 1))
 }
 
-/// Count the maximum number of digits after any decimal point in the
-/// expression source. Kept for potential future use (e.g. a flag to
-/// preserve source precision for expressions), but not used by the
-/// current parser — expression amounts default to `decimals = 0` so
-/// that the commodity's display precision is driven by direct
-/// postings rather than intermediate computation terms.
-#[allow(dead_code)]
-pub fn max_decimals(text: &str) -> usize {
-    let mut max = 0;
-    let mut count: Option<usize> = None;
-    for c in text.chars() {
-        match c {
-            '.' => count = Some(0),
-            _ if c.is_ascii_digit() => {
-                if let Some(n) = count.as_mut() {
-                    *n += 1;
-                    if *n > max {
-                        max = *n;
-                    }
-                }
-            }
-            _ => count = None,
-        }
-    }
-    max
-}
-
 // ---------------------------------------------------------------------
 // matching paren + commodity/math split
 // ---------------------------------------------------------------------
@@ -331,12 +304,5 @@ mod tests {
     fn two_commodities_error() {
         let err = parse("(1 EUR + 1 USD)").unwrap_err();
         assert!(err.contains("at most one commodity"));
-    }
-
-    #[test]
-    fn max_decimals_from_source() {
-        assert_eq!(max_decimals("11784.00 / 12"), 2);
-        assert_eq!(max_decimals("10.5000 / 2"), 4);
-        assert_eq!(max_decimals("100 / 4"), 0);
     }
 }

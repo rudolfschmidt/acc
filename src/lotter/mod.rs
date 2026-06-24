@@ -556,7 +556,7 @@ fn rewrite_tx(
 }
 
 /// Balance-contributing postings: real and bracket-virtual `[account]`.
-/// Paren-virtual `(account)` (the realizer's fx labels) stays out.
+/// A paren-virtual `(account)` posting stays out of the balance.
 fn contributes(p: &Posting) -> bool {
     !p.is_virtual || p.balanced
 }

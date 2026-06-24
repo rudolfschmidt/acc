@@ -35,37 +35,20 @@ pub enum Entry {
     },
 
     /// `account NAME` without (or before) a sub-directive. Acts as a
-    /// scaffold that `handle_indented` replaces with `FxGainAccount`
-    /// or `FxLossAccount` when the matching sub-directive arrives. If
-    /// no sub-directive follows, the entry stays and resolve drops it.
+    /// scaffold that `handle_indented` upgrades to a `RoleAccount` when
+    /// a role sub-directive arrives. If no sub-directive follows, the
+    /// entry stays and resolve drops it.
     Account(String),
 
-    /// Produced when `account NAME` is followed by indented `fx gain`.
-    FxGainAccount(String),
-
-    /// Produced when `account NAME` is followed by indented `fx loss`.
-    FxLossAccount(String),
-
-    /// Produced when `account NAME` is followed by indented
-    /// `cta gain`. Target for positive Cumulative Translation
-    /// Adjustments — the drift absorbed when a transit account
-    /// nets to zero in native but gained value in the `-x` target
-    /// currency over its holding period.
-    CtaGainAccount(String),
-
-    /// Produced when `account NAME` is followed by indented
-    /// `cta loss`. Target for negative Cumulative Translation
-    /// Adjustments — symmetric counterpart to `cta gain`.
-    CtaLossAccount(String),
-
-    /// Produced when `account NAME` is followed by indented
-    /// `capital gain`. Target for realized capital gains booked by the
-    /// lot/FIFO phase when a held position is sold above its cost basis.
-    CapitalGainAccount(String),
-
-    /// Produced when `account NAME` is followed by indented
-    /// `capital loss`. Symmetric counterpart to `capital gain`.
-    CapitalLossAccount(String),
+    /// Produced when `account NAME` is followed by an indented role
+    /// sub-directive such as `fx gain`, `cta loss`, or `capital gain`.
+    /// `role` is the directive text verbatim (whitespace-collapsed),
+    /// `account` the declared name. The role string is the single source
+    /// of truth: the resolver indexes these by role, the pipeline phases
+    /// look up the ones they consume, and a `$role:slot` posting
+    /// reference resolves against the same index — so a new role costs
+    /// no parser/resolver change, only a declaration.
+    RoleAccount { role: String, account: String },
 
     /// A top-level comment line (`;` or `#` at column 0).
     Comment(String),
