@@ -21,10 +21,10 @@ pub struct Posting {
     pub amount: Option<Amount>,
     pub costs: Option<Costs>,
     pub lot_cost: Option<LotCost>,
-    /// Acquisition date of the closed lot, in `[YYYY-MM-DD]` form.
-    /// Never parsed from source (acc ignores a written `[date]`) — it
-    /// is set only by the lotter when it splits a disposal per lot, so
-    /// `print`/`reg` can show which lot each leg closed.
+    /// Acquisition date of the lot, in `[YYYY-MM-DD]` form. Either
+    /// written by the user (only allowed alongside a `{cost}`) or set by
+    /// the lotter when it splits a disposal per lot, so `print`/`reg` can
+    /// show which lot each leg closed. Display-only — no computation.
     pub lot_date: Option<Date>,
     pub balance_assertion: Option<Amount>,
     pub is_virtual: bool,

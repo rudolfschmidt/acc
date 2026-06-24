@@ -498,12 +498,11 @@ fn parse_posting(body: &str, line: usize) -> Result<Posting, ParseError> {
         (Some(amt), after.trim_start())
     };
 
-    // Ledger lot annotations. The first `{COST}` (or `{=FIXED}`) is
-    // captured as `lot_cost` — the booker uses it as the
-    // balance-effective per-unit value, overriding any `@` market
-    // cost. `[DATE]`, `(NOTE)`, `{{TOTAL}}` and extra `{…}` groups
-    // are consumed and dropped.
-    let (lot_cost, rest) = consume_lot_annotations(rest, line)?;
+    // Ledger lot annotations. The first `{COST}` / `{{TOTAL}}` is
+    // captured as `lot_cost` (the booker's balance-effective value,
+    // overriding any `@` market cost); the first `[DATE]` as `lot_date`
+    // (display only). `(NOTE)` and extra groups are dropped.
+    let (lot_cost, lot_date, rest) = consume_lot_annotations(rest, line)?;
 
     // `@@` total-cost, `@` per-unit-cost.
     let (costs, rest) = if let Some(after) = rest.strip_prefix("@@") {
@@ -517,9 +516,23 @@ fn parse_posting(body: &str, line: usize) -> Result<Posting, ParseError> {
     };
 
     // Lot annotations can also trail the cost clause — rare but
-    // valid in Ledger. Drop whatever remains; we already captured
-    // the lot cost from the pre-cost slot if present.
-    let (_, rest) = consume_lot_annotations(rest, line)?;
+    // valid in Ledger. Capture a lot date here too if the pre-cost
+    // slot had none; the lot cost was already taken above.
+    let (_, lot_date_post, rest) = consume_lot_annotations(rest, line)?;
+    let lot_date = lot_date.or(lot_date_post);
+
+    // A written `[date]` is only meaningful pinned to a written `{cost}`
+    // (a specific lot). On its own, the lotter would overwrite it with the
+    // FIFO acquisition date the moment it realizes a gain on this posting,
+    // silently discarding what the user wrote. Reject the bare form so the
+    // surprise can't happen — a lot date must accompany a lot cost.
+    if lot_date.is_some() && lot_cost.is_none() {
+        return Err(ParseError::new(
+            line,
+            1,
+            "a lot date `[…]` requires a lot cost `{…}` or `{{…}}`",
+        ));
+    }
 
     // `= AMOUNT` balance assertion.
     let balance_assertion = if let Some(after) = rest.strip_prefix('=') {
@@ -546,9 +559,7 @@ fn parse_posting(body: &str, line: usize) -> Result<Posting, ParseError> {
         amount,
         costs,
         lot_cost,
-        // A `[date]` in source is consumed by the lot parser but not
-        // stored — acc derives lot dates via FIFO, never from input.
-        lot_date: None,
+        lot_date,
         balance_assertion,
         is_virtual,
         balanced,
@@ -556,22 +567,23 @@ fn parse_posting(body: &str, line: usize) -> Result<Posting, ParseError> {
     })
 }
 
-/// Consume zero or more Ledger lot annotations from the start of
-/// `rest`. Returns the first captured lot cost (if any) and the
-/// remaining slice.
+/// Consume zero or more Ledger lot annotations from the start of `rest`.
+/// Returns the first lot cost and first lot date captured (if any) and
+/// the remaining slice.
 ///
 /// Recognised forms:
 ///
 /// - `{COST}` / `{=COST}` → per-unit lot cost (`total: false`); only the
 ///   first lot group is kept, later `{…}` groups are discarded.
 /// - `{{TOTAL}}` / `{{=TOTAL}}` → whole-lot total cost (`total: true`).
-/// - `[DATE]`   → lot acquisition date, consumed and discarded (acc sets
-///   the lot date itself when splitting a disposal).
+/// - `[DATE]`   → lot acquisition date, kept for display (the caller
+///   rejects it unless a lot cost accompanies it).
 fn consume_lot_annotations<'a>(
     mut rest: &'a str,
     line: usize,
-) -> Result<(Option<LotCost>, &'a str), ParseError> {
+) -> Result<(Option<LotCost>, Option<crate::date::Date>, &'a str), ParseError> {
     let mut lot_cost: Option<LotCost> = None;
+    let mut lot_date: Option<crate::date::Date> = None;
     loop {
         rest = rest.trim_start();
         let bytes = rest.as_bytes();
@@ -613,9 +625,18 @@ fn consume_lot_annotations<'a>(
                 let end = find_matching_brace(bytes, b'[', b']').ok_or_else(|| {
                     ParseError::new(line, 1, "unclosed `[` in lot annotation")
                 })?;
+                // Keep the first written `[DATE]` for display round-trip;
+                // it carries no computation (the lotter derives its own
+                // lot dates by FIFO). Later `[…]` groups are dropped.
+                if lot_date.is_none() {
+                    let inner = rest[1..end].trim();
+                    lot_date = Some(crate::date::Date::parse(inner).map_err(|e| {
+                        ParseError::new(line, 1, &format!("invalid lot date `{}`: {}", inner, e))
+                    })?);
+                }
                 rest = &rest[end + 1..];
             }
-            _ => return Ok((lot_cost, rest)),
+            _ => return Ok((lot_cost, lot_date, rest)),
         }
     }
 }
@@ -935,16 +956,37 @@ mod tests {
 
     #[test]
     fn parse_posting_with_lot_date_annotation() {
-        // `[2017-12-31]` is a lot-date tag. Like cost basis it's
-        // parsed and dropped.
+        // `[2017-12-31]` is a lot-date tag, kept for display when it
+        // accompanies a lot cost (here `{=€0.2395}`).
         let src = "2024-06-15 * Move\n    assets:broker  ABC 20 {=€0.2395} [2017-12-31]\n    income:x  -20 ABC\n";
         let got = parse(src).unwrap();
         if let Entry::Transaction(tx) = &got[0].value {
             let p = &tx.postings[0].value;
-            let amt = p.amount.as_ref().unwrap();
-            assert_eq!(amt.commodity, "ABC");
-            assert!(p.costs.is_none());
+            assert_eq!(p.amount.as_ref().unwrap().commodity, "ABC");
+            assert_eq!(p.lot_date.unwrap().to_string(), "2017-12-31");
         }
+    }
+
+    #[test]
+    fn lot_date_requires_a_lot_cost() {
+        // A `[date]` is valid only pinned to a lot cost — `{}` or `{{}}`.
+        let date = |src: &str| {
+            let got = parse(src).unwrap();
+            let Entry::Transaction(tx) = &got[0].value else { panic!() };
+            tx.postings[0].value.lot_date.map(|d| d.to_string())
+        };
+        // With per-unit `{}` — accepted, date kept.
+        assert_eq!(
+            date("2024-06-15 * x\n    a  -1 BTC {100 USD} [2018-01-01]\n    b  100 USD\n"),
+            Some("2018-01-01".to_string())
+        );
+        // With total `{{}}` — also accepted.
+        assert_eq!(
+            date("2024-06-15 * x\n    a  -1 BTC {{100 USD}} [2018-01-01]\n    b  100 USD\n"),
+            Some("2018-01-01".to_string())
+        );
+        // Bare `[date]` with no lot cost — rejected.
+        assert!(parse("2024-06-15 * x\n    a  -1 BTC [2018-01-01]\n    b  100 USD\n").is_err());
     }
 
     #[test]
