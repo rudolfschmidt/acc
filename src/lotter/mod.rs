@@ -201,44 +201,8 @@ pub fn realize_capital(
 
             let queue = lots.entry(key.clone()).or_default();
 
-            // Mixed-currency disposal: the proceeds are in `value_commodity`
-            // but the lot being closed is costed in another commodity (e.g.
-            // ETH bought for BTC, sold for €). Translate the proceeds rate
-            // into the lot's cost commodity at the disposal date, so gain,
-            // market and spread are all computed there — exactly as if the
-            // asset had traded against the cost commodity. The cost basis'
-            // own drift against the target then surfaces as CTA, instead of
-            // the whole move being misclassified as a capital gain.
-            //
-            // Scoped to proceeds in the *target* currency (`€`-denominated
-            // disposals of a foreign-costed lot). A crypto-to-crypto trade —
-            // proceeds in another non-target commodity (BTC sold for ETH) —
-            // is a different beast: its gain can't be split with a single
-            // counter rate, so it falls through to the mixed-skip in the
-            // loop below, exactly as before. Likewise when no rate is found.
-            let (value_commodity, unit_value) = match queue.front() {
-                Some(front)
-                    if front.cost_commodity != value_commodity
-                        && target == Some(value_commodity.as_str()) =>
-                {
-                    // Translate via the INVERSE of `cost → proceeds`, the
-                    // same rate the rebalancer later uses to convert the
-                    // cost-basis and gain back to the target. Using a
-                    // separate `proceeds → cost` lookup would pick a
-                    // possibly non-reciprocal graph path and leave the
-                    // transaction a few cents unbalanced.
-                    match db.find(&front.cost_commodity, &value_commodity, &date) {
-                        Some(rate) if !rate.is_zero() => {
-                            (front.cost_commodity.clone(), unit_value.div_rounded(rate))
-                        }
-                        _ => (value_commodity, unit_value),
-                    }
-                }
-                _ => (value_commodity, unit_value),
-            };
-
-            // Market rate of the commodity in the (possibly translated)
-            // counter-commodity on this date — feeds the market/spread split.
+            // Market rate of the traded commodity in the counter-commodity
+            // on this date — feeds the market/spread split.
             let market_here =
                 target.and_then(|t| market_rate(&a.commodity, &value_commodity, t, db, &date));
             let mut remaining = a.value; // signed: + acquires, − disposes
@@ -284,6 +248,45 @@ pub fn realize_capital(
                         cost_commodity: front.cost_commodity.clone(),
                         date: front.date,
                     });
+                } else if Some(value_commodity.as_str()) == target {
+                    // Mixed disposal sold for the target currency: the lot is
+                    // costed in a foreign commodity (e.g. BTC) but sold for €.
+                    // Freeze the lot's € basis at *its own acquisition date* —
+                    // the historical € cost — instead of re-translating the
+                    // foreign cost at the sale date. The gain is then a clean
+                    // € capital gain (proceeds − historical € cost) and the
+                    // asset account nets to zero, so no CTA drift arises.
+                    let acq = front.date.to_string();
+                    match db.find(&front.cost_commodity, value_commodity.as_str(), &acq) {
+                        Some(rate) => {
+                            let eur_cost = front.cost_per_unit.mul_rounded(rate);
+                            let per = unit_value - eur_cost;
+                            let per = if short { Decimal::zero() - per } else { per };
+                            gain = gain + take.mul_rounded(per);
+                            // `market` is the asset's own € price move over the
+                            // holding period; `gain − market` is the spread.
+                            match (
+                                db.find(&a.commodity, value_commodity.as_str(), &date),
+                                db.find(&a.commodity, value_commodity.as_str(), &acq),
+                            ) {
+                                (Some(ms), Some(mb)) => {
+                                    let m = ms - mb;
+                                    let m = if short { Decimal::zero() - m } else { m };
+                                    market = market + take.mul_rounded(m);
+                                }
+                                _ => market_ok = false,
+                            }
+                            closed.push(ClosedLot {
+                                qty: take,
+                                cost_per_unit: eur_cost,
+                                cost_commodity: value_commodity.to_string(),
+                                date: front.date,
+                            });
+                        }
+                        // No rate to value the foreign cost in the target →
+                        // can't net; consume the lot but realize nothing.
+                        None => mixed = true,
+                    }
                 } else {
                     mixed = true;
                 }
