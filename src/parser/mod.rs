@@ -562,12 +562,11 @@ fn parse_posting(body: &str, line: usize) -> Result<Posting, ParseError> {
 ///
 /// Recognised forms:
 ///
-/// - `{COST}`   → `LotCost::Floating(COST)` — only the first one is
-///   kept; later `{…}` groups are discarded.
-/// - `{=COST}`  → `LotCost::Fixed(COST)` — ditto.
-/// - `{{TOTAL}}` / `{{=TOTAL}}` → total-cost form, consumed and
-///   discarded (acc doesn't model total lot costs).
-/// - `[DATE]`   → lot acquisition date, consumed and discarded.
+/// - `{COST}` / `{=COST}` → per-unit lot cost (`total: false`); only the
+///   first lot group is kept, later `{…}` groups are discarded.
+/// - `{{TOTAL}}` / `{{=TOTAL}}` → whole-lot total cost (`total: true`).
+/// - `[DATE]`   → lot acquisition date, consumed and discarded (acc sets
+///   the lot date itself when splitting a disposal).
 fn consume_lot_annotations<'a>(
     mut rest: &'a str,
     line: usize,
@@ -578,15 +577,24 @@ fn consume_lot_annotations<'a>(
         let bytes = rest.as_bytes();
         match bytes.first() {
             Some(b'{') => {
-                // `{{...}}` — total cost. Find the `}}` sequence and drop.
+                // `{{TOTAL}}` — total (whole-lot) cost.
                 if bytes.get(1) == Some(&b'{') {
                     let close = find_double_close(bytes).ok_or_else(|| {
                         ParseError::new(line, 1, "unclosed `{{` in lot annotation")
                     })?;
+                    if lot_cost.is_none() {
+                        let inner = rest[2..close].trim();
+                        let (cost_text, fixed) = match inner.strip_prefix('=') {
+                            Some(s) => (s.trim(), true),
+                            None => (inner, false),
+                        };
+                        let (amt, _) = parse_amount(cost_text, line)?;
+                        lot_cost = Some(LotCost { amount: amt, total: true, fixed });
+                    }
                     rest = &rest[close + 2..];
                     continue;
                 }
-                // `{COST}` / `{=COST}` — per-unit.
+                // `{COST}` / `{=COST}` — per-unit cost.
                 let end = find_matching_brace(bytes, b'{', b'}').ok_or_else(|| {
                     ParseError::new(line, 1, "unclosed `{` in lot annotation")
                 })?;
@@ -597,11 +605,7 @@ fn consume_lot_annotations<'a>(
                         None => (inner, false),
                     };
                     let (amt, _) = parse_amount(cost_text, line)?;
-                    lot_cost = Some(if fixed {
-                        LotCost::Fixed(amt)
-                    } else {
-                        LotCost::Floating(amt)
-                    });
+                    lot_cost = Some(LotCost { amount: amt, total: false, fixed });
                 }
                 rest = &rest[end + 1..];
             }
@@ -889,8 +893,8 @@ mod tests {
 
     #[test]
     fn parse_posting_with_lot_cost_annotation() {
-        // `{€58.11}` is a Ledger lot cost-basis tag — acc parses and
-        // discards it, keeping the amount and the @market price.
+        // `{€58.11}` is a Ledger per-unit lot cost-basis tag, kept
+        // alongside the amount and the @market price.
         let src = "2024-06-15 * Sell\n    assets:broker  -4 ABC {€58.11} @ €250.00\n    income:cap  4 ABC\n";
         let got = parse(src).unwrap();
         if let Entry::Transaction(tx) = &got[0].value {
@@ -898,7 +902,35 @@ mod tests {
             let amt = p.amount.as_ref().unwrap();
             assert_eq!(amt.commodity, "ABC");
             assert!(matches!(p.costs, Some(Costs::PerUnit(_))));
+            let lot = p.lot_cost.as_ref().unwrap();
+            assert!(!lot.total, "{{}} is per-unit");
+            assert!(!lot.fixed);
+            assert_eq!(lot.amount.value, crate::decimal::Decimal::parse("58.11").unwrap());
         }
+    }
+
+    #[test]
+    fn parse_lot_cost_total_vs_per_unit_and_fixed() {
+        // acc keeps the lot-cost value AND which form the user wrote:
+        // `{COST}` per-unit, `{{TOTAL}}` whole-lot, `=` locked.
+        let lot = |src: &str| {
+            let got = parse(src).unwrap();
+            let Entry::Transaction(tx) = &got[0].value else { panic!() };
+            tx.postings[0].value.lot_cost.clone().unwrap()
+        };
+        let per_unit = lot("2024-06-15 * x\n    a  10 ABC {20 EUR}\n    b  -200 EUR\n");
+        assert!(!per_unit.total);
+        assert_eq!(per_unit.amount.value, crate::decimal::Decimal::from(20));
+
+        let total = lot("2024-06-15 * x\n    a  10 ABC {{200 EUR}}\n    b  -200 EUR\n");
+        assert!(total.total);
+        assert_eq!(total.amount.value, crate::decimal::Decimal::from(200));
+
+        let fixed = lot("2024-06-15 * x\n    a  10 ABC {=20 EUR}\n    b  -200 EUR\n");
+        assert!(fixed.fixed && !fixed.total);
+
+        let fixed_total = lot("2024-06-15 * x\n    a  10 ABC {{=200 EUR}}\n    b  -200 EUR\n");
+        assert!(fixed_total.fixed && fixed_total.total);
     }
 
     #[test]

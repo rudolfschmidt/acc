@@ -403,11 +403,15 @@ fn rewrite_tx(
                         decimals: disp.decimals,
                     }),
                     costs: leg_costs(),
-                    lot_cost: Some(LotCost::Floating(Amount {
-                        commodity: lot.cost_commodity.clone(),
-                        value: lot.cost_per_unit,
-                        decimals: cost_prec,
-                    })),
+                    lot_cost: Some(LotCost {
+                        amount: Amount {
+                            commodity: lot.cost_commodity.clone(),
+                            value: lot.cost_per_unit,
+                            decimals: cost_prec,
+                        },
+                        total: false,
+                        fixed: false,
+                    }),
                     lot_date: Some(lot.date),
                     balance_assertion: None,
                     is_virtual: disp.is_virtual,
@@ -862,7 +866,7 @@ mod tests {
         let leg = legs[0];
         // {cost} = 100, [date] = 2024-01-01, @ = 150 (generated proceeds).
         assert_eq!(
-            leg.lot_cost.as_ref().unwrap().amount().value,
+            leg.lot_cost.as_ref().unwrap().amount.value,
             Decimal::parse("100").unwrap()
         );
         assert_eq!(leg.lot_date.unwrap().to_string(), "2024-01-01");
