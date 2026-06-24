@@ -95,16 +95,14 @@ fn filter_transactions(
     transactions
         .into_iter()
         .filter_map(|mut lt| {
-            if let Some(b) = begin_d {
-                if lt.value.date < b {
+            if let Some(b) = begin_d
+                && lt.value.date < b {
                     return None;
                 }
-            }
-            if let Some(e) = end_d {
-                if lt.value.date >= e {
+            if let Some(e) = end_d
+                && lt.value.date >= e {
                     return None;
                 }
-            }
             if let Some(m) = &matcher {
                 let desc_lower = lt.value.description.to_lowercase();
                 let code_lower = lt.value.code.as_deref().unwrap_or("").to_lowercase();

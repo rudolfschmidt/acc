@@ -80,28 +80,25 @@ pub fn run(journal: &Journal, show_empty: bool) -> Result<(), String> {
                 }
                 KeyCode::Char(' ') | KeyCode::Enter => app.toggle(),
                 KeyCode::Right => {
-                    if let Some(row) = app.visible.get(app.cursor) {
-                        if row.has_children && !row.expanded {
+                    if let Some(row) = app.visible.get(app.cursor)
+                        && row.has_children && !row.expanded {
                             app.toggle();
                         }
-                    }
                 }
                 KeyCode::Left => {
-                    if let Some(row) = app.visible.get(app.cursor) {
-                        if row.expanded {
+                    if let Some(row) = app.visible.get(app.cursor)
+                        && row.expanded {
                             app.toggle();
                         }
-                    }
                 }
                 KeyCode::Backspace => {
                     if !app.search.is_empty() {
                         app.search.pop();
                         app.update_search();
-                    } else if let Some(row) = app.visible.get(app.cursor) {
-                        if row.expanded {
+                    } else if let Some(row) = app.visible.get(app.cursor)
+                        && row.expanded {
                             app.toggle();
                         }
-                    }
                 }
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.search.push(c);
@@ -208,8 +205,8 @@ impl<'a> App<'a> {
     }
 
     fn toggle(&mut self) {
-        if let Some(row) = self.visible.get(self.cursor) {
-            if row.has_children {
+        if let Some(row) = self.visible.get(self.cursor)
+            && row.has_children {
                 let name = row.account.fullname.clone();
                 if self.expanded.contains(&name) {
                     self.expanded.remove(&name);
@@ -218,7 +215,6 @@ impl<'a> App<'a> {
                 }
                 self.rebuild_visible();
             }
-        }
     }
 
     fn up(&mut self) {

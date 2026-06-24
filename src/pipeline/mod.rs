@@ -11,16 +11,17 @@
 //!
 //! 1. **expander**  — apply `= /pattern/` auto-rules; later phases then
 //!    see the fully expanded journal.
-//! 2. **realizer**  — per-transaction fx gain/loss where the implied rate
-//!    diverges from the market rate. Skipped when capital-tracking is
-//!    active: the lotter then owns the spread (split per disposal at the
-//!    realization rate), so a per-transaction realizer would double-book.
-//! 3. **lotter**    — realized capital gains via FIFO lots (long & short).
+//! 2. **realizer**  — per-transaction fx gain/loss: the trade-day
+//!    execution spread, where each leg's market value diverges from the
+//!    others. Runs on every multi-commodity transaction (buy and sell).
+//! 3. **lotter**    — realized capital gains via FIFO lots: the holding-
+//!    period market move of each disposed lot. Composes with the
+//!    realizer — it books capital (the market move), the realizer books
+//!    fx (the execution spread), so neither double-books the other.
 //! 4. **translator** — currency translation adjustment (CTA) for
-//!    pass-through accounts. Runs over *every* such account, including
-//!    lot-tracked ones: the lotter pins its realized legs to the booked
-//!    rate, so those legs already sum to zero under conversion and CTA
-//!    sees no drift there — no exclusion needed, no double-count.
+//!    pass-through accounts. Lot-tracked assets enter at their market
+//!    value and leave at that same value as the `{}` cost basis, so they
+//!    net to zero under conversion — CTA sees no drift there.
 //!
 //! `rebalance`, `filter` and `sort` are deliberately *not* here. They are
 //! driven by CLI flags (pattern, date range, `-X` target, sort keys) and
@@ -41,24 +42,22 @@ use crate::loader::Journal;
 pub fn enrich(journal: &mut Journal, target: Option<&str>) {
     crate::expander::expand(&mut journal.transactions, &journal.auto_rules);
 
-    // The lotter and the realizer are mutually exclusive: when capital
-    // accounts are declared, the lotter owns the fx spread.
-    let capital_active =
-        journal.capital_gain.is_some() && journal.capital_loss.is_some();
-
+    // The realizer books the per-trade execution spread (fx) on every
+    // multi-commodity transaction; the lotter books the holding-period
+    // market move (capital) at each disposal. They compose: the lotter's
+    // `{cost}` shifts the disposal leg by the market move, which its own
+    // capital posting offsets, leaving the realizer's fx intact.
     if let (Some(t), Some(gain), Some(loss)) =
         (target, journal.fx_gain.as_deref(), journal.fx_loss.as_deref())
     {
-        if !capital_active {
-            crate::realizer::realize(
-                &mut journal.transactions,
-                t,
-                &journal.prices,
-                &journal.precisions,
-                gain,
-                loss,
-            );
-        }
+        crate::realizer::realize(
+            &mut journal.transactions,
+            t,
+            &journal.prices,
+            &journal.precisions,
+            gain,
+            loss,
+        );
     }
 
     if let (Some(cg), Some(cl)) =
@@ -67,8 +66,6 @@ pub fn enrich(journal: &mut Journal, target: Option<&str>) {
         let accounts = crate::lotter::CapitalAccounts {
             capital_gain: cg,
             capital_loss: cl,
-            fx_gain: journal.fx_gain.as_deref(),
-            fx_loss: journal.fx_loss.as_deref(),
         };
         crate::lotter::realize_capital(
             &mut journal.transactions,

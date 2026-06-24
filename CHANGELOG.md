@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.9.0 — 2026-06-24
+
+### Wed 24 Jun 2026 - capital gains, rebuilt: market move + per-trade fx that compose
+
+The 0.8.0 lot engine split a realised gain into a *market* part (the
+asset's price movement) and a *spread* part (the trade-day execution
+deviation), with the lotter owning both and the realizer switched off
+whenever capital accounts were declared. On real crypto-to-crypto data —
+trades carrying an explicit cross-rate `@` annotation (`ETH 1 @ BTC
+0.09`) — this left the books unbalanced: the rebalancer weighted the
+acquired leg by the booked `@` rate (the counter-commodity paid) while
+the gain was measured against the market rate, so the per-trade
+difference accumulated into a non-zero journal total, and the same drift
+surfaced wrongly as CTA on the traded accounts.
+
+The model is rebuilt around three quantities, each answering a different
+question, none double-booking another:
+
+- **capital** (lotter) — the disposed lot's *market move* over its
+  holding period, valued in the `-X` target. A lot opens at the
+  commodity's market value on its acquisition date; a disposal realises
+  `(market_sell − market_buy) × qty` and carries that acquisition-date
+  market value as its `{}` cost basis, so the asset enters and leaves at
+  the same value and nets to zero.
+- **fx** (realizer) — the per-trade *execution spread*: the booked rate's
+  deviation from the market rate, booked on every multi-commodity
+  transaction, buy and sell. The realizer now strips `@` / `@@` cost
+  annotations from a trade's legs so each converts at market — the booked
+  rate's gap to market is exactly what fx captures, and the converted
+  legs then sum to the fx so the transaction balances.
+- **cta** (translator) — the holding-period drift on a same-commodity
+  *transfer* (a foreign currency passing through an account across a rate
+  move). Traded assets net to zero via capital + fx, so CTA no longer
+  fires on them; it is left to genuine pass-through transfers.
+
+The realizer and lotter now **compose** — both run — instead of being
+mutually exclusive: the lotter's `{cost}` shifts the disposal leg by the
+market move and its capital posting offsets that shift, leaving the
+realizer's fx intact and the transaction summing to zero. A short lot is
+opened only when the position is traded against the target money
+(counter = target — e.g. cash sold for the reporting currency); for a
+crypto↔crypto trade an uncovered disposal is the counter-side of a normal
+trade, so a short there would book phantom capital when a later
+acquisition closes it.
+
+The reason for the split is unchanged from 0.8.0 and worth restating: the
+three numbers answer different questions — capital is the asset's own
+performance, fx is how well the trade executed against the market that
+day, cta is a currency tailwind on a position merely passing through.
+Keeping them apart stops a denomination-currency move from masking a poor
+asset pick.
+
+### Wed 24 Jun 2026 - `$role:slot` account references
+
+Account roles (`fx gain`, `cta loss`, `capital gain`, …) are now a
+uniform index rather than a handful of hard-wired special cases. The role
+string a declaration carries is the single source of truth: the resolver
+indexes declared accounts by role, each pipeline phase looks up the ones
+it consumes, and a posting can reference an account indirectly by its role
+with `$role:slot`, resolved against the same index. A new role costs no
+parser or resolver change — only a declaration. Unresolved `$…` references
+are reported by `acc check`.
+
+### Wed 24 Jun 2026 - cleanup
+
+A clippy pass across the tree (collapsible conditionals, compound
+assignment, slice-over-`Vec` parameters, simplified `map_or`, elided
+lifetimes) and refreshed module documentation for the rebuilt phases. No
+behavioural change.
+
 ## 0.8.0 — 2026-06-24
 
 ### Tue 23 Jun 2026 - capital gains: a FIFO lot engine

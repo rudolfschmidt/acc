@@ -636,14 +636,13 @@ fn start() -> Result<(), acc::Error> {
     // Load prices first when `-x` is set — the rebalancer and
     // realizer both need P-directives already in the journal.
     // `$ACC_PRICES_DIR` contains them.
-    if filter_args.map(|f| f.exchange.is_some()).unwrap_or(false) {
-        if let Ok(dir) = std::env::var("ACC_PRICES_DIR") {
+    if filter_args.map(|f| f.exchange.is_some()).unwrap_or(false)
+        && let Ok(dir) = std::env::var("ACC_PRICES_DIR") {
             let path = std::path::Path::new(&dir);
             if path.is_dir() {
                 collect_ledger_files(path, &mut paths);
             }
         }
-    }
 
     // User-provided paths come after so their declarations win on
     // any later single-pass resolution.

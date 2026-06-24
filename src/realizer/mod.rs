@@ -85,12 +85,26 @@ fn augment(
         let Some(rate) = db.find(&a.commodity, target, &date) else {
             return;
         };
-        total = total + a.value.mul_rounded(rate);
+        total += a.value.mul_rounded(rate);
     }
 
     // Drop rounding noise below the target's display precision.
     if total.is_display_zero(precision) {
         return;
+    }
+
+    // The fx posting balances the legs at their MARKET value. An explicit
+    // `@`/`@@` cost would otherwise make the rebalancer weight a leg by its
+    // booked rate (e.g. `ETH @ BTC0.0904` → the BTC paid) instead of the
+    // commodity's market value — leaving the fx unbalanced. The booked
+    // rate's deviation from market is exactly what fx captures, so strip
+    // the cost annotations and let every contributing leg convert at
+    // market. (`{}` lot-costs don't exist yet — the lotter adds them after
+    // this phase and they are intentionally kept.)
+    for lp in lt.value.postings.iter_mut() {
+        if contributes(&lp.value) {
+            lp.value.costs = None;
+        }
     }
 
     // Posting convention: the injected amount flips the delta's sign

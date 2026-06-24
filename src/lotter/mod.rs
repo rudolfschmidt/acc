@@ -3,51 +3,42 @@
 //! Runs whenever the journal declares both a `capital gain` and a
 //! `capital loss` account. It walks transactions chronologically and
 //! tracks a per-(account, commodity) FIFO queue of lots: an exchange
-//! posting that *acquires* a commodity opens a lot at its booked cost, a
-//! posting that *disposes* of it closes lots front-to-back and realizes
-//! the gain (proceeds − cost basis).
+//! posting that *acquires* a commodity opens a lot, a posting that
+//! *disposes* of it closes lots front-to-back and realizes the gain.
 //!
-//! ## Valuation
+//! ## With `-X TARGET`: the holding-period market move
 //!
-//! The gain is **always** computed in the counter-commodity at the
-//! *booked* (trade) rate — an explicit `@` cost, or the implied rate of a
-//! two-commodity exchange. The realized gain is the trade gain
-//! (proceeds − what you paid), never the target-value drift of the held
-//! commodity. The disposal legs carry that booked rate as a `{}`
-//! cost-basis, so the rebalancer later converts everything to the target
-//! at the *disposal's own date* — the realization rate.
+//! Under conversion the lotter books exactly one thing: the **market
+//! move** of the disposed commodity over its holding period, in the
+//! target currency. A lot opens at the commodity's *market value on the
+//! acquisition date* (price DB); a disposal realizes
+//! `(market_sell − market_buy) × qty` as a `capital` gain/loss. The
+//! disposal leg carries that acquisition-date market value as its `{}`
+//! cost-basis, so the rebalancer values the asset at cost — the asset
+//! account enters and leaves at the same value and nets to zero, no CTA
+//! drift arises.
 //!
-//! ## With `-X TARGET`: market / spread split
+//! The trade-day **execution spread** (where the booked rate diverges
+//! from the market rate — slippage/fees) is *not* the lotter's job: the
+//! [realizer](crate::realizer) books it as `fx` on every multi-commodity
+//! transaction, buy and sell. The two compose: the lotter's `{cost}`
+//! shifts the disposal leg by the market move, and its capital posting
+//! offsets that shift exactly, so the realizer's fx stays valid and the
+//! transaction still sums to zero.
 //!
-//! The gain is split into two parts (both still in the counter-commodity;
-//! the rebalancer converts them at realization):
+//! ## Without `-X`: the native trade gain
 //!
-//! - **market** — the market-price movement of the traded commodity
-//!   against the counter-commodity over the holding period
-//!   (`market_rate(sell) − market_rate(buy)`). Booked to the `capital`
-//!   account. `market_rate` goes *via the target* to avoid inconsistent
-//!   crypto↔crypto graph paths — see [`market_rate`].
-//! - **spread** — the rest (`gain − market`): how the trade executed
-//!   relative to the market price (slippage/fees). Booked to the `fx`
-//!   account if declared, else folded back into `capital`.
-//!
-//! Without `-X`, the whole gain is one `capital` posting in the booked
-//! commodity (no split — there is no market rate to compare against).
-//! Mixed-currency native disposals (bought in EUR, sold in USD) can't be
-//! netted and are skipped; they need `-X`.
+//! Natively there is no market to compare against, so the lotter falls
+//! back to the **booked** (trade) rate: a lot opens at its booked cost in
+//! the counter-commodity, and a disposal realizes `proceeds − cost` as a
+//! single `capital` posting. Mixed-currency native disposals (bought in
+//! EUR, sold in USD) can't be netted and are skipped; they need `-X`.
 //!
 //! ## Injection
 //!
-//! The gain posting(s) are **real** (not virtual) and live inside the
+//! The gain posting is **real** (not virtual) and lives inside the
 //! disposal transaction, balancing against the `{}` cost-basis on the
 //! asset legs. So `print` is 1:1 copy-pasteable and survives a reload.
-//!
-//! The lotter pins each realized leg to its booked rate, so a tracked
-//! account's legs already sum to zero under conversion (the gain lands on
-//! the capital account, not the transit account). CTA can therefore run
-//! over every pass-through account without excluding lot-tracked ones —
-//! it sees no drift where the lotter already booked it, and no
-//! double-count results.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -58,20 +49,18 @@ use crate::parser::located::Located;
 use crate::parser::posting::{Amount, Costs, LotCost, Posting};
 use crate::parser::transaction::Transaction;
 
-/// One open lot: a remaining quantity carrying its per-unit cost and
-/// the date it was acquired (FIFO order is insertion order; the date
-/// feeds the holding period and the title).
+/// One open lot: a remaining quantity carrying its per-unit cost and the
+/// date it was acquired (FIFO order is insertion order; the date feeds
+/// the holding period and the title).
 ///
-/// `cost_per_unit` is the *booked* (trade) rate in the counter-commodity
-/// — e.g. `0.0904 BTC` per ETH. `market_at_buy` is the *market* rate of
-/// the traded commodity in that same counter-commodity on the buy date
-/// (price DB); only set under `-X`, it splits the realized gain into a
-/// market-movement part and a trade-day-spread part.
+/// `cost_per_unit` is the lot's cost in `cost_commodity`. Under `-X` that
+/// is the commodity's *market value on the acquisition date*, in the
+/// target currency; natively it is the *booked* (trade) rate in the
+/// counter-commodity.
 struct Lot {
     qty: Decimal,
     cost_per_unit: Decimal,
     cost_commodity: String,
-    market_at_buy: Option<Decimal>,
     date: Date,
 }
 
@@ -89,10 +78,9 @@ struct ClosedLot {
 /// per closed lot and injects the gain. `posting_idx` locates the
 /// disposal leg within its transaction.
 ///
-/// All amounts are in the counter-commodity (`gain_commodity`); the
-/// rebalancer converts them to the target at the disposal's own date
-/// (the realization rate). `market` is the market-movement part of the
-/// gain (`Some` only under `-X`); the spread part is `gain − market`.
+/// `gain` is in `gain_commodity`: the target currency under `-X` (the
+/// market move), or the counter-commodity natively (the trade gain). The
+/// rebalancer converts it to the target at the disposal's own date.
 struct Disposal {
     tx_idx: usize,
     posting_idx: usize,
@@ -103,30 +91,26 @@ struct Disposal {
     is_virtual: bool,
     balanced: bool,
     /// Sell price per unit (the proceeds rate) — used as the `@` cost on
-    /// the split legs when the source had none (e.g. under `-X`).
+    /// the split legs when the source had none.
     proceeds_per_unit: Decimal,
     gain: Decimal,
     gain_commodity: String,
-    market: Option<Decimal>,
-    /// `true` when the closing posting was an acquisition (closing short
-    /// lots), `false` for a disposal (closing long lots). Drives the sign
-    /// of the rewritten legs.
+    /// `true` when the closing posting was an acquisition (closing a
+    /// short), `false` for a disposal (closing longs). Sets the sign of
+    /// the rewritten legs.
     acquisition: bool,
     lots: Vec<ClosedLot>,
 }
 
-/// The accounts a realized gain/loss is booked to: capital for the
-/// trade gain (income on a gain, expense on a loss), and — under `-X`,
-/// when declared — the fx accounts for the trade-day spread.
+/// The accounts a realized gain/loss is booked to: `capital` for a gain
+/// (income), the loss account for a loss (expense).
 pub struct CapitalAccounts<'a> {
     pub capital_gain: &'a str,
     pub capital_loss: &'a str,
-    pub fx_gain: Option<&'a str>,
-    pub fx_loss: Option<&'a str>,
 }
 
-/// Track lots FIFO and inject one capital-gain/loss transaction per
-/// realized disposal. See module docs for the valuation semantics.
+/// Track lots FIFO and inject one realized capital-gain/loss posting per
+/// disposal. See module docs for the valuation semantics.
 pub fn realize_capital(
     txs: &mut Vec<Located<Transaction>>,
     accounts: &CapitalAccounts,
@@ -136,12 +120,6 @@ pub fn realize_capital(
 ) {
     let mut lots: HashMap<(String, String), VecDeque<Lot>> = HashMap::new();
     let mut disposals: Vec<Disposal> = Vec::new();
-    // (tx_idx, posting_idx, implied_rate, commodity) of tracked legs that
-    // carry only an *implied* rate (no explicit `@`/`{}`). Under `-X` we
-    // pin that rate onto the posting as an `@`, so the rebalancer weights
-    // it by the booked rate — not the market rate — keeping it consistent
-    // with the cost-basis on the matching disposal. See the buy/sell loop.
-    let mut pin_rate: Vec<(usize, usize, Decimal, String)> = Vec::new();
 
     for (idx, lt) in txs.iter().enumerate() {
         // Native per-commodity sums over balance-contributing postings.
@@ -169,29 +147,20 @@ pub fn realize_capital(
             let Some(a) = &lp.value.amount else { continue };
             // With `-X` the target commodity is money: it neither opens
             // lots nor realizes gains. Only non-target assets do.
-            if let Some(t) = target {
-                if a.commodity == t {
+            if let Some(t) = target
+                && a.commodity == t {
                     continue;
                 }
-            }
-            let Some((unit_value, value_commodity)) = posting_value(&lp.value, &sums)
-            else {
+            // Per-unit value and its commodity. Under `-X` this is the
+            // commodity's market value in the target on this date (price
+            // DB); natively it is the booked trade rate in the counter-
+            // commodity. A leg with no derivable value is skipped.
+            let Some((unit_value, value_commodity)) = (match target {
+                Some(t) => db.find(&a.commodity, t, &date).map(|r| (r, t.to_string())),
+                None => posting_value(&lp.value, &sums),
+            }) else {
                 continue;
             };
-            // Under `-X`, a leg traded against the *target* currency at an
-            // implied rate (no explicit `@`/`{}`) — e.g. `USD` paid in `€`
-            // with no `@` — must be pinned with that rate, else the
-            // rebalancer values it at market while the disposal cost-basis
-            // uses the implied rate, leaving a drift on the account.
-            // Only when the counter-commodity IS the target: for a
-            // crypto↔crypto trade (counter ≠ target) the plain market
-            // conversion of each leg already balances.
-            if target == Some(value_commodity.as_str())
-                && lp.value.costs.is_none()
-                && lp.value.lot_cost.is_none()
-            {
-                pin_rate.push((idx, p_idx, unit_value, value_commodity.clone()));
-            }
             let key = (lp.value.account.clone(), a.commodity.clone());
 
             // A `{}` lot-cost means the user books the gain by hand
@@ -201,21 +170,16 @@ pub fn realize_capital(
 
             let queue = lots.entry(key.clone()).or_default();
 
-            // Market rate of the traded commodity in the counter-commodity
-            // on this date — feeds the market/spread split.
-            let market_here =
-                target.and_then(|t| market_rate(&a.commodity, &value_commodity, t, db, &date));
             let mut remaining = a.value; // signed: + acquires, − disposes
             let mut gain = Decimal::zero();
-            let mut market = Decimal::zero();
-            let mut market_ok = true;
             let mut closed: Vec<ClosedLot> = Vec::new();
             let mut mixed = false;
 
-            // Close opposite-sign lots front-to-back. A long lot (qty > 0)
-            // is closed by a disposal (remaining < 0); a short lot (qty < 0)
-            // by an acquisition (remaining > 0). Same sign extends the
-            // position, so stop closing.
+            // Close opposite-sign lots front-to-back: a long lot (qty > 0)
+            // by a disposal (remaining < 0), a short lot (qty < 0) by an
+            // acquisition (remaining > 0). Same sign extends the position,
+            // so stop. Shorts are only ever opened for a position traded
+            // against the target money — see the open condition below.
             while !remaining.is_zero() {
                 let Some(front) = queue.front() else { break };
                 if front.qty.is_negative() == remaining.is_negative() {
@@ -226,71 +190,23 @@ pub fn realize_capital(
                 let front = queue.front_mut().unwrap();
                 // Cost vs proceeds in different commodities (mixed currency,
                 // native mode) can't be netted — skip the gain but still
-                // consume the lot for FIFO consistency.
+                // consume the lot for FIFO consistency. Under `-X` both are
+                // the target, so this always matches.
                 if front.cost_commodity == value_commodity {
-                    // Per-unit gain is (close − open) for a long lot and
-                    // (open − close) for a short — i.e. `unit_value − cost`
-                    // with the sign flipped for shorts.
+                    // (close − open) for a long lot, (open − close) for a
+                    // short — `unit_value − cost`, sign-flipped for shorts.
                     let per = unit_value - front.cost_per_unit;
                     let per = if short { Decimal::zero() - per } else { per };
-                    gain = gain + take.mul_rounded(per);
-                    match (market_here, front.market_at_buy) {
-                        (Some(ms), Some(mb)) => {
-                            let m = ms - mb;
-                            let m = if short { Decimal::zero() - m } else { m };
-                            market = market + take.mul_rounded(m);
-                        }
-                        _ => market_ok = false,
-                    }
+                    gain += take.mul_rounded(per);
                     closed.push(ClosedLot {
                         qty: take,
                         cost_per_unit: front.cost_per_unit,
                         cost_commodity: front.cost_commodity.clone(),
                         date: front.date,
                     });
-                } else if Some(value_commodity.as_str()) == target {
-                    // Mixed disposal sold for the target currency: the lot is
-                    // costed in a foreign commodity (e.g. BTC) but sold for €.
-                    // Freeze the lot's € basis at *its own acquisition date* —
-                    // the historical € cost — instead of re-translating the
-                    // foreign cost at the sale date. The gain is then a clean
-                    // € capital gain (proceeds − historical € cost) and the
-                    // asset account nets to zero, so no CTA drift arises.
-                    let acq = front.date.to_string();
-                    match db.find(&front.cost_commodity, value_commodity.as_str(), &acq) {
-                        Some(rate) => {
-                            let eur_cost = front.cost_per_unit.mul_rounded(rate);
-                            let per = unit_value - eur_cost;
-                            let per = if short { Decimal::zero() - per } else { per };
-                            gain = gain + take.mul_rounded(per);
-                            // `market` is the asset's own € price move over the
-                            // holding period; `gain − market` is the spread.
-                            match (
-                                db.find(&a.commodity, value_commodity.as_str(), &date),
-                                db.find(&a.commodity, value_commodity.as_str(), &acq),
-                            ) {
-                                (Some(ms), Some(mb)) => {
-                                    let m = ms - mb;
-                                    let m = if short { Decimal::zero() - m } else { m };
-                                    market = market + take.mul_rounded(m);
-                                }
-                                _ => market_ok = false,
-                            }
-                            closed.push(ClosedLot {
-                                qty: take,
-                                cost_per_unit: eur_cost,
-                                cost_commodity: value_commodity.to_string(),
-                                date: front.date,
-                            });
-                        }
-                        // No rate to value the foreign cost in the target →
-                        // can't net; consume the lot but realize nothing.
-                        None => mixed = true,
-                    }
                 } else {
                     mixed = true;
                 }
-                // Move both toward zero by `take`.
                 front.qty = if short { front.qty + take } else { front.qty - take };
                 remaining = if remaining.is_negative() {
                     remaining + take
@@ -308,22 +224,24 @@ pub fn realize_capital(
                 continue;
             }
 
-            // Open a lot for the unclosed remainder. Longs always. A short
-            // (negative remainder = sold before bought) only counts when
-            // traded against the target *money* (e.g. `USD` paid in `€`):
-            // there the disposal is a genuine short to be closed by a later
-            // purchase. For an asset traded against another commodity
-            // (counter ≠ target), an unmatched disposal is just the
-            // counter-side of a normal trade — opening a short there would
-            // double-count the gain (it's already on the asset leg).
-            if !remaining.is_zero()
-                && (!remaining.is_negative() || target == Some(value_commodity.as_str()))
-            {
+            // Open a lot for the unclosed remainder. A positive remainder
+            // (acquisition) always opens a long. A negative remainder (a
+            // disposal that outran the queue) opens a SHORT only when the
+            // position is traded against the target money — a 2-commodity
+            // trade whose counter IS the target (e.g. USD sold for EUR):
+            // there an uncovered disposal is a genuine short, closed by a
+            // later purchase. For crypto↔crypto (counter ≠ target) it is
+            // the counter-side of a normal trade or a missing cost basis;
+            // opening a short there books phantom capital when a later
+            // acquisition "closes" it. rewrite_tx keeps such an uncovered
+            // amount as a plain proceeds leg — no cost basis, no gain.
+            let against_target =
+                sums.len() == 2 && target.is_some_and(|t| sums.contains_key(t));
+            if !remaining.is_zero() && (!remaining.is_negative() || against_target) {
                 queue.push_back(Lot {
                     qty: remaining,
                     cost_per_unit: unit_value,
                     cost_commodity: value_commodity.clone(),
-                    market_at_buy: market_here,
                     date: lt.value.date,
                 });
             }
@@ -336,10 +254,6 @@ pub fn realize_capital(
             if gain.is_display_zero(prec) {
                 continue;
             }
-            // Under `-X`, split the gain: `market` is the market move,
-            // spread is the rest. If a market rate was missing for any
-            // lot, attribute the whole gain to market (no spread).
-            let market = target.map(|_| if market_ok { market } else { gain });
             disposals.push(Disposal {
                 tx_idx: idx,
                 posting_idx: p_idx,
@@ -350,27 +264,9 @@ pub fn realize_capital(
                 proceeds_per_unit: unit_value,
                 gain,
                 gain_commodity: value_commodity,
-                market,
                 acquisition: !a.value.is_negative(),
                 lots: closed,
             });
-        }
-    }
-
-    // Pin the implied rate as an `@` on tracked legs that lacked one
-    // (acquisitions, uncovered shorts). Done before the rewrite below so
-    // posting indices are still valid; disposals that get rewritten just
-    // overwrite this with their split legs. Skip if the posting already
-    // gained a cost annotation (e.g. a manual `{}` disposal).
-    for (tx_idx, p_idx, rate, commodity) in pin_rate {
-        let p = &mut txs[tx_idx].value.postings[p_idx].value;
-        if p.costs.is_none() && p.lot_cost.is_none() {
-            let prec = precisions.get(&commodity).copied().unwrap_or(2);
-            p.costs = Some(Costs::PerUnit(Amount {
-                commodity,
-                value: rate,
-                decimals: prec,
-            }));
         }
     }
 
@@ -388,8 +284,8 @@ pub fn realize_capital(
 
 /// Rewrite a transaction's disposal postings: each becomes one leg per
 /// closed lot (carrying `{cost}`, `[lot-date]` and an `@` proceeds
-/// cost), and one real capital posting per disposal carries the
-/// realized gain (`income` for a gain, `expense` for a loss). Original
+/// cost), and one real capital posting per disposal carries the realized
+/// gain (`income` for a gain, `expense` for a loss). Original
 /// non-disposal postings pass through unchanged; capital postings are
 /// appended after, so the sale and its gain read together.
 fn rewrite_tx(
@@ -420,8 +316,8 @@ fn rewrite_tx(
                 }))
             })
         };
-        // Leg amount sign: a disposal removes the commodity (negative), an
-        // acquisition closing a short adds it back (positive).
+        // A disposal removes the commodity (negative leg); an acquisition
+        // closing a short adds it back (positive).
         let signed = |qty: Decimal| {
             if disp.acquisition {
                 qty
@@ -466,11 +362,10 @@ fn rewrite_tx(
             });
         }
         // Over-sell: the closed lots cover only part of the disposal
-        // (FIFO ran out — a short, or acquisitions booked outside this
-        // file). The uncovered remainder has no cost basis; keep it as a
-        // plain proceeds-priced leg (no `{}`) so the full disposed
-        // quantity survives the rewrite and the transaction still
-        // balances after conversion.
+        // (FIFO ran out — acquisitions booked outside this file). The
+        // uncovered remainder has no cost basis; keep it as a plain
+        // proceeds-priced leg (no `{}`) so the full disposed quantity
+        // survives the rewrite and the transaction still balances.
         let covered = disp.lots.iter().fold(Decimal::zero(), |acc, l| acc + l.qty);
         let total = lp
             .value
@@ -500,35 +395,16 @@ fn rewrite_tx(
                 },
             });
         }
-        // Inject the realized gain as real posting(s) in the counter-
-        // commodity (the rebalancer converts them to the target at the
-        // disposal date — the realization rate). They balance against the
-        // `{}` cost-basis on the asset legs, so the tx still sums to zero.
-        //
-        // Under `-X` the gain splits into the market-movement part (on the
-        // capital account) and the trade-day spread (on the fx account);
-        // natively it's a single capital posting. No fx accounts declared
-        // → the spread folds back into capital.
-        let mut parts: Vec<(Decimal, &str, &str)> = Vec::new();
-        match disp.market {
-            Some(market) => {
-                parts.push((market, accounts.capital_gain, accounts.capital_loss));
-                let spread = disp.gain - market;
-                match (accounts.fx_gain, accounts.fx_loss) {
-                    (Some(fg), Some(fl)) => parts.push((spread, fg, fl)),
-                    _ => parts.push((spread, accounts.capital_gain, accounts.capital_loss)),
-                }
-            }
-            None => parts.push((disp.gain, accounts.capital_gain, accounts.capital_loss)),
-        }
-        for (value, gain_acct, loss_acct) in parts {
-            if value.is_display_zero(price_prec) {
-                continue;
-            }
-            let account = if value.is_negative() {
-                loss_acct
+        // Inject the realized gain as a real capital posting in the gain
+        // commodity (the rebalancer converts it to the target at the
+        // disposal date). It balances against the `{}` cost-basis on the
+        // asset legs, so the tx still sums to zero. The execution spread
+        // (fx) is booked separately by the realizer — not here.
+        if !disp.gain.is_display_zero(price_prec) {
+            let account = if disp.gain.is_negative() {
+                accounts.capital_loss
             } else {
-                gain_acct
+                accounts.capital_gain
             };
             capitals.push(Located {
                 file: file.clone(),
@@ -537,7 +413,7 @@ fn rewrite_tx(
                     account: account.to_string(),
                     amount: Some(Amount {
                         commodity: disp.gain_commodity.clone(),
-                        value: -value,
+                        value: -disp.gain,
                         decimals: price_prec,
                     }),
                     costs: None,
@@ -568,20 +444,9 @@ fn contributes(p: &Posting) -> bool {
 ///
 /// An explicit `@` cost wins; otherwise the implied rate of a clean
 /// two-commodity exchange (the other leg's sum over this leg's sum).
-/// `None` when no rate is derivable.
-///
-/// This is used in **both** modes. Under `-X` the gain is still computed
-/// in the counter-commodity here; the rebalancer converts it to the
-/// target at the disposal date (the realization rate), and the market
-/// rate (price DB) only feeds the market/spread split — see
-/// [`market_rate`]. Valuing at the booked rate (not the market rate)
-/// keeps `-X` consistent with native: the realized gain is the trade
-/// gain, converted once at realization, not the target-value drift of
-/// the held commodity.
-fn posting_value(
-    p: &Posting,
-    sums: &HashMap<String, Decimal>,
-) -> Option<(Decimal, String)> {
+/// `None` when no rate is derivable. Used in native mode only — under
+/// `-X` the lotter values legs at the market rate (price DB) instead.
+fn posting_value(p: &Posting, sums: &HashMap<String, Decimal>) -> Option<(Decimal, String)> {
     let a = p.amount.as_ref()?;
     // A zero-quantity leg has no per-unit value — and dividing a total
     // cost by it would panic. It contributes nothing to any position, so
@@ -609,30 +474,6 @@ fn posting_value(
     Some((other_sum.div_rounded(this_sum), other.clone()))
 }
 
-/// Market rate of `commodity` priced in `counter` on `date`, derived
-/// *via the target currency* (`commodity→target ÷ counter→target`)
-/// rather than a direct `commodity→counter` lookup.
-///
-/// A direct crypto↔crypto lookup (e.g. `ETH→BTC`) can pick an
-/// inconsistent route through the price graph — the BFS may go through a
-/// stale `USD BTC` fiat edge instead of the fresh `BTC USDT` one. Routing
-/// both legs through the same target shares one consistent path; the
-/// target factor cancels in the ratio. Feeds the market/spread split.
-fn market_rate(
-    commodity: &str,
-    counter: &str,
-    target: &str,
-    db: &Index,
-    date: &str,
-) -> Option<Decimal> {
-    let c = db.find(commodity, target, date)?;
-    let g = db.find(counter, target, date)?;
-    if g.is_zero() {
-        return None;
-    }
-    Some(c.div_rounded(g))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,14 +499,11 @@ mod tests {
         (txs, prices, precisions)
     }
 
-    /// The standard capital-account config used by most tests: income/
-    /// expenses:capital, no fx split.
+    /// The standard capital-account config used by the tests.
     fn caps() -> CapitalAccounts<'static> {
         CapitalAccounts {
             capital_gain: "income:capital",
             capital_loss: "expenses:capital",
-            fx_gain: None,
-            fx_loss: None,
         }
     }
 
@@ -675,11 +513,10 @@ mod tests {
         let mut sum = Decimal::zero();
         for lt in txs {
             for lp in &lt.value.postings {
-                if lp.value.account == account {
-                    if let Some(a) = &lp.value.amount {
-                        sum = sum + a.value;
+                if lp.value.account == account
+                    && let Some(a) = &lp.value.amount {
+                        sum += a.value;
                     }
-                }
             }
         }
         sum
@@ -697,10 +534,7 @@ mod tests {
 
     /// Split legs of `commodity`: disposal postings acc annotated with a
     /// `{cost}` lot (one per closed lot).
-    fn split_legs<'a>(
-        txs: &'a [Located<Transaction>],
-        commodity: &str,
-    ) -> Vec<&'a Posting> {
+    fn split_legs<'a>(txs: &'a [Located<Transaction>], commodity: &str) -> Vec<&'a Posting> {
         txs.iter()
             .flat_map(|lt| lt.value.postings.iter())
             .map(|lp| &lp.value)
@@ -732,14 +566,12 @@ mod tests {
     }
 
     #[test]
-    fn market_spread_split_with_x() {
-        // Bought 1 BTC paying 29000 USD when the market was 30000; sold
-        // paying 51000 USD when the market was 48000. Target = USD, so the
-        // gain stays in USD. Total = 51000 − 29000 = 22000, split into:
-        //   market = 48000 − 30000 = 18000  (the price moved up)
-        //   spread = 22000 − 18000 =  4000  (traded better than market:
-        //                                    bought 1000 below, sold 3000 above)
-        // market lands on capital, spread on the fx account.
+    fn market_move_is_capital_under_x() {
+        // Bought 1 BTC when the market was 30000, sold when it was 48000.
+        // Target = USD. The lotter books the *market move* as capital:
+        //   48000 − 30000 = 18000.
+        // The trade-day spread (booked 29000 vs market 30000 on the buy,
+        // 51000 vs 48000 on the sell) is the realizer's fx — not here.
         let src = "\
             P 2024-01-01 BTC USD 30000\n\
             P 2024-06-01 BTC USD 48000\n\
@@ -750,21 +582,8 @@ mod tests {
             \tassets:btc   -1 BTC\n\
             \tassets:cash   51000 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(
-            &mut txs,
-            &CapitalAccounts {
-                capital_gain: "income:capital",
-                capital_loss: "expenses:capital",
-                fx_gain: Some("income:fx"),
-                fx_loss: Some("expenses:fx"),
-            },
-            Some("USD"),
-            &db,
-            &prec,
-        );
+        realize_capital(&mut txs, &caps(), Some("USD"), &db, &prec);
         assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-18000").unwrap());
-        assert_eq!(gain_on(&txs, "income:fx"), Decimal::parse("-4000").unwrap());
-        // market + spread = the full 22000 trade gain.
     }
 
     #[test]
@@ -964,12 +783,13 @@ mod tests {
 
     #[test]
     fn short_then_cover_realizes_gain_with_x() {
-        // Pay out 100 USD before ever owning any (1.05 €/USD), then buy
-        // it back at 1.03: a short. Closing a short below where it opened
-        // is a 100 × (1.05 − 1.03) = €2 gain. A short only realizes when
-        // the counter-commodity IS the target money (here €) — selling an
-        // asset you don't hold against the cash you measure in.
+        // Pay out 100 USD before owning any (market 1.05 €/USD), then buy
+        // it back at 1.03: a short USD position. USD is traded against the
+        // target (EUR), so the disposal opens a genuine short; closing it
+        // below where it opened is a 100 × (1.05 − 1.03) = €2 gain.
         let src = "\
+            P 2024-01-01 USD EUR 1.05\n\
+            P 2024-06-01 USD EUR 1.03\n\
             2024-01-01 spend\n\
             \tassets:usd    -100 USD\n\
             \texpenses:dev   105 EUR\n\
@@ -982,35 +802,37 @@ mod tests {
     }
 
     #[test]
-    fn short_then_long_sequence_realizes_both() {
-        // A short closed at a gain, then a long opened and closed at a
-        // gain, on the same account. short: 100 USD out @1.05, back @1.03
-        // → €2. long: 100 USD in @1.06, out @1.08 → €2. Total €4.
+    fn crypto_to_crypto_uncovered_disposal_books_no_phantom_capital() {
+        // ETH↔BTC: the BTC disposal's counter is ETH, not the target — so
+        // an uncovered BTC disposal must open NO short, else a later BTC
+        // acquisition would close it and book phantom capital on top of
+        // the real ETH gain (the crypto↔crypto double-count). Only the ETH
+        // round-trip realizes (market 700→900 = 200); the BTC side stays a
+        // plain leg, so there is no second, spurious capital posting.
         let src = "\
-            2024-01-01 spend1\n\
-            \tassets:usd    -100 USD\n\
-            \texpenses:dev   105 EUR\n\
-            2024-06-01 buy1\n\
-            \tassets:bank   -103 EUR\n\
-            \tassets:usd     100 USD\n\
-            2024-09-01 buy2\n\
-            \tassets:bank   -106 EUR\n\
-            \tassets:usd     100 USD\n\
-            2024-12-01 spend2\n\
-            \tassets:usd    -100 USD\n\
-            \texpenses:dev   108 EUR\n";
+            P 2024-01-01 ETH EUR 700\n\
+            P 2024-01-01 BTC EUR 10000\n\
+            P 2024-06-01 ETH EUR 900\n\
+            P 2024-06-01 BTC EUR 11000\n\
+            2024-01-01 buy ETH with BTC\n\
+            \tassets:eth      1 ETH\n\
+            \tassets:btc  -0.07 BTC\n\
+            2024-06-01 sell ETH for BTC\n\
+            \tassets:eth     -1 ETH\n\
+            \tassets:btc   0.08 BTC\n";
         let (mut txs, db, prec) = setup(src);
         realize_capital(&mut txs, &caps(), Some("EUR"), &db, &prec);
-        assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-4").unwrap());
+        assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-200").unwrap());
+        assert_eq!(gain_on(&txs, "expenses:capital"), Decimal::zero());
     }
 
     #[test]
     fn oversell_against_non_target_opens_no_short() {
-        // Under -X EUR, an asset-vs-asset over-sell must NOT open a short:
-        // the counter-commodity (USD) is not the target, so the unmatched
-        // disposal is the other side of a normal trade, already accounted
-        // for on its own leg. Opening a short here would double-count.
-        // Buy 1 BTC for USD, sell 2 BTC: only the covered lot realizes.
+        // Under -X EUR, an asset-vs-asset over-sell: buy 1 BTC for USD,
+        // sell 2 BTC. The counter (USD) is not the target, but the lotter
+        // values BTC at its EUR market rate, so the covered lot realizes
+        // its market move (180 − 90 = 90) and the uncovered 1 BTC survives
+        // as a plain leg with no cost basis — exactly one split leg.
         let src = "\
             P 2024-01-01 BTC EUR 90\n\
             P 2024-06-01 BTC EUR 180\n\
@@ -1022,8 +844,10 @@ mod tests {
             \tassets:cash   400 USD\n";
         let (mut txs, db, prec) = setup(src);
         realize_capital(&mut txs, &caps(), Some("EUR"), &db, &prec);
-        // Exactly one covered lot; no short lot for the uncovered 1 BTC.
+        // Exactly one covered lot carries a {} cost; the uncovered 1 BTC
+        // is a plain leg.
         assert_eq!(split_legs(&txs, "BTC").len(), 1);
+        assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-90").unwrap());
     }
 
     #[test]

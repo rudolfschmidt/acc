@@ -146,7 +146,7 @@ fn cta_labels_transit_drift_on_declared_account() {
                 continue;
             }
             if let Some(a) = &lp.value.amount {
-                cta_sum = cta_sum + a.value;
+                cta_sum += a.value;
             }
         }
     }

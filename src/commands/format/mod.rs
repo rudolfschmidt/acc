@@ -435,7 +435,7 @@ fn extract_posting_parts(source_line: &str) -> PostingParts {
     };
 
     let amount_end = rest
-        .find(|c: char| matches!(c, '@' | '=' | '{' | '['))
+        .find(['@', '=', '{', '['])
         .unwrap_or(rest.len());
     let amount_str = normalise_commodity_glue(rest[..amount_end].trim());
     let annotation = rest[amount_end..].trim();

@@ -149,9 +149,10 @@ into matching transactions); filter DSL across account /
 description / code / commodity plus `-r` sibling-posting view;
 per-posting currency conversion at `tx.date`; multi-hop price
 lookups; **FIFO realised capital gains** (`capital gain` /
-`capital loss`, split into market movement and execution spread
-under `-X`); **automatic IAS 21 / ASC 830 translation adjustment**
-(CTA) for transit accounts; `-R` real-only output.
+`capital loss`) — the disposed lot's holding-period market move,
+composed under `-X` with the per-trade execution spread on `fx gain`
+/ `fx loss`; **automatic IAS 21 / ASC 830 translation adjustment**
+(CTA) for same-commodity transit accounts; `-R` real-only output.
 
 **Not in scope today:** `include` directive, `apply/end`,
 `define`, the short-form directives `D` / `Y` / `A` / `N`,
@@ -1200,20 +1201,19 @@ $ acc reg -X USD
 
 Auditable, reproducible, name-attributable.
 
-#### Interaction with `fx gain` / `fx loss`
+#### Interaction with `fx gain` / `fx loss` and `capital gain` / `capital loss`
 
-The two mechanisms are complementary, never overlapping — they
-measure different quantities. The realizer handles the **trade-day
-deviation** on a multi-commodity transaction: the user's implied
-conversion rate against the market rate on `tx.date`, a realized
-trading event. The translator handles the **holding-period drift**:
-the market rate moving between a transit account's inflow and
-outflow, a purely unrealized translation difference. Because these
-are distinct amounts, CTA books drift for **every** transit account
-whose native sum is zero — including multi-commodity pass-through
-accounts such as a clearing account that trades a foreign currency.
-The CTA transaction is self-balancing in the target currency, so it
-never double-books the realizer's gain/loss.
+The three mechanisms measure different things and never double-book.
+The realizer's **fx** is the trade-day execution deviation *within* one
+multi-commodity transaction (implied/booked rate vs. market on
+`tx.date`). The lotter's **capital** is the disposed asset's market
+move *over its holding period*. The translator's **CTA** is the
+holding-period drift on a *same-commodity transfer* — a foreign
+currency passing through an account with no trade. A traded position
+nets to zero through capital + fx, so CTA does not fire on it; CTA is
+reserved for genuine pass-through transfers. Every injected
+transaction is self-balancing in the target currency, so the three
+never overlap.
 
 #### Position in the plaintext-accounting ecosystem
 
@@ -1284,20 +1284,27 @@ acc rewrites the disposal leg in place with the lot it closed
 `2 × (2000 − 1500) = 1000`. A sale spanning several lots splits FIFO
 into one leg per lot, each with its own basis and date.
 
-**Under `-X` the gain decomposes.** Valuation then follows the price
-DB, and the single capital figure splits into named parts:
+**Under `-X` the realised result decomposes across phases.** Valuation
+follows the price DB, and two named figures are booked by separate
+phases that run together — so a single trade can show both:
 
-- **market** — the asset's price movement against its cost commodity
-  over the holding period (the genuine investment performance), on
-  `capital gain` / `capital loss`;
-- **spread** — the trade-day execution deviation (booked price vs.
-  market spot), on `fx gain` / `fx loss` if declared, else folded back
-  into capital.
+- **capital** (`capital gain` / `capital loss`, the lotter) — the
+  disposed lot's *market move* over its holding period: the
+  commodity's market value at the sale date minus its market value on
+  the acquisition date, the genuine investment performance. The
+  disposal leg carries that acquisition-date market value as its `{}`
+  cost basis, so the asset enters and leaves at the same value and nets
+  to zero.
+- **fx** (`fx gain` / `fx loss`, the realizer) — the *execution spread*
+  on every trade, buy and sell: the booked rate's deviation from the
+  market rate that day. Declare the fx accounts so a multi-commodity
+  trade balances at market (the realizer strips the `@` so each leg
+  converts at market, and the gap to market becomes fx).
 
-When the lot's cost is denominated in a foreign commodity (e.g. ETH
-bought for BTC, later sold for the reporting currency), that cost
-basis's own drift against the target surfaces separately as **CTA** —
-so a currency tailwind never masks a poor asset pick. Report:
+A same-commodity *transfer* — a foreign currency passing through an
+account across a rate move, with no trade — is not a capital event; its
+holding-period drift is booked as **CTA** instead, so a currency
+tailwind never masks a poor asset pick. Report:
 
 ```
 acc bal income:capital -X EUR    # realised gains / losses

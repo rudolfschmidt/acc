@@ -80,7 +80,7 @@ pub fn translate(
         txs.push(build_release_tx(&adj, target, cta, precision));
     }
 
-    txs.sort_by(|a, b| a.value.date.cmp(&b.value.date));
+    txs.sort_by_key(|a| a.value.date);
 }
 
 fn identify_transit_groups(
@@ -98,7 +98,7 @@ fn identify_transit_groups(
             if let Some(a) = &lp.value.amount {
                 let key = (lp.value.account.clone(), a.commodity.clone());
                 let v = sums.entry(key).or_insert(Decimal::zero());
-                *v = *v + a.value;
+                *v += a.value;
             }
         }
     }
@@ -149,9 +149,9 @@ fn collect_adjustments(
             let entry = running
                 .entry(key.clone())
                 .or_insert((Decimal::zero(), Decimal::zero(), false));
-            entry.0 = entry.0 + a.value;
+            entry.0 += a.value;
             match target_val {
-                Some(v) => entry.1 = entry.1 + v,
+                Some(v) => entry.1 += v,
                 None => entry.2 = true,
             }
             if !entry.2

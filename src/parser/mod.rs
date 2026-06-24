@@ -75,7 +75,7 @@ fn dispatch(
             Ok(())
         }
         [b'=', b' ', ..] | [b'=', b'\t', ..] => {
-            parse_auto_rule(&text[1..].trim_start(), line, file, entries)
+            parse_auto_rule(text[1..].trim_start(), line, file, entries)
         }
         _ => parse_directive(text, line, file, entries),
     }
@@ -565,10 +565,10 @@ fn parse_posting(body: &str, line: usize) -> Result<Posting, ParseError> {
 /// - `{{TOTAL}}` / `{{=TOTAL}}` → whole-lot total cost (`total: true`).
 /// - `[DATE]`   → lot acquisition date, kept for display (the caller
 ///   rejects it unless a lot cost accompanies it).
-fn consume_lot_annotations<'a>(
-    mut rest: &'a str,
+fn consume_lot_annotations(
+    mut rest: &str,
     line: usize,
-) -> Result<(Option<LotCost>, Option<crate::date::Date>, &'a str), ParseError> {
+) -> Result<(Option<LotCost>, Option<crate::date::Date>, &str), ParseError> {
     let mut lot_cost: Option<LotCost> = None;
     let mut lot_date: Option<crate::date::Date> = None;
     loop {
@@ -618,7 +618,7 @@ fn consume_lot_annotations<'a>(
                 if lot_date.is_none() {
                     let inner = rest[1..end].trim();
                     lot_date = Some(crate::date::Date::parse(inner).map_err(|e| {
-                        ParseError::new(line, 1, &format!("invalid lot date `{}`: {}", inner, e))
+                        ParseError::new(line, 1, format!("invalid lot date `{}`: {}", inner, e))
                     })?);
                 }
                 rest = &rest[end + 1..];

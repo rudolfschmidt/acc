@@ -133,7 +133,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                 // booker won't get confused downstream.
                 let mut total = crate::decimal::Decimal::zero();
                 for p in &rule.postings {
-                    total = total + p.multiplier;
+                    total += p.multiplier;
                 }
                 if !total.is_zero() {
                     return Err(ResolveError::new(
@@ -161,7 +161,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
 
     // Transactions must be date-sorted: the booker validates balance
     // assertions in chronological order.
-    transactions.sort_by(|a, b| a.value.date.cmp(&b.value.date));
+    transactions.sort_by_key(|a| a.value.date);
     // Prices are NOT sorted here: the indexer stores each pair's series
     // in a `BTreeMap<day, rate>` that orders itself, and a same-day
     // collision resolves to the last directive in file order either way
@@ -255,8 +255,8 @@ fn collect_declarations(
         match &e.value {
             Entry::Commodity { symbol, aliases: list, precision } => {
                 for a in list {
-                    if let Some(existing) = aliases.get(a) {
-                        if existing != symbol {
+                    if let Some(existing) = aliases.get(a)
+                        && existing != symbol {
                             return Err(ResolveError::new(
                                 e.file.clone(),
                                 e.line,
@@ -266,7 +266,6 @@ fn collect_declarations(
                                 ),
                             ));
                         }
-                    }
                     aliases.insert(a.clone(), symbol.clone());
                 }
                 if let Some(p) = precision {
@@ -274,8 +273,8 @@ fn collect_declarations(
                 }
             }
             Entry::RoleAccount { role, account } => {
-                if let Some(prev) = roles.get(role) {
-                    if prev.name != *account {
+                if let Some(prev) = roles.get(role)
+                    && prev.name != *account {
                         return Err(ResolveError::new(
                             e.file.clone(),
                             e.line,
@@ -285,7 +284,6 @@ fn collect_declarations(
                             ),
                         ));
                     }
-                }
                 roles.insert(role.clone(), Declaration { line: e.line, name: account.clone() });
             }
             _ => {}
