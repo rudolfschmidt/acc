@@ -251,35 +251,11 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool) -> String {
             Entry::Account(name) => {
                 out.push_str(&format!("account {}\n", name));
             }
-            Entry::FxGainAccount(name) => {
-                out.push_str(&format!("account {}\n", name));
+            Entry::RoleAccount { role, account } => {
+                out.push_str(&format!("account {}\n", account));
                 out.push_str(INDENT);
-                out.push_str("fx gain\n");
-            }
-            Entry::FxLossAccount(name) => {
-                out.push_str(&format!("account {}\n", name));
-                out.push_str(INDENT);
-                out.push_str("fx loss\n");
-            }
-            Entry::CtaGainAccount(name) => {
-                out.push_str(&format!("account {}\n", name));
-                out.push_str(INDENT);
-                out.push_str("cta gain\n");
-            }
-            Entry::CtaLossAccount(name) => {
-                out.push_str(&format!("account {}\n", name));
-                out.push_str(INDENT);
-                out.push_str("cta loss\n");
-            }
-            Entry::CapitalGainAccount(name) => {
-                out.push_str(&format!("account {}\n", name));
-                out.push_str(INDENT);
-                out.push_str("capital gain\n");
-            }
-            Entry::CapitalLossAccount(name) => {
-                out.push_str(&format!("account {}\n", name));
-                out.push_str(INDENT);
-                out.push_str("capital loss\n");
+                out.push_str(role);
+                out.push('\n');
             }
             Entry::Comment(text) => {
                 out.push_str(text);

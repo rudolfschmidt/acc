@@ -302,7 +302,7 @@ fn parse_directive(
 ///
 /// - under `Transaction` → a posting or an indented comment
 /// - under `Commodity`   → append an `alias X` sub-directive
-/// - under `Account`     → replace with `FxGainAccount`/`FxLossAccount`
+/// - under `Account`     → upgrade to `RoleAccount` (any role directive)
 /// - anything else       → error (indented line with no valid parent)
 fn extend_block(
     text: &str,
@@ -382,33 +382,20 @@ fn extend_block(
             }
         }
         Entry::Account(name) => {
-            let mut parts = body.split_whitespace();
-            match (parts.next(), parts.next(), parts.next()) {
-                (Some("fx"), Some("gain"), None) => {
-                    upgrade = Some(Entry::FxGainAccount(std::mem::take(name)));
-                }
-                (Some("fx"), Some("loss"), None) => {
-                    upgrade = Some(Entry::FxLossAccount(std::mem::take(name)));
-                }
-                (Some("cta"), Some("gain"), None) => {
-                    upgrade = Some(Entry::CtaGainAccount(std::mem::take(name)));
-                }
-                (Some("cta"), Some("loss"), None) => {
-                    upgrade = Some(Entry::CtaLossAccount(std::mem::take(name)));
-                }
-                (Some("capital"), Some("gain"), None) => {
-                    upgrade = Some(Entry::CapitalGainAccount(std::mem::take(name)));
-                }
-                (Some("capital"), Some("loss"), None) => {
-                    upgrade = Some(Entry::CapitalLossAccount(std::mem::take(name)));
-                }
-                _ => return Err(ParseError::new(
+            // A role sub-directive is any indented two-or-more-word line
+            // under `account`. The words verbatim (e.g. `capital gain`)
+            // become the role key; the resolver and `$role:slot`
+            // references match on it, so no role names are baked in here.
+            let role = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            if role.split(' ').count() < 2 {
+                return Err(ParseError::new(
                     line,
                     1,
-                    "expected `fx gain`, `fx loss`, `cta gain`, `cta loss`, \
-                     `capital gain`, or `capital loss`",
-                )),
+                    "expected a role sub-directive of two or more words, \
+                     e.g. `fx gain`, `cta loss`, or `capital gain`",
+                ));
             }
+            upgrade = Some(Entry::RoleAccount { role, account: std::mem::take(name) });
         }
         Entry::AutoRule(rule) => {
             let auto_posting = parse_auto_posting(body, line)?;
@@ -1069,14 +1056,24 @@ mod tests {
     fn parse_account_with_fx_gain() {
         let src = "account Equity:FxGain\n    fx gain\n";
         let got = parse(src).unwrap();
-        assert!(matches!(got[0].value, Entry::FxGainAccount(ref n) if n == "Equity:FxGain"));
+        assert!(matches!(&got[0].value,
+            Entry::RoleAccount { role, account } if role == "fx gain" && account == "Equity:FxGain"));
     }
 
     #[test]
-    fn parse_account_with_fx_loss() {
-        let src = "account Equity:FxLoss\n    fx loss\n";
+    fn parse_account_with_multiword_role() {
+        // Roles are matched generically — a three-word role parses too.
+        let src = "account Equity:Foo\n    capital gain longterm\n";
         let got = parse(src).unwrap();
-        assert!(matches!(got[0].value, Entry::FxLossAccount(ref n) if n == "Equity:FxLoss"));
+        assert!(matches!(&got[0].value,
+            Entry::RoleAccount { role, account }
+                if role == "capital gain longterm" && account == "Equity:Foo"));
+    }
+
+    #[test]
+    fn parse_account_role_needs_two_words() {
+        let src = "account Equity:Foo\n    capital\n";
+        assert!(parse(src).is_err());
     }
 
     #[test]

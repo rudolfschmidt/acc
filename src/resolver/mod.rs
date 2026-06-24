@@ -60,8 +60,17 @@ pub struct Resolved {
 }
 
 pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
-    let (aliases, fx_gain, fx_loss, cta_gain, cta_loss, capital_gain, capital_loss, precisions) =
-        collect_declarations(&entries)?;
+    let (aliases, roles, precisions) = collect_declarations(&entries)?;
+
+    // The pipeline phases consume specific roles by name; this is the one
+    // place those semantic keys live. Everything else — parsing, conflict
+    // checks, `$role:slot` resolution — stays generic over `roles`.
+    let fx_gain = roles.get("fx gain").cloned();
+    let fx_loss = roles.get("fx loss").cloned();
+    let cta_gain = roles.get("cta gain").cloned();
+    let cta_loss = roles.get("cta loss").cloned();
+    let capital_gain = roles.get("capital gain").cloned();
+    let capital_loss = roles.get("capital loss").cloned();
 
     // Parallel Arc-based alias table for the Price path. Each alias
     // maps to an interned primary `Arc<str>`; the same interner is
@@ -100,6 +109,9 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                 }
                 for lp in &mut tx.postings {
                     apply_to_posting(&mut lp.value, &aliases);
+                    if let Some(name) = resolve_role_account(&lp.value.account, &roles) {
+                        lp.value.account = name;
+                    }
                 }
                 transactions.push(Located { file, line, value: tx });
             }
@@ -171,6 +183,24 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
     })
 }
 
+/// Resolve a `$role:slot` account reference (e.g. `$capital:gain`) to the
+/// account declared for that role. The token after `$` is matched
+/// generically — colons become spaces (`capital:gain` → `capital gain`)
+/// and the result is looked up among the declared role directives. No
+/// role names are baked in, so a role is referenceable the moment it is
+/// declared.
+///
+/// Returns `None` — leave the account verbatim — both for a plain account
+/// and for a `$` reference whose role no `account` directive declares. The
+/// latter is deliberately lenient: `acc format` (and any single-file run)
+/// must round-trip a `$role:slot` reference without the central config
+/// that declares the role. `acc check` warns on any `$…` account that
+/// survives unresolved, so a genuine typo still surfaces.
+fn resolve_role_account(account: &str, roles: &HashMap<String, String>) -> Option<String> {
+    let token = account.strip_prefix('$')?;
+    roles.get(&token.replace(':', " ")).cloned()
+}
+
 /// Return the interned `Arc<str>` for `s`, inserting it on first sight.
 fn intern_str(interner: &mut HashSet<Arc<str>>, s: &str) -> Arc<str> {
     if let Some(existing) = interner.get(s) {
@@ -201,31 +231,24 @@ fn resolve_arc(
     arc
 }
 
-/// First pass: walk entries, build the alias table and capture the
-/// fx-gain / fx-loss / cta-gain / cta-loss accounts. Errors on any
-/// conflict.
+/// First pass: walk entries, build the alias table, index every role
+/// account by its directive text, and collect precision overrides.
+/// Errors on a conflicting re-declaration (same role, different account).
 fn collect_declarations(
     entries: &[Located<Entry>],
 ) -> Result<
     (
         HashMap<String, String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
+        HashMap<String, String>,
         HashMap<String, usize>,
     ),
     ResolveError,
 > {
     let mut aliases: HashMap<String, String> = HashMap::new();
-    let mut fx_gain: Option<Declaration> = None;
-    let mut fx_loss: Option<Declaration> = None;
-    let mut cta_gain: Option<Declaration> = None;
-    let mut cta_loss: Option<Declaration> = None;
-    let mut capital_gain: Option<Declaration> = None;
-    let mut capital_loss: Option<Declaration> = None;
+    // Role directives indexed by their verbatim text (`capital gain`,
+    // `cta loss`, …) → declared account. One generic map in place of the
+    // former per-role fields: a new role needs no change here.
+    let mut roles: HashMap<String, Declaration> = HashMap::new();
     let mut precisions: HashMap<String, usize> = HashMap::new();
 
     for e in entries {
@@ -250,95 +273,20 @@ fn collect_declarations(
                     precisions.insert(symbol.clone(), *p);
                 }
             }
-            Entry::FxGainAccount(name) => {
-                if let Some(prev) = &fx_gain {
-                    if prev.name != *name {
+            Entry::RoleAccount { role, account } => {
+                if let Some(prev) = roles.get(role) {
+                    if prev.name != *account {
                         return Err(ResolveError::new(
                             e.file.clone(),
                             e.line,
                             format!(
-                                "fx gain account already set to `{}` at line {}",
-                                prev.name, prev.line
+                                "`{}` account already set to `{}` at line {}",
+                                role, prev.name, prev.line
                             ),
                         ));
                     }
                 }
-                fx_gain = Some(Declaration { line: e.line, name: name.clone() });
-            }
-            Entry::FxLossAccount(name) => {
-                if let Some(prev) = &fx_loss {
-                    if prev.name != *name {
-                        return Err(ResolveError::new(
-                            e.file.clone(),
-                            e.line,
-                            format!(
-                                "fx loss account already set to `{}` at line {}",
-                                prev.name, prev.line
-                            ),
-                        ));
-                    }
-                }
-                fx_loss = Some(Declaration { line: e.line, name: name.clone() });
-            }
-            Entry::CtaGainAccount(name) => {
-                if let Some(prev) = &cta_gain {
-                    if prev.name != *name {
-                        return Err(ResolveError::new(
-                            e.file.clone(),
-                            e.line,
-                            format!(
-                                "cta gain account already set to `{}` at line {}",
-                                prev.name, prev.line
-                            ),
-                        ));
-                    }
-                }
-                cta_gain = Some(Declaration { line: e.line, name: name.clone() });
-            }
-            Entry::CtaLossAccount(name) => {
-                if let Some(prev) = &cta_loss {
-                    if prev.name != *name {
-                        return Err(ResolveError::new(
-                            e.file.clone(),
-                            e.line,
-                            format!(
-                                "cta loss account already set to `{}` at line {}",
-                                prev.name, prev.line
-                            ),
-                        ));
-                    }
-                }
-                cta_loss = Some(Declaration { line: e.line, name: name.clone() });
-            }
-            Entry::CapitalGainAccount(name) => {
-                if let Some(prev) = &capital_gain {
-                    if prev.name != *name {
-                        return Err(ResolveError::new(
-                            e.file.clone(),
-                            e.line,
-                            format!(
-                                "capital gain account already set to `{}` at line {}",
-                                prev.name, prev.line
-                            ),
-                        ));
-                    }
-                }
-                capital_gain = Some(Declaration { line: e.line, name: name.clone() });
-            }
-            Entry::CapitalLossAccount(name) => {
-                if let Some(prev) = &capital_loss {
-                    if prev.name != *name {
-                        return Err(ResolveError::new(
-                            e.file.clone(),
-                            e.line,
-                            format!(
-                                "capital loss account already set to `{}` at line {}",
-                                prev.name, prev.line
-                            ),
-                        ));
-                    }
-                }
-                capital_loss = Some(Declaration { line: e.line, name: name.clone() });
+                roles.insert(role.clone(), Declaration { line: e.line, name: account.clone() });
             }
             _ => {}
         }
@@ -346,12 +294,7 @@ fn collect_declarations(
 
     Ok((
         aliases,
-        fx_gain.map(|d| d.name),
-        fx_loss.map(|d| d.name),
-        cta_gain.map(|d| d.name),
-        cta_loss.map(|d| d.name),
-        capital_gain.map(|d| d.name),
-        capital_loss.map(|d| d.name),
+        roles.into_iter().map(|(role, d)| (role, d.name)).collect(),
         precisions,
     ))
 }
@@ -441,6 +384,33 @@ mod tests {
         let src = "account Equity:A\n    fx gain\naccount Equity:B\n    fx gain\n";
         let err = resolve(parsed(src)).unwrap_err();
         assert!(err.message.contains("fx gain"));
+    }
+
+    #[test]
+    fn resolves_role_account_references() {
+        let src = "account in:cap:market\n    capital gain\n\
+                   account ex:cap:market\n    capital loss\n\
+                   account in:cap:cta\n    cta gain\n\
+                   2024-06-15 * sell\n    assets:eth  -6 EUR\n    $capital:gain  2 EUR\n    $capital:loss  2 EUR\n    $cta:gain  2 EUR\n";
+        let out = resolve(parsed(src)).unwrap();
+        let acct = |i: usize| out.transactions[0].value.postings[i].value.account.as_str();
+        assert_eq!(acct(1), "in:cap:market"); // $capital:gain
+        assert_eq!(acct(2), "ex:cap:market"); // $capital:loss
+        assert_eq!(acct(3), "in:cap:cta"); // $cta:gain
+    }
+
+    #[test]
+    fn unresolved_role_reference_passes_through() {
+        // A `$ref` to a role no `account` declares (here `fx gain`, and a
+        // typo) is left verbatim, not an error — so `acc format` can
+        // round-trip a single file without the central config. `acc check`
+        // is what flags the leftover `$…` account.
+        let src = "account in:cap\n    capital gain\n\
+                   2024-06-15 * x\n    a  -2 EUR\n    $fx:gain  1 EUR\n    $captial:gain  1 EUR\n";
+        let out = resolve(parsed(src)).unwrap();
+        let acct = |i: usize| out.transactions[0].value.postings[i].value.account.as_str();
+        assert_eq!(acct(1), "$fx:gain");
+        assert_eq!(acct(2), "$captial:gain");
     }
 
     #[test]

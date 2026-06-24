@@ -15,6 +15,7 @@ pub fn run(journal: &Journal) {
     let checks: Vec<Check> = vec![
         check_commodity_casing(txs),
         check_leaf_accounts(txs),
+        check_unresolved_role_refs(txs),
     ];
 
     println!(
@@ -137,6 +138,30 @@ fn check_leaf_accounts(txs: &[Located<Transaction>]) -> Check {
     }
 }
 
+/// A `$role:slot` reference that no `account` directive declared is left
+/// verbatim by the resolver (so single-file `acc format` round-trips it).
+/// In a full run every reference should resolve; a leftover `$…` account
+/// means a typo'd role or a missing declaration — flag each one.
+fn check_unresolved_role_refs(txs: &[Located<Transaction>]) -> Check {
+    let mut issues = Vec::new();
+    for tx in txs {
+        for lp in &tx.value.postings {
+            if lp.value.account.starts_with('$') {
+                issues.push(format!(
+                    "{} unresolved role reference '{}'",
+                    format!("{}:{}", lp.file, lp.line).cyan(),
+                    lp.value.account.yellow(),
+                ));
+            }
+        }
+    }
+    Check {
+        name: "role-references",
+        description: "every `$role:slot` reference must resolve to a declared account",
+        issues,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +220,30 @@ mod tests {
              \tassets:cash    -10 USD\n",
         );
         assert!(check_leaf_accounts(&txs).issues.is_empty());
+    }
+
+    #[test]
+    fn role_refs_flags_unresolved() {
+        // No `capital gain` declared → `$capital:gain` survives verbatim.
+        let txs = setup(
+            "2024-01-01 * x\n\
+             \tassets:a       -1 EUR\n\
+             \t$capital:gain   1 EUR\n",
+        );
+        let check = check_unresolved_role_refs(&txs);
+        assert_eq!(check.issues.len(), 1);
+        assert!(check.issues[0].contains("$capital:gain"));
+    }
+
+    #[test]
+    fn role_refs_accept_resolved() {
+        // Declared → the reference resolves before check ever sees it.
+        let txs = setup(
+            "account in:cap\n    capital gain\n\
+             2024-01-01 * x\n\
+             \tassets:a       -1 EUR\n\
+             \t$capital:gain   1 EUR\n",
+        );
+        assert!(check_unresolved_role_refs(&txs).issues.is_empty());
     }
 }
