@@ -179,7 +179,7 @@ pub fn realize_capital(
                 continue;
             };
             // Under `-X`, a leg traded against the *target* currency at an
-            // implied rate (no explicit `@`/`{}`) — e.g. `INR` paid in `€`
+            // implied rate (no explicit `@`/`{}`) — e.g. `USD` paid in `€`
             // with no `@` — must be pinned with that rate, else the
             // rebalancer values it at market while the disposal cost-basis
             // uses the implied rate, leaving a drift on the account.
@@ -270,7 +270,7 @@ pub fn realize_capital(
 
             // Open a lot for the unclosed remainder. Longs always. A short
             // (negative remainder = sold before bought) only counts when
-            // traded against the target *money* (e.g. `INR` paid in `€`):
+            // traded against the target *money* (e.g. `USD` paid in `€`):
             // there the disposal is a genuine short to be closed by a later
             // purchase. For an asset traded against another commodity
             // (counter ≠ target), an unmatched disposal is just the

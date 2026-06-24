@@ -82,12 +82,12 @@ mod tests {
     #[test]
     fn cash_flush_pattern() {
         let src = "\
-            = /^rud:cc:cash/\n\
-            \t[rud:cc:cash]  -1\n\
+            = /^assets:cash/\n\
+            \t[assets:cash]  -1\n\
             \t[ex:cash]       1\n\
             \n\
             2024-06-15 * coffee\n\
-            \trud:cc:cash   $5\n\
+            \tassets:cash   $5\n\
             \tex:food       $-5\n";
         let (mut transactions, rules) = setup(src);
         expand(&mut transactions, &rules);
@@ -96,7 +96,7 @@ mod tests {
         // Original 2 postings + 2 injected = 4.
         assert_eq!(tx.postings.len(), 4);
         let cash_flush = &tx.postings[2].value;
-        assert_eq!(cash_flush.account, "rud:cc:cash");
+        assert_eq!(cash_flush.account, "assets:cash");
         assert_eq!(
             cash_flush.amount.as_ref().unwrap().value,
             crate::decimal::Decimal::from(-5)
@@ -112,8 +112,8 @@ mod tests {
     #[test]
     fn rule_without_match_does_nothing() {
         let src = "\
-            = /^rud:cc:cash/\n\
-            \t[rud:cc:cash]  -1\n\
+            = /^assets:cash/\n\
+            \t[assets:cash]  -1\n\
             \t[ex:cash]       1\n\
             \n\
             2024-06-15 * rent\n\
@@ -131,8 +131,8 @@ mod tests {
         let src = "\
             = /^in:gross/\n\
             \t[in:gross]  -1\n\
-            \t[rud:vat19]  0.19\n\
-            \t[rud:net]    0.81\n\
+            \t[liabilities:vat]  0.19\n\
+            \t[income:net]    0.81\n\
             \n\
             2024-06-15 * invoice\n\
             \tin:gross    $-1000\n\
@@ -151,14 +151,14 @@ mod tests {
         );
         // VAT: -1000 * 0.19 = -190
         let vat = &tx.postings[3].value;
-        assert_eq!(vat.account, "rud:vat19");
+        assert_eq!(vat.account, "liabilities:vat");
         assert_eq!(
             vat.amount.as_ref().unwrap().value,
             crate::decimal::Decimal::from(-190)
         );
         // Net: -1000 * 0.81 = -810
         let net = &tx.postings[4].value;
-        assert_eq!(net.account, "rud:net");
+        assert_eq!(net.account, "income:net");
         assert_eq!(
             net.amount.as_ref().unwrap().value,
             crate::decimal::Decimal::from(-810)
@@ -172,11 +172,11 @@ mod tests {
         // and blow up. The expander must only scan original postings.
         let src = "\
             = /cash/\n\
-            \t[rud:cc:cash]  -1\n\
+            \t[assets:cash]  -1\n\
             \t[ex:cash]       1\n\
             \n\
             2024-06-15 * coffee\n\
-            \trud:cc:cash   $5\n\
+            \tassets:cash   $5\n\
             \tex:food       $-5\n";
         let (mut transactions, rules) = setup(src);
         expand(&mut transactions, &rules);
