@@ -54,27 +54,37 @@ pub enum Costs {
     PerUnit(Amount),
 }
 
-/// Ledger lot-price annotation captured from `{...}`.
+/// Ledger lot-cost annotation captured from `{...}` / `{{...}}`.
 ///
-/// - `Floating` — plain `{COST}`: the lot price may be revalued
-///   against a later market rate in `--revalued` reports.
-/// - `Fixed` — `{=COST}`: the lot price is locked in, used as the
-///   cost-basis for realized-gain tracking.
-///
-/// The `{{TOTAL}}` (total instead of per-unit) form is not modelled;
-/// the parser consumes and discards it.
+/// - per-unit `{COST}` — `amount` is the cost of one unit (`total == false`).
+/// - total `{{TOTAL}}` — `amount` is the cost of the whole lot
+///   (`total == true`), like `@@` is to `@`.
+/// - the `=` prefix (`{=COST}` / `{{=TOTAL}}`) locks the cost in; acc
+///   records it in `fixed` but treats locked and floating the same for
+///   balance and gain computation (there is no `--revalued` report).
 #[derive(Debug, Clone)]
-pub enum LotCost {
-    Floating(Amount),
-    Fixed(Amount),
+pub struct LotCost {
+    pub amount: Amount,
+    /// `{{...}}` total-cost form (the whole lot) vs per-unit `{...}`.
+    pub total: bool,
+    /// `{=...}` locked vs floating `{...}`. Informational.
+    pub fixed: bool,
 }
 
 impl LotCost {
-    /// Per-unit amount regardless of floating/fixed — what the booker
-    /// needs for the balance-effective computation.
-    pub fn amount(&self) -> &Amount {
-        match self {
-            LotCost::Floating(a) | LotCost::Fixed(a) => a,
+    /// The lot's balance weight for a leg of `qty` units, in the cost
+    /// commodity. Per-unit cost scales by quantity; a total cost is the
+    /// whole-lot figure itself, carrying the sign of `qty` (a disposal
+    /// removes the lot, an acquisition adds it).
+    pub fn weight(&self, qty: Decimal) -> Decimal {
+        if self.total {
+            if qty.is_negative() {
+                Decimal::zero() - self.amount.value
+            } else {
+                self.amount.value
+            }
+        } else {
+            qty.mul_rounded(self.amount.value)
         }
     }
 }

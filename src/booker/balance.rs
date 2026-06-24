@@ -167,10 +167,9 @@ fn effective_amount(p: &Posting) -> Option<Amount> {
     // in the same tx), defaulting to 0 if the commodity only ever
     // appears via cost conversion.
     if let Some(lot) = &p.lot_cost {
-        let cost = lot.amount();
         return Some(Amount {
-            commodity: cost.commodity.clone(),
-            value: amt.value.mul_rounded(cost.value),
+            commodity: lot.amount.commodity.clone(),
+            value: lot.weight(amt.value),
             decimals: 0,
         });
     }
@@ -357,6 +356,23 @@ mod tests {
                    \tassets:btc  BTC 0.0907\n\
                    \tin:trade    BTC -0.0003\n";
         assert!(balance_one(src).is_ok());
+    }
+
+    #[test]
+    fn total_lot_cost_weighs_the_whole_lot() {
+        // `{{TOTAL}}` weights the leg by the whole-lot figure, not
+        // quantity × cost: 10 ABC {{200 EUR}} balances against -200 EUR
+        // (weight 200), and would NOT balance if read as per-unit 200
+        // (which would weigh 2000).
+        assert!(balance_one(
+            "2024-01-01 * buy\n\tassets:x  10 ABC {{200 EUR}}\n\tassets:cash  -200 EUR\n"
+        )
+        .is_ok());
+        // The per-unit reading (10 × 200 = 2000) must NOT balance here.
+        assert!(balance_one(
+            "2024-01-01 * buy\n\tassets:x  10 ABC {200 EUR}\n\tassets:cash  -200 EUR\n"
+        )
+        .is_err());
     }
 
     #[test]

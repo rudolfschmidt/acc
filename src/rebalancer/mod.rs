@@ -132,8 +132,7 @@ fn settle_round_off(tx: &mut Transaction, target: &str, unit: Decimal) {
 pub fn target_value(p: &Posting, target: &str, db: &Index, date: &str) -> Option<Decimal> {
     let amount = p.amount.as_ref()?;
     let (value, from) = if let Some(lot) = &p.lot_cost {
-        let cost = lot.amount();
-        (amount.value.mul_rounded(cost.value), cost.commodity.as_str())
+        (lot.weight(amount.value), lot.amount.commodity.as_str())
     } else if let Some(costs) = &p.costs {
         match costs {
             Costs::PerUnit(c) => (amount.value.mul_rounded(c.value), c.commodity.as_str()),

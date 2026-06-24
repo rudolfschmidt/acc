@@ -104,8 +104,15 @@ fn print_posting<W: Write>(
     // acquisition date of the closed lot, `@`/`@@` the unit/total cost.
     // `= assertion` stays internal (verified at load, not rendered).
     if let Some(lot) = &p.lot_cost {
-        let a = lot.amount();
-        write!(out, " {{{}}}", format_amount(&a.commodity, &a.value, precisions))?;
+        let s = format_amount(&lot.amount.commodity, &lot.amount.value, precisions);
+        let eq = if lot.fixed { "=" } else { "" };
+        // Round-trip the form the user wrote: `{{TOTAL}}` for a whole-lot
+        // cost, `{COST}` for per-unit; `=` if it was locked.
+        if lot.total {
+            write!(out, " {{{{{}{}}}}}", eq, s)?;
+        } else {
+            write!(out, " {{{}{}}}", eq, s)?;
+        }
     }
     if let Some(d) = &p.lot_date {
         write!(out, " [{}]", d)?;
