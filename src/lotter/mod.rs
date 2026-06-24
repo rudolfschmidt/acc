@@ -115,15 +115,21 @@ struct Disposal {
     lots: Vec<ClosedLot>,
 }
 
+/// The accounts a realized gain/loss is booked to: capital for the
+/// trade gain (income on a gain, expense on a loss), and — under `-X`,
+/// when declared — the fx accounts for the trade-day spread.
+pub struct CapitalAccounts<'a> {
+    pub capital_gain: &'a str,
+    pub capital_loss: &'a str,
+    pub fx_gain: Option<&'a str>,
+    pub fx_loss: Option<&'a str>,
+}
+
 /// Track lots FIFO and inject one capital-gain/loss transaction per
 /// realized disposal. See module docs for the valuation semantics.
-#[allow(clippy::too_many_arguments)]
 pub fn realize_capital(
     txs: &mut Vec<Located<Transaction>>,
-    capital_gain: &str,
-    capital_loss: &str,
-    fx_gain: Option<&str>,
-    fx_loss: Option<&str>,
+    accounts: &CapitalAccounts,
     target: Option<&str>,
     db: &Index,
     precisions: &HashMap<String, usize>,
@@ -336,15 +342,7 @@ pub fn realize_capital(
         by_tx.entry(d.tx_idx).or_default().push(d);
     }
     for (tx_idx, disps) in by_tx {
-        rewrite_tx(
-            &mut txs[tx_idx],
-            &disps,
-            capital_gain,
-            capital_loss,
-            fx_gain,
-            fx_loss,
-            precisions,
-        );
+        rewrite_tx(&mut txs[tx_idx], &disps, accounts, precisions);
     }
 }
 
@@ -354,14 +352,10 @@ pub fn realize_capital(
 /// realized gain (`income` for a gain, `expense` for a loss). Original
 /// non-disposal postings pass through unchanged; capital postings are
 /// appended after, so the sale and its gain read together.
-#[allow(clippy::too_many_arguments)]
 fn rewrite_tx(
     lt: &mut Located<Transaction>,
     disps: &[Disposal],
-    capital_gain: &str,
-    capital_loss: &str,
-    fx_gain: Option<&str>,
-    fx_loss: Option<&str>,
+    accounts: &CapitalAccounts,
     precisions: &HashMap<String, usize>,
 ) {
     let file = lt.file.clone();
@@ -474,14 +468,14 @@ fn rewrite_tx(
         let mut parts: Vec<(Decimal, &str, &str)> = Vec::new();
         match disp.market {
             Some(market) => {
-                parts.push((market, capital_gain, capital_loss));
+                parts.push((market, accounts.capital_gain, accounts.capital_loss));
                 let spread = disp.gain - market;
-                match (fx_gain, fx_loss) {
+                match (accounts.fx_gain, accounts.fx_loss) {
                     (Some(fg), Some(fl)) => parts.push((spread, fg, fl)),
-                    _ => parts.push((spread, capital_gain, capital_loss)),
+                    _ => parts.push((spread, accounts.capital_gain, accounts.capital_loss)),
                 }
             }
-            None => parts.push((disp.gain, capital_gain, capital_loss)),
+            None => parts.push((disp.gain, accounts.capital_gain, accounts.capital_loss)),
         }
         for (value, gain_acct, loss_acct) in parts {
             if value.is_display_zero(price_prec) {
@@ -619,6 +613,17 @@ mod tests {
         (txs, prices, precisions)
     }
 
+    /// The standard capital-account config used by most tests: income/
+    /// expenses:capital, no fx split.
+    fn caps() -> CapitalAccounts<'static> {
+        CapitalAccounts {
+            capital_gain: "income:capital",
+            capital_loss: "expenses:capital",
+            fx_gain: None,
+            fx_loss: None,
+        }
+    }
+
     /// Summed value of all postings booking to `account` (the realized
     /// gain/loss; income is negative, expense positive).
     fn gain_on(txs: &[Located<Transaction>], account: &str) -> Decimal {
@@ -676,7 +681,7 @@ mod tests {
             \tassets:btc   -1 BTC @ 50000 USD\n\
             \tassets:cash   50000 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
         // Gain booked on the capital account, income negative.
         assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-20000").unwrap());
     }
@@ -702,10 +707,12 @@ mod tests {
         let (mut txs, db, prec) = setup(src);
         realize_capital(
             &mut txs,
-            "income:capital",
-            "expenses:capital",
-            Some("income:fx"),
-            Some("expenses:fx"),
+            &CapitalAccounts {
+                capital_gain: "income:capital",
+                capital_loss: "expenses:capital",
+                fx_gain: Some("income:fx"),
+                fx_loss: Some("expenses:fx"),
+            },
             Some("USD"),
             &db,
             &prec,
@@ -730,7 +737,7 @@ mod tests {
             \tassets:btc   -1 BTC @ 50000 USD\n\
             \tassets:cash   50000 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
         // FIFO closes lot 1 only (50000 − 30000 = 20000).
         assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-20000").unwrap());
     }
@@ -747,7 +754,7 @@ mod tests {
             \tassets:btc   -1 BTC @ 30000 USD\n\
             \tassets:cash   30000 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
         // Loss routes to the expense account, positive.
         assert_eq!(gain_on(&txs, "expenses:capital"), Decimal::parse("20000").unwrap());
         assert_eq!(gain_on(&txs, "income:capital"), Decimal::zero());
@@ -767,7 +774,7 @@ mod tests {
             \tassets:cash   150 USD\n\
             \tincome:trade     -50 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
         assert!(!any_capital(&txs));
     }
 
@@ -782,7 +789,7 @@ mod tests {
             \tassets:btc   -1 BTC\n\
             \tassets:cash   30000 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
         assert!(!any_capital(&txs));
     }
 
@@ -798,7 +805,7 @@ mod tests {
             \tassets:btc   -1 BTC @ 150 USD\n\
             \tassets:cash   150 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
         // The single disposal leg now carries {cost} and [lot-date].
         let legs = split_legs(&txs, "BTC");
         assert_eq!(legs.len(), 1);
@@ -831,7 +838,7 @@ mod tests {
             \tassets:btc  -10 BTC @ 120 USD\n\
             \tassets:cash  1200 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
         let legs = split_legs(&txs, "BTC");
         assert_eq!(legs.len(), 2);
         assert!(legs.iter().all(|p| p.lot_date.is_some()));
@@ -849,7 +856,7 @@ mod tests {
             \tassets:btc   -1 BTC @ 150 USD\n\
             \tassets:cash   150 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
         let legs = split_legs(&txs, "BTC");
         assert_eq!(legs.len(), 1);
         let leg = legs[0];
@@ -881,7 +888,7 @@ mod tests {
             \tassets:btc   -2 BTC @ 200 USD\n\
             \tassets:cash   400 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
         // Full 2 BTC still disposed across the rewritten legs.
         let disposed = txs
             .iter()
@@ -906,7 +913,7 @@ mod tests {
             \tassets:btc    1 BTC\n\
             \tassets:cash  -30000 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
         assert!(!any_capital(&txs));
     }
 
@@ -925,7 +932,7 @@ mod tests {
             \tassets:bank   -103 EUR\n\
             \tassets:usd     100 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, Some("EUR"), &db, &prec);
+        realize_capital(&mut txs, &caps(), Some("EUR"), &db, &prec);
         assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-2").unwrap());
     }
 
@@ -948,7 +955,7 @@ mod tests {
             \tassets:usd    -100 USD\n\
             \texpenses:dev   108 EUR\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, Some("EUR"), &db, &prec);
+        realize_capital(&mut txs, &caps(), Some("EUR"), &db, &prec);
         assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-4").unwrap());
     }
 
@@ -969,7 +976,7 @@ mod tests {
             \tassets:btc   -2 BTC @ 200 USD\n\
             \tassets:cash   400 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, Some("EUR"), &db, &prec);
+        realize_capital(&mut txs, &caps(), Some("EUR"), &db, &prec);
         // Exactly one covered lot; no short lot for the uncovered 1 BTC.
         assert_eq!(split_legs(&txs, "BTC").len(), 1);
     }
@@ -985,7 +992,7 @@ mod tests {
             \tassets:cash  -50 USD\n";
         let (mut txs, db, prec) = setup(src);
         // Must not panic, and realizes nothing.
-        realize_capital(&mut txs, "income:capital", "expenses:capital", None, None, None, &db, &prec);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
         assert!(!any_capital(&txs));
     }
 }
