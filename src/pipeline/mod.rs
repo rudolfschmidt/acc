@@ -64,12 +64,15 @@ pub fn enrich(journal: &mut Journal, target: Option<&str>) {
     if let (Some(cg), Some(cl)) =
         (journal.capital_gain.as_deref(), journal.capital_loss.as_deref())
     {
+        let accounts = crate::lotter::CapitalAccounts {
+            capital_gain: cg,
+            capital_loss: cl,
+            fx_gain: journal.fx_gain.as_deref(),
+            fx_loss: journal.fx_loss.as_deref(),
+        };
         crate::lotter::realize_capital(
             &mut journal.transactions,
-            cg,
-            cl,
-            journal.fx_gain.as_deref(),
-            journal.fx_loss.as_deref(),
+            &accounts,
             target,
             &journal.prices,
             &journal.precisions,

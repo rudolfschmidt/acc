@@ -542,6 +542,66 @@ fn try_standalone(
     }
 }
 
+/// Resolve the effective date filter from `-b` / `-e` / `-p` plus the
+/// default "hide future" cutoff (today+1, exclusive). Returns the
+/// expanded period ranges (consumed by the multi-period filter) and owned
+/// begin/end bounds the caller borrows for the main filter. `-b`/`-e` take
+/// the *start* of their period; a single `-p` becomes a begin/end pair,
+/// multiple `-p` leave begin/end empty and filter against their union.
+/// Exits via `fail` on a malformed date string.
+fn resolve_date_range(
+    filter_args: Option<&ReportArgs>,
+) -> (Vec<(String, String)>, Option<String>, Option<String>) {
+    let period_ranges: Vec<(String, String)> = filter_args
+        .map(|f| f.periods.as_slice())
+        .unwrap_or(&[])
+        .iter()
+        .map(|p| match expand_period(p) {
+            Ok(pair) => pair,
+            Err(e) => fail(&e),
+        })
+        .collect();
+    let (period_begin, period_end) = match period_ranges.len() {
+        1 => (
+            Some(period_ranges[0].0.clone()),
+            Some(period_ranges[0].1.clone()),
+        ),
+        _ => (None, None),
+    };
+    let explicit_begin = filter_args
+        .and_then(|f| f.begin.as_deref())
+        .map(|b| match expand_period(b) {
+            Ok((start, _)) => start,
+            Err(e) => fail(&e),
+        });
+    let explicit_end = filter_args
+        .and_then(|f| f.end.as_deref())
+        .map(|e| match expand_period(e) {
+            Ok((start, _)) => start,
+            Err(e) => fail(&e),
+        });
+    let begin = explicit_begin.or(period_begin);
+    let user_end = explicit_end.or(period_end);
+
+    // The filter's `end` is exclusive, so `today+1` keeps everything up to
+    // and including today. With an explicit `-e`/`-p`, take the earlier.
+    let show_future = filter_args.map(|f| f.future).unwrap_or(false);
+    let future_cap: Option<String> = (!show_future).then(|| {
+        let today_str = acc::date::ms_to_date(acc::date::current_ms());
+        let today = acc::date::Date::parse(&today_str)
+            .expect("current_ms() returns valid YYYY-MM-DD");
+        acc::date::Date::from_days(today.days() + 1).to_string()
+    });
+    let end = match (user_end, future_cap) {
+        (Some(u), Some(cap)) => Some(if u < cap { u } else { cap }),
+        (Some(u), None) => Some(u),
+        (None, Some(cap)) => Some(cap),
+        (None, None) => None,
+    };
+
+    (period_ranges, begin, end)
+}
+
 fn start() -> Result<(), acc::Error> {
     let (files, argv) = split_file_args();
     let mut args = Args::parse_from(argv);
@@ -641,65 +701,11 @@ fn start() -> Result<(), acc::Error> {
     // realizer/lotter exclusivity and the CTA-without-exclusion rule.
     acc::pipeline::enrich(&mut journal, exchange_target.as_deref());
 
-    // Expand `-p` / `-b` / `-e` with the same period grammar: a year
-    // (`YYYY`), a month (`YYYY-MM`) or a day (`YYYY-MM-DD`). Both
-    // `-b` and `-e` take the *start* of the specified period — they
-    // are point-in-time cutoffs, not spans. `-e` stays exclusive as
-    // before. `-p` is the only one that spans: its half-open range
-    // covers the whole period.
-    // Expand every `-p` up front. Single `-p` becomes a normal
-    // begin/end pair for the main filter. Multiple `-p` drop the
-    // begin/end route and filter transactions against the union of
-    // periods further below.
-    let period_ranges: Vec<(String, String)> = filter_args
-        .map(|f| f.periods.as_slice())
-        .unwrap_or(&[])
-        .iter()
-        .map(|p| match expand_period(p) {
-            Ok(pair) => pair,
-            Err(e) => fail(&e),
-        })
-        .collect();
-    let (period_begin, period_end) = match period_ranges.len() {
-        0 => (None, None),
-        1 => (
-            Some(period_ranges[0].0.clone()),
-            Some(period_ranges[0].1.clone()),
-        ),
-        _ => (None, None),
-    };
-    let explicit_begin = filter_args
-        .and_then(|f| f.begin.as_deref())
-        .map(|b| match expand_period(b) {
-            Ok((start, _)) => start,
-            Err(e) => fail(&e),
-        });
-    let explicit_end = filter_args
-        .and_then(|f| f.end.as_deref())
-        .map(|e| match expand_period(e) {
-            Ok((start, _)) => start,
-            Err(e) => fail(&e),
-        });
-    let begin = explicit_begin.as_deref().or(period_begin.as_deref());
-    let user_end = explicit_end.as_deref().or(period_end.as_deref());
-
-    // Hide future transactions by default. The filter's `end` is
-    // exclusive, so `today+1` keeps everything up to and including
-    // today and drops anything strictly after. When the user already
-    // passed `-e` / `-p`, we take the earlier of the two cutoffs.
-    let show_future = filter_args.map(|f| f.future).unwrap_or(false);
-    let future_cap: Option<String> = (!show_future).then(|| {
-        let today_str = acc::date::ms_to_date(acc::date::current_ms());
-        let today = acc::date::Date::parse(&today_str)
-            .expect("current_ms() returns valid YYYY-MM-DD");
-        acc::date::Date::from_days(today.days() + 1).to_string()
-    });
-    let end: Option<&str> = match (user_end, future_cap.as_deref()) {
-        (Some(u), Some(cap)) => Some(if u < cap { u } else { cap }),
-        (Some(u), None) => Some(u),
-        (None, Some(cap)) => Some(cap),
-        (None, None) => None,
-    };
+    // Resolve the -b / -e / -p date filter plus the default future
+    // cutoff. The owned bounds are borrowed for the filter below.
+    let (period_ranges, begin_owned, end_owned) = resolve_date_range(filter_args);
+    let begin = begin_owned.as_deref();
+    let end = end_owned.as_deref();
 
     // Filter phase: scope the journal to the command's pattern and
     // the global --begin / --end date range. Runs once here so every
@@ -755,16 +761,6 @@ fn start() -> Result<(), acc::Error> {
     // each posting's own transaction-date rate (historical valuation).
     if let Some(target) = exchange_target.as_deref() {
         acc::rebalancer::rebalance(&mut journal.transactions, target, &journal.prices);
-        // `print -X` needs rounded, balanced lines so the output reloads
-        // cleanly. `bal`/`reg` keep full precision so pass-through accounts
-        // sum to zero exactly — rounding is display-only, print-only.
-        if matches!(command, Command::Print { .. }) {
-            acc::rebalancer::round_for_print(
-                &mut journal.transactions,
-                target,
-                &journal.precisions,
-            );
-        }
     }
 
     // `-R` / `--real`: drop every virtual posting from the output.
@@ -793,7 +789,21 @@ fn start() -> Result<(), acc::Error> {
             acc::commands::balance::run(&journal, !flat, empty);
         }
         Command::Register { .. } => acc::commands::register::run(&journal),
-        Command::Print { raw: false, .. } => acc::commands::print::run(&journal),
+        Command::Print { raw: false, .. } => {
+            // `print -X` rounds to display precision and re-balances each
+            // transaction so the output is a valid, reloadable journal.
+            // This is print-specific (bal/reg keep full precision), so it
+            // lives here in the print arm, not in the generic pipeline.
+            // Order vs. sort is irrelevant — rounding is per-transaction.
+            if let Some(target) = exchange_target.as_deref() {
+                acc::rebalancer::round_for_print(
+                    &mut journal.transactions,
+                    target,
+                    &journal.precisions,
+                );
+            }
+            acc::commands::print::run(&journal);
+        }
         Command::Accounts { tree, .. } => acc::commands::accounts::run(&journal, tree),
         Command::Codes { .. } => acc::commands::codes::run(&journal),
         Command::Commodities { date, .. } => acc::commands::commodities::run(&journal, date),
