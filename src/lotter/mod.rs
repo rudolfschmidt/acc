@@ -505,8 +505,9 @@ fn rewrite_tx(
                     lot_date: None,
                     balance_assertion: None,
                     // Real (not virtual) → 1:1 copyable, survives re-load.
+                    // Real postings are always balance-contributing.
                     is_virtual: false,
-                    balanced: false,
+                    balanced: true,
                     comments: Vec::new(),
                 },
             });
