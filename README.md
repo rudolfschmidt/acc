@@ -142,12 +142,15 @@ codes, arithmetic expressions in amounts, `@` / `@@` cost
 annotations, `{COST}` lot annotations, virtual postings, balance
 assertions and assignments; directives `commodity` (with `alias`,
 `precision`), `account` (with `fx gain` / `fx loss` / `cta gain`
-/ `cta loss`), `P`, and ledger-style **automated transactions**
+/ `cta loss` / `capital gain` / `capital loss`), `P`, and
+ledger-style **automated transactions**
 (line-leading `= /pattern/` rules that inject scaled postings
 into matching transactions); filter DSL across account /
 description / code / commodity plus `-r` sibling-posting view;
 per-posting currency conversion at `tx.date`; multi-hop price
-lookups; **automatic IAS 21 / ASC 830 translation adjustment**
+lookups; **FIFO realised capital gains** (`capital gain` /
+`capital loss`, split into market movement and execution spread
+under `-X`); **automatic IAS 21 / ASC 830 translation adjustment**
 (CTA) for transit accounts; `-R` real-only output.
 
 **Not in scope today:** `include` directive, `apply/end`,
@@ -211,8 +214,9 @@ booking.
 acc is deliberately not a hobby budget tool. Reports are meant to
 be auditable, reproducible, and consistent with how real accounting
 is done. Where correctness requires a concept from IFRS or GAAP
-(CTA, temporal method, cost-basis preservation via `{cost}` lot
-annotations), acc adopts it — not as boilerplate, but because the
+(CTA, temporal method, FIFO cost-basis preservation and realised
+capital gains via `{cost}` lot annotations), acc adopts it — not as
+boilerplate, but because the
 alternatives produce wrong numbers.
 
 At the same time: no unnecessary ceremony. You don't declare units,
@@ -242,10 +246,10 @@ acc [GLOBAL OPTIONS] <COMMAND> [COMMAND OPTIONS] [ARGS]
 | `--future`                 | off     | Include transactions dated after today. Hidden by default (rent, subscriptions, recurring forward-dated entries shouldn't clutter "what has happened" reports). When also using `-e` / `-p`, the earlier cutoff wins. |
 | `-S`, `--sort FIELD`       | `date`  | Sort key: `date` (alias `d`), `amount` (`amt`), `account` (`acc`), `description` (`desc`, `payee`). Prefix with `-` for reverse (`--sort -amount`). Repeat `--sort` for secondary / tertiary keys. Unknown fields silently fall back to `date`. |
 | `-X`, `--exchange SYMBOL`  | —       | Convert every amount into `SYMBOL` using the price DB. Each posting is converted at its own `tx.date` rate. |
-| `-R`, `--real`             | off     | Drop virtual postings from the output (both `(account)` paren-virtual and `[account]` bracket-virtual). Realizer and translator still compute their adjustments for correctness, but the injected labels (fx gain / fx loss / currency translation adjustment) are hidden. |
+| `-R`, `--real`             | off     | Drop virtual postings from the output (both `(account)` paren-virtual and `[account]` bracket-virtual). The realizer, lotter and translator inject *real* postings (fx gain/loss, capital gain/loss, CTA), so `-R` keeps them; only the `(…)` / `[…]` postings written in the source journal are removed. |
 | `-r`, `--related`          | off     | With a pattern filter, show the *other* postings of matched transactions — the counter-parties — instead of the matched postings themselves. `acc reg ^expenses -r` shows which accounts balanced against expenses. Modeled on ledger-cli's `--related`. |
 | `--related-all`            | off     | Show *every* posting of a matched transaction — the matched posting **and** its counter-parties — not just the counter-parties (`-r`) or just the match (default). Modeled on ledger-cli's `--related-all`. |
-| `--commodities N`          | —       | Keep only transactions whose balance-contributing postings use at least `N` distinct commodities. Counts the *native* commodities (before `-X` conversion); paren-virtual fx labels are ignored. `--commodities 2` finds every currency-mixing transaction. |
+| `--commodities N`          | —       | Keep only transactions whose balance-contributing postings use at least `N` distinct commodities; paren-virtual `(account)` postings are skipped. `--commodities 2` finds every currency-mixing transaction. |
 | `--mixed`                  | off     | Alias for `--commodities 2`: keep only transactions that mix at least two commodities. |
 | `-h`, `--help`             | —       | Print help. Works on `acc` and every subcommand. |
 | `-V`, `--version`          | —       | Print version and exit. |
@@ -841,11 +845,13 @@ sell-from-lot math works:
 	income:gain           $-500
 ```
 
-`{COST}` = floating lot cost; `{=COST}` = fixed lot cost (pins it
-so display semantics don't drift). The booker prefers lot cost
-over `@`-cost for balance math. `{{TOTAL}}` (double-brace total)
-and `[DATE]` (acquisition date) parse and are consumed for format
-compatibility but are not modelled further.
+`{COST}` = per-unit lot cost; `{{TOTAL}}` = whole-lot cost (what
+`@@` is to `@`). A leading `=` (`{=COST}`) locks the cost so display
+semantics don't drift. The booker prefers lot cost over `@`-cost for
+balance math and round-trips the exact form you wrote. `[DATE]`
+records the lot's acquisition date — display-only, and valid only
+next to a `{…}` / `{{…}}` cost (a bare `[date]` is rejected, since a
+later FIFO split would silently overwrite it).
 
 ### Virtual postings
 
@@ -1025,9 +1031,9 @@ posting of a multi-commodity transaction to the target at the
 market rate on `tx.date` and sums them up. If the sum is non-zero,
 the transaction's implied rate differed from the market rate — the
 difference becomes the realised gain or loss, and acc injects a
-paren-virtual posting to close it out: `fx gain` when the user
-came out ahead of market, `fx loss` when behind. Differences
-below the target's display precision are ignored.
+real posting to close it out: `fx gain` when the user came out
+ahead of market, `fx loss` when behind. Differences below the
+target's display precision are ignored.
 
 **Example.** Target `€`, market rate `P 2024-06-15 USD EUR 0.90`.
 
@@ -1041,7 +1047,7 @@ At market rate `$1000` is worth `€900`, but the user got `€920` —
 `€20` gain. acc adds:
 
 ```
-    (Equity:FxGain)  €-20
+    Equity:FxGain  €-20
 ```
 
 Report on them directly:
@@ -1134,14 +1140,13 @@ transaction is emitted on that date:
 
 ```
 <date> * currency translation adjustment
-    [<transit-account>]    TARGET -drift
-    [<cta-account>]        TARGET drift
+    <transit-account>    TARGET -drift
+    <cta-account>        TARGET drift
 ```
 
-Both postings are bracket-virtual (`[...]`) so they participate in
-balance — the transit account's target sum is driven to zero — while
-rendering as bracketed in the register to mark them as automatic
-translator adjustments. Positive drift (target value lost while
+Both postings are real and sum to zero on their own, so the
+transaction balances and reloads 1:1 — the transit account's target
+sum is driven to zero. Positive drift (target value lost while
 holding native) routes to `cta loss`; negative drift (target value
 gained) routes to `cta gain`.
 
@@ -1189,8 +1194,8 @@ $ acc reg -X USD
                                      income:salary         USD-11000.00
 2024-06-15 * invoice paid            expenses:services      USD10500.00
                                      assets:checking       USD-10500.00
-2024-06-15 * currency translation adjustment  [assets:checking]  USD-500.00
-                                              [equity:cta:loss]   USD500.00
+2024-06-15 * currency translation adjustment  assets:checking   USD-500.00
+                                              equity:cta:loss    USD500.00
 ```
 
 Auditable, reproducible, name-attributable.
@@ -1232,6 +1237,72 @@ everything historically instead. The `cta gain` / `cta loss` pair
 covers rule (3) (translation differences to OCI / equity), routing
 the valuation difference on transit accounts to equity rather than
 revaluing open balances.
+
+### `capital gain` / `capital loss` — realised gains via FIFO lots
+
+Declare the two accounts:
+
+```
+account income:capital:gain
+    capital gain
+
+account income:capital:loss
+    capital loss
+```
+
+With both declared, acc keeps a FIFO lot queue per `(account,
+commodity)`. An acquisition (a positive posting carrying its cost via
+`@` / `@@`) opens a lot; a disposal (a negative posting) closes lots
+oldest-first and books the realised gain or loss. Write the disposal
+at its market price with `@`, **not** a `{}` annotation — the leg has
+to balance against its proceeds on its own. An explicit `{cost}` on a
+disposal means *you* are booking the gain by hand, so acc consumes the
+lot for FIFO consistency but injects nothing.
+
+**Example.**
+
+```
+2023-06-01 * buy
+    assets:crypto:eth   ETH 2 @ EUR 1500
+    assets:cash        EUR -3000
+
+2024-06-01 * sell
+    assets:crypto:eth   ETH -2 @ EUR 2000
+    assets:cash         EUR 4000
+```
+
+```
+$ acc print
+2024-06-01 * sell
+    assets:crypto:eth      ETH-2 {EUR1500} [2023-06-01] @ EUR2000
+    assets:cash            EUR4000
+    income:capital:gain    EUR-1000
+```
+
+acc rewrites the disposal leg in place with the lot it closed
+(`{cost} [acquisition-date]`) and appends the gain as a real posting:
+`2 × (2000 − 1500) = 1000`. A sale spanning several lots splits FIFO
+into one leg per lot, each with its own basis and date.
+
+**Under `-X` the gain decomposes.** Valuation then follows the price
+DB, and the single capital figure splits into named parts:
+
+- **market** — the asset's price movement against its cost commodity
+  over the holding period (the genuine investment performance), on
+  `capital gain` / `capital loss`;
+- **spread** — the trade-day execution deviation (booked price vs.
+  market spot), on `fx gain` / `fx loss` if declared, else folded back
+  into capital.
+
+When the lot's cost is denominated in a foreign commodity (e.g. ETH
+bought for BTC, later sold for the reporting currency), that cost
+basis's own drift against the target surfaces separately as **CTA** —
+so a currency tailwind never masks a poor asset pick. Report:
+
+```
+acc bal income:capital -X EUR    # realised gains / losses
+acc reg income:capital -X EUR    # per-disposal breakdown
+```
 
 ---
 

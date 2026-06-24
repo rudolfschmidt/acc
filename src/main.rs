@@ -50,9 +50,10 @@ struct ReportArgs {
 
     /// Show real postings only — drop every virtual posting
     /// (paren-virtual `(account)` and bracket-virtual `[account]`)
-    /// from the output. Realizer and translator still compute their
-    /// adjustments for correctness, but their injected postings
-    /// (fx gain / fx loss / currency translation adjustment) are hidden.
+    /// from the output. The realizer, lotter and translator inject
+    /// *real* postings (fx gain/loss, capital gain/loss, currency
+    /// translation adjustment), so `-R` keeps those; it only removes
+    /// the `(…)`/`[…]` virtual postings written in the source journal.
     #[arg(short = 'R', long = "real")]
     real: bool,
 
@@ -402,10 +403,11 @@ fn collect_ledger_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>
 }
 
 /// Number of distinct commodities used by a transaction's
-/// balance-contributing postings (real and bracket-virtual). Paren-
-/// virtual postings — the realizer's informational fx gain/loss labels
-/// — are skipped, so they never inflate the count. Drives
-/// `--commodities N` / `--mixed`.
+/// balance-contributing postings (real and bracket-virtual); paren-
+/// virtual `(account)` postings are skipped. Drives `--commodities N`
+/// / `--mixed`. Injected fx/capital/CTA postings are real and counted,
+/// but only ever land on transactions that already mix commodities, so
+/// the mix-detection threshold is unaffected.
 fn distinct_commodities(tx: &acc::parser::transaction::Transaction) -> usize {
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for lp in &tx.postings {
@@ -764,9 +766,9 @@ fn start() -> Result<(), acc::Error> {
     }
 
     // `-R` / `--real`: drop every virtual posting from the output.
-    // Realizer/translator injections (fx gain/loss, CTA release) all
-    // use virtual postings, so this hides them while keeping the
-    // underlying computation intact.
+    // Realizer/lotter/translator injections (fx gain/loss, capital
+    // gain/loss, CTA) are real postings, so they survive `-R`; this
+    // only removes the `(…)`/`[…]` virtual postings from the source.
     let real = filter_args.map(|f| f.real).unwrap_or(false);
     if real {
         for lt in &mut journal.transactions {

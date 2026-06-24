@@ -6,13 +6,14 @@
 //!
 //! - commodity aliases are applied to every Price and every Posting
 //!   Amount slot (amount, costs, balance_assertion);
-//! - `fx gain` / `fx loss` account declarations are extracted;
+//! - `fx gain`/`fx loss`, `cta gain`/`cta loss` and
+//!   `capital gain`/`capital loss` account declarations are extracted;
 //! - transactions and prices are split into separate, date-sorted vecs;
 //! - all other entries (Commodity/Account scaffolds, Comment) are
 //!   dropped — their information has been extracted.
 //!
 //! Errors on alias conflicts (`$ → USD` and later `$ → EUR`) and on
-//! duplicate fx-gain / fx-loss declarations.
+//! duplicate fx / cta / capital account declarations.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

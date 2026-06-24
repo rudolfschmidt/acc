@@ -1,7 +1,8 @@
 //! Realizer phase — inject FX gain/loss postings.
 //!
-//! Runs after the filter phase, before rebalance, and only when the
-//! user passes `-X TARGET`. For every multi-commodity transaction we
+//! Runs inside the enrich pipeline (after the expander), i.e. *before*
+//! filtering and rebalance, and only when the user passes `-X TARGET`.
+//! For every multi-commodity transaction we
 //! convert each balance-contributing posting into `target` at the
 //! market rate on `tx.date` (from the price DB). The sum of those
 //! converted amounts is the *realized delta* between what the books
@@ -119,9 +120,10 @@ fn augment(
             // Real posting: the spread is the trade-day delta between the
             // legs' market value (after `-X` conversion). It sits next to
             // the converted amounts and makes the transaction balance in
-            // the target currency, so the output is 1:1 copyable.
+            // the target currency, so the output is 1:1 copyable. Real
+            // postings always contribute to the balance, hence `balanced`.
             is_virtual: false,
-            balanced: false,
+            balanced: true,
             comments: Vec::new(),
         },
     });
