@@ -11,11 +11,13 @@
 //!
 //! ```text
 //! <date> * currency translation adjustment
-//!     [<transit-account>]   -drift TARGET
-//!     [<cta-account>]       +drift TARGET
+//!     <transit-account>   -drift TARGET
+//!     <cta-account>       +drift TARGET
 //! ```
 //!
-//! Both postings balance against each other in the target currency:
+//! The two are real postings (not bracket-virtual) — the same shape the
+//! lotter gives its capital postings, so the release transaction reloads
+//! 1:1. Both postings balance against each other in the target currency:
 //! the transit account's accumulated drift is driven to zero, and
 //! the drift lands on the declared CTA account. The drift does not
 //! belong to any single original transaction — it is the product of
@@ -177,9 +179,11 @@ fn build_release_tx(
     precision: usize,
 ) -> Located<Transaction> {
     let description = "currency translation adjustment".to_string();
-    // Bracket-virtual (`[account]`): virtual (rendered in brackets)
-    // and balance-contributing. The tx balances against itself and
-    // the transit account's target sum returns to zero.
+    // Real postings (not bracket-virtual): the two legs sum to zero, so
+    // the release transaction balances on its own and reloads cleanly —
+    // 1:1 copyable, just like the lotter's capital postings. The debit
+    // drives the transit account's target drift back to zero; the credit
+    // names it on the CTA account.
     let debit = Posting {
         account: adj.account.clone(),
         amount: Some(Amount {
@@ -191,7 +195,7 @@ fn build_release_tx(
         lot_cost: None,
         lot_date: None,
         balance_assertion: None,
-        is_virtual: true,
+        is_virtual: false,
         balanced: true,
         comments: Vec::new(),
     };
@@ -206,7 +210,7 @@ fn build_release_tx(
         lot_cost: None,
         lot_date: None,
         balance_assertion: None,
-        is_virtual: true,
+        is_virtual: false,
         balanced: true,
         comments: Vec::new(),
     };
