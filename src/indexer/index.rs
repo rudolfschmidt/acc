@@ -109,7 +109,7 @@ impl Index {
         let mut reverse: Vec<&str> = self
             .prices
             .iter()
-            .filter_map(|(src, m)| m.keys().any(|k| k.as_ref() == from).then(|| src.as_ref()))
+            .filter(|&(_src, m)| m.keys().any(|k| k.as_ref() == from)).map(|(src, _m)| src.as_ref())
             .collect();
         reverse.sort_unstable();
         forward.into_iter().chain(reverse)

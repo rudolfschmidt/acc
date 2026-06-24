@@ -141,11 +141,11 @@ impl<'a> Expr<'a> {
             match self.peek() {
                 Some(b'+') => {
                     self.pos += 1;
-                    left = left + self.parse_term()?;
+                    left += self.parse_term()?;
                 }
                 Some(b'-') => {
                     self.pos += 1;
-                    left = left - self.parse_term()?;
+                    left -= self.parse_term()?;
                 }
                 _ => return Ok(left),
             }

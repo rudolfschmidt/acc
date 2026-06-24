@@ -55,12 +55,11 @@ pub fn round_for_print(
     let unit = display_unit(prec);
     for lt in transactions {
         for lp in &mut lt.value.postings {
-            if let Some(a) = lp.value.amount.as_mut() {
-                if a.commodity == target {
+            if let Some(a) = lp.value.amount.as_mut()
+                && a.commodity == target {
                     a.value = a.value.round(prec);
                     a.decimals = prec;
                 }
-            }
         }
         settle_round_off(&mut lt.value, target, unit);
     }
@@ -98,7 +97,7 @@ fn settle_round_off(tx: &mut Transaction, target: &str, unit: Decimal) {
         if a.commodity != target {
             return;
         }
-        sum = sum + a.value;
+        sum += a.value;
         count += 1;
         if a.value.abs() > largest_abs {
             largest_abs = a.value.abs();
@@ -114,7 +113,7 @@ fn settle_round_off(tx: &mut Transaction, target: &str, unit: Decimal) {
     }
     if let Some(i) = largest {
         let amount = tx.postings[i].value.amount.as_mut().unwrap();
-        amount.value = amount.value - sum;
+        amount.value -= sum;
     }
 }
 

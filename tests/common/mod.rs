@@ -91,11 +91,10 @@ pub fn balance(
             if !lp.value.account.starts_with(prefix) {
                 continue;
             }
-            if let Some(a) = &lp.value.amount {
-                if a.commodity == commodity {
-                    sum = sum + a.value;
+            if let Some(a) = &lp.value.amount
+                && a.commodity == commodity {
+                    sum += a.value;
                 }
-            }
         }
     }
     sum

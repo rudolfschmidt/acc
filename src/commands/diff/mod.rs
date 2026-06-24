@@ -233,11 +233,10 @@ fn index_dir(root: &Path) -> BTreeMap<PathBuf, PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if crate::is_journal_file(&path) {
-                if let Ok(rel) = path.strip_prefix(root) {
+            } else if crate::is_journal_file(&path)
+                && let Ok(rel) = path.strip_prefix(root) {
                     out.insert(rel.to_path_buf(), path);
                 }
-            }
         }
     }
     out
