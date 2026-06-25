@@ -111,8 +111,8 @@ Different events:
 
 | Scenario | Handled by | Mechanism |
 |----------|------------|-----------|
-| Multi-commodity trade where implied rate ≠ market rate | Realizer (`slippage gain` / `slippage loss`) | Paren-virtual posting labels the per-tx gain/loss |
-| Single-commodity transit: money in at one rate, out at another | Translator ([05-cta.md](05-cta.md)) — `cta gain` / `cta loss` | Synthetic adjustment tx with bracket-virtual postings |
+| Multi-commodity trade where implied rate ≠ market rate | Realizer (`slippage gain` / `slippage loss`) | Real posting names the per-tx gain/loss |
+| Single-commodity transit: money in at one rate, out at another | Translator ([05-cta.md](05-cta.md)) — `cta gain` / `cta loss` | Synthetic adjustment tx with real postings |
 
 They never co-fire. acc's translator excludes any account+commodity
 pair touched by a multi-commodity transaction — that's realizer

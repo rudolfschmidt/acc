@@ -1,4 +1,4 @@
-# 05 — CTA (Currency Translation Adjustment)
+# 05 — CTA (Commodity Translation Adjustment)
 
 The flagship feature. Implements **IAS 21** (*The Effects of
 Changes in Foreign Exchange Rates*) and **US-GAAP ASC 830**
@@ -128,21 +128,21 @@ EUR during a weakening period cost the USD-reporting entity value.
 
 ```
 $ acc -f journal.ledger reg -X USD
-2024-01-15 * salary A                assets:checking     $11000.00  $11000.00
-                                     income:salary      $-11000.00          0
-2024-06-15 * invoice paid A          expenses:services   $10500.00  $10500.00
-                                     assets:checking    $-10500.00          0
-2024-06-15 * translation adjustment  [assets:checking]    $-500.00   $-500.00
-                                     [equity:cta:loss]     $500.00          0
-2025-01-15 * salary B                assets:checking     $11500.00  $11500.00
-                                     income:salary      $-11500.00          0
-2025-06-15 * invoice paid B          expenses:services   $10200.00  $10200.00
-                                     assets:checking    $-10200.00          0
-2025-06-15 * translation adjustment  [assets:checking]   $-1300.00  $-1300.00
-                                     [equity:cta:loss]    $1300.00          0
+2024-01-15 * salary A                   assets:checking     $11000.00  $11000.00
+                                        income:salary      $-11000.00          0
+2024-06-15 * invoice paid A             expenses:services   $10500.00  $10500.00
+                                        assets:checking    $-10500.00          0
+2024-06-15 * commodity translation ad…  assets:checking      $-500.00   $-500.00
+                                        equity:cta:loss       $500.00          0
+2025-01-15 * salary B                   assets:checking     $11500.00  $11500.00
+                                        income:salary      $-11500.00          0
+2025-06-15 * invoice paid B             expenses:services   $10200.00  $10200.00
+                                        assets:checking    $-10200.00          0
+2025-06-15 * commodity translation ad…  assets:checking     $-1300.00  $-1300.00
+                                        equity:cta:loss      $1300.00          0
 ```
 
-Two synthetic **translation adjustment** transactions, one per
+Two synthetic **commodity translation adjustment** transactions, one per
 zero-crossing of `assets:checking`'s native balance:
 
 1. After the first in/out cycle (2024-01-15 → 2024-06-15): `$500`
@@ -150,10 +150,11 @@ zero-crossing of `assets:checking`'s native balance:
 2. After the second cycle (2025-01-15 → 2025-06-15): `$1300` of
    drift booked to `equity:cta:loss`.
 
-The `[…]` brackets mark the postings as **bracket-virtual**:
-virtual (automatic, injected) but balance-contributing — so the
-transit account's target sum actually reaches zero while the drift
-is named elsewhere.
+Both legs are **real postings** (not virtual) that sum to zero, so
+each release transaction balances on its own and reloads 1:1 — just
+like the lotter's capital postings. The debit drives the transit
+account's target drift back to zero; the credit names it on the CTA
+account.
 
 ## Reports on CTA
 
@@ -166,28 +167,31 @@ $1800.00     loss
 $1800.00
 ```
 
-## `-R` — hide the automatic labelling
+## `-R` keeps CTA — the postings are real
 
-If you want to see only the flows you typed, without the injected
-adjustments:
+You might expect `-R` (real-only output) to strip the CTA adjustment.
+It doesn't: `-R` removes only the virtual postings **you wrote** in the
+source — `(account)` paren-virtual and `[account]` bracket-virtual. The
+CTA legs are injected and **real**, so they survive:
 
 ```
 $ acc -f journal.ledger bal -X USD -R
-  $1800.00 assets
-  $1800.00   checking
+  $1800.00 equity
+  $1800.00   cta
+  $1800.00     loss
  $20700.00 expenses
  $20700.00   services
 $-22500.00 income
 $-22500.00   salary
+----------
+         0
 ```
 
-The translator still ran and computed the drift, but `-R` drops
-every virtual posting (paren-virtual realizer labels and
-bracket-virtual translator labels). The `$1800` goes back to
-`assets:checking` as the raw arithmetic product of rate movement.
-
-Use `-R` when you want to audit the "just the transactions I
-entered" view without automated bookkeeping overlaid.
+Identical to the run without `-R` — this journal has no source-written
+virtual postings, and the CTA stays because it is real. To see the raw
+"just the rates I entered" view with the drift back on
+`assets:checking`, simply don't declare the `cta` accounts: the
+translator only runs when both are present.
 
 ## Interaction with `-V` / `--unrealized`
 
