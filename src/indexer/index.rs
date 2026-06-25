@@ -22,6 +22,7 @@ impl Index {
         Self::default()
     }
 
+    /// Total number of `(date, rate)` entries across all commodity pairs.
     pub fn len(&self) -> usize {
         self.prices
             .values()

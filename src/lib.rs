@@ -1,15 +1,16 @@
 //! Pipeline:
 //!
 //! ```text
-//! load:    parser → resolver → booker → indexer ───────────► Journal
-//! enrich:  expander → realizer → lotter → translator         (journal-global)
-//! report:  filter → rebalancer → sorter → commands           (CLI-driven)
+//! load:    parser → resolver → booker → indexer ─────────────────────► Journal
+//! enrich:  expander → realizer → lotter → translator → revaluator      (journal-global)
+//! report:  filter → rebalancer → sorter → commands                     (CLI-driven)
 //! ```
 //!
 //! [`load`] builds a validated `Journal`. [`pipeline::enrich`] runs the
 //! journal-global phases that must see every transaction (realizer and
-//! translator only under `-X`; lotter needs capital accounts). The report
-//! phases are driven by CLI flags and run last, per command.
+//! translator only under `-X`; the revaluator only under `-X` with
+//! `--unrealized`; lotter needs capital accounts). The report phases are
+//! driven by CLI flags and run last, per command.
 
 pub mod booker;
 pub mod commands;

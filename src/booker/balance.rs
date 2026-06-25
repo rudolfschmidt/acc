@@ -338,14 +338,14 @@ mod tests {
 
     #[test]
     fn lot_cost_overrides_at_cost_for_balance() {
-        // ETH -1 {BTC 0.0904} @ BTC 0.0907 + BTC 0.0907 + in:trade BTC -0.0003.
+        // ETH -1 {BTC 0.0904} @ BTC 0.0907 + BTC 0.0907 + equity:rounding BTC -0.0003.
         // Booker must use the lot cost (0.0904) for the ETH-side, so
         // sum = -0.0904 + 0.0907 + (-0.0003) = 0. Without lot-cost
         // priority it would use @-cost (0.0907) and report residual.
         let src = "2018-01-18 * sell\n\
                    \tassets:eth  ETH-1 {BTC 0.0904} @ BTC 0.0907\n\
                    \tassets:btc  BTC 0.0907\n\
-                   \tin:trade    BTC -0.0003\n";
+                   \tequity:rounding    BTC -0.0003\n";
         assert!(balance_one(src).is_ok());
     }
 
@@ -355,7 +355,7 @@ mod tests {
         let src = "2018-01-18 * sell\n\
                    \tassets:eth  ETH-1 {=BTC 0.0904} @ BTC 0.0907\n\
                    \tassets:btc  BTC 0.0907\n\
-                   \tin:trade    BTC -0.0003\n";
+                   \tequity:rounding    BTC -0.0003\n";
         assert!(balance_one(src).is_ok());
     }
 

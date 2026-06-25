@@ -55,27 +55,20 @@ pub fn filter(
     related: bool,
     whole_transactions: bool,
 ) -> Journal {
+    // Only `transactions` is transformed; every other field passes
+    // through unchanged, so `..journal` carries them — including any
+    // field added to `Journal` later, with no edit needed here.
+    let transactions = filter_transactions(
+        journal.transactions,
+        patterns,
+        begin,
+        end,
+        related,
+        whole_transactions,
+    );
     Journal {
-        transactions: filter_transactions(
-            journal.transactions,
-            patterns,
-            begin,
-            end,
-            related,
-            whole_transactions,
-        ),
-        prices: journal.prices,
-        fx_realized_gain: journal.fx_realized_gain,
-        fx_realized_loss: journal.fx_realized_loss,
-        cta_gain: journal.cta_gain,
-        cta_loss: journal.cta_loss,
-        capital_gain: journal.capital_gain,
-        capital_loss: journal.capital_loss,
-        fx_unrealized_gain: journal.fx_unrealized_gain,
-        fx_unrealized_loss: journal.fx_unrealized_loss,
-        precisions: journal.precisions,
-        aliases: journal.aliases,
-        auto_rules: journal.auto_rules,
+        transactions,
+        ..journal
     }
 }
 
