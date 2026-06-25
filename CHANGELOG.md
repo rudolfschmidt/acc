@@ -84,9 +84,12 @@ across periods stay comparable.
 `revaluator` phase marks every open foreign balance to the **latest
 available rate**, booking the difference — current value minus historical
 value — to dedicated `fx-unrealized gain` / `fx-unrealized loss`
-accounts. It is one synthetic transaction per revalued balance, dated
-today, that nets to zero: the journal still reloads 1:1 and the report's
-grand total is unchanged (verified — toggling the flag moves no total).
+accounts. It is one synthetic transaction per open `(account,
+commodity)`, its description tagged with the commodity (`unrealized fx
+revaluation $`) so several foreign currencies on one account stay
+distinct, dated today, and nets to zero: the journal still reloads 1:1
+and the report's grand total is unchanged (verified — toggling the flag
+moves no total).
 Opt-in and orthogonal to the default, so without `-V` the realized /
 tax-relevant view is untouched. This is IAS 21 rule 2, separated from
 rule 1 by a flag rather than baked in — in ledger terms the default is

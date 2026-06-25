@@ -107,7 +107,7 @@ pub fn revaluate(
             continue;
         }
         let reval = if diff.is_negative() { accounts.loss } else { accounts.gain };
-        out.push(build_tx(&file, line, reval_date, target, account, reval, diff, precision));
+        out.push(build_tx(&file, line, reval_date, target, account, commodity, reval, diff, precision));
     }
 
     txs.extend(out);
@@ -126,6 +126,7 @@ fn build_tx(
     date: Date,
     target: &str,
     account: &str,
+    commodity: &str,
     reval_account: &str,
     diff: Decimal,
     precision: usize,
@@ -167,7 +168,7 @@ fn build_tx(
             date,
             state: State::Cleared,
             code: None,
-            description: "market revaluation".to_string(),
+            description: format!("unrealized fx revaluation {commodity}"),
             postings: vec![
                 Located { file: file.clone(), line, value: asset },
                 Located { file: file.clone(), line, value: counter },

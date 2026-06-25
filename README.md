@@ -1104,8 +1104,11 @@ rates. You normally look at one or the other, and since each
 revaluation nets to zero, the balances you don't filter in never
 disturb the ones you do.
 
-The revaluation is one synthetic transaction per revalued balance,
-dated today, so the journal still reloads 1:1. It is opt-in and
+The revaluation is one synthetic transaction per open
+`(account, commodity)` — its description carries that commodity
+(`unrealized fx revaluation $`), so several foreign currencies on one
+account stay distinguishable — dated today, so the journal still
+reloads 1:1. It is opt-in and
 orthogonal to the historical default — without `-V` nothing is
 revalued, so the realized / tax-relevant view is untouched: `fx
 realized` and `cta` book **realized** results; `fx-unrealized` is the
