@@ -25,7 +25,7 @@ use std::sync::Arc;
 ///
 /// The returned vec preserves source order. Each entry carries the line
 /// number of its top-level directive. Sub-records (postings, aliases,
-/// fx-gain/loss flags) are folded into the enclosing entry rather than
+/// role gain/loss sub-directives) are folded into the enclosing entry rather than
 /// appearing on their own — this keeps the parser state-less between
 /// lines; the "current block" is simply `entries.last_mut()`.
 ///
@@ -390,7 +390,7 @@ fn extend_block(
                     line,
                     1,
                     "expected a role sub-directive of two or more words, \
-                     e.g. `fx-realized gain`, `cta loss`, or `capital gain`",
+                     e.g. `slippage gain`, `cta loss`, or `capital gain`",
                 ));
             }
             upgrade = Some(Entry::RoleAccount { role, account: std::mem::take(name) });
@@ -1051,11 +1051,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_account_with_fx_gain() {
-        let src = "account Equity:FxGain\n    fx-realized gain\n";
+    fn parse_account_with_slippage_gain() {
+        let src = "account Equity:SlippageGain\n    slippage gain\n";
         let got = parse(src).unwrap();
         assert!(matches!(&got[0].value,
-            Entry::RoleAccount { role, account } if role == "fx-realized gain" && account == "Equity:FxGain"));
+            Entry::RoleAccount { role, account } if role == "slippage gain" && account == "Equity:SlippageGain"));
     }
 
     #[test]

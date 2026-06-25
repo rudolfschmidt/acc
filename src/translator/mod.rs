@@ -1,7 +1,7 @@
 //! Translator phase — book Currency Translation Adjustment (CTA).
 //!
 //! Runs between realizer and filter when the user has declared an
-//! account with `fx translation`. For every (account, native_commodity) pair
+//! account with `cta gain` / `cta loss`. For every (account, native_commodity) pair
 //! whose native amounts sum to zero over the reporting period (a
 //! "transit account"), the phase walks postings chronologically and
 //! converts each to the `-x` target at its lookup rate. When the
@@ -10,7 +10,7 @@
 //! synthetic transaction is emitted at that date:
 //!
 //! ```text
-//! <date> * currency translation adjustment
+//! <date> * commodity translation adjustment
 //!     <transit-account>   -drift TARGET
 //!     <cta-account>       +drift TARGET
 //! ```
@@ -25,7 +25,7 @@
 //! would misrepresent the event. A separate transaction with its
 //! own date and description keeps the audit trail clean.
 //!
-//! CTA and the realizer (fx-realized gain / fx-realized loss) are complementary, not
+//! CTA and the realizer (slippage gain / slippage loss) are complementary, not
 //! mutually exclusive: the realizer books the trade-day deviation
 //! (implied vs market rate) on multi-commodity transactions, while CTA
 //! books the holding-period drift (market-rate movement between inflow
@@ -53,7 +53,7 @@ use crate::parser::transaction::{State, Transaction};
 /// Applies to every pass-through account, single- or multi-commodity:
 /// CTA books the holding-period drift (market-rate movement between
 /// inflow and outflow), which is independent of the realizer's
-/// trade-day fx-realized gain/loss — the two never double-book the same amount.
+/// trade-day slippage gain/loss — the two never double-book the same amount.
 pub fn translate(
     txs: &mut Vec<Located<Transaction>>,
     target: &str,
@@ -90,7 +90,7 @@ fn identify_transit_groups(
     // to exactly zero per (account, commodity) over the journal — money
     // came in and went back out. Both single- and multi-commodity
     // accounts qualify: CTA books only the holding-period drift, which
-    // is a different quantity than the realizer's trade-day fx-realized gain/loss
+    // is a different quantity than the realizer's trade-day slippage gain/loss
     // (proven 2026-06-21), so the two never double-book.
     let mut sums: HashMap<(String, String), Decimal> = HashMap::new();
     for lt in txs {
@@ -178,7 +178,7 @@ fn build_release_tx(
     cta_account: &str,
     precision: usize,
 ) -> Located<Transaction> {
-    let description = "currency translation adjustment".to_string();
+    let description = "commodity translation adjustment".to_string();
     // Real postings (not bracket-virtual): the two legs sum to zero, so
     // the release transaction balances on its own and reloads cleanly —
     // 1:1 copyable, just like the lotter's capital postings. The debit
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(txs.len(), 3);
         let release = txs
             .iter()
-            .find(|lt| lt.value.description == "currency translation adjustment")
+            .find(|lt| lt.value.description == "commodity translation adjustment")
             .expect("release tx missing");
         assert_eq!(release.value.postings.len(), 2);
         // +$11 - $10.50 = +$0.50 drift on checking.
@@ -341,7 +341,7 @@ mod tests {
     fn multi_commodity_pass_through_account_gets_cta() {
         // A pass-through account in a foreign commodity that nets to
         // zero natively must still get its holding-period drift booked,
-        // even though every leg is a multi-commodity trade (fx) — the
+        // even though every leg is a multi-commodity trade (slippage) — the
         // taint exclusion was proven unnecessary (2026-06-21). USD flows
         // in @1.10 and back out @1.05; native sum 0, target drift 0.50.
         let src = "\
@@ -357,7 +357,7 @@ mod tests {
         translate(&mut txs, "EUR", &db, "income:cta", "expenses:cta", 2);
         let release = txs
             .iter()
-            .find(|lt| lt.value.description == "currency translation adjustment")
+            .find(|lt| lt.value.description == "commodity translation adjustment")
             .expect("CTA must fire on a multi-commodity pass-through account");
         // counterparty:partner: -100×1.10 + 100×1.05 = -110 + 105 = -5 drift.
         let debit = &release.value.postings[0].value;

@@ -162,7 +162,7 @@ acc reg ^expenses and not food     # expenses that aren't food
 - `--future` off by default; hides transactions dated after today.
 - `-R` / `--real` — drop every virtual posting (paren and bracket)
   from the output. Keeps the real movements visible without
-  auto-computed fx/cta labels. See [04](04-fx-gain-loss.md) and
+  auto-computed slippage/cta labels. See [04](04-slippage.md) and
   [05](05-cta.md).
 - `-S` / `--sort FIELD` — `date` (default), `amount`, `account`,
   `description`. Prefix with `-` for reverse. Repeat `--sort` for

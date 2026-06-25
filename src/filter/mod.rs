@@ -44,7 +44,7 @@ use crate::parser::transaction::Transaction;
 /// wants — show the complete entry whenever it matches — as opposed
 /// to `reg` / `bal`, which show only the matched postings.
 ///
-/// The non-transaction fields of `Journal` (prices, fx accounts,
+/// The non-transaction fields of `Journal` (prices, role accounts,
 /// precisions) pass through unchanged — they are either global
 /// metadata or derived before the filter runs.
 pub fn filter(

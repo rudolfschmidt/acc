@@ -11,20 +11,20 @@
 //!
 //! 1. **expander**  — apply `= /pattern/` auto-rules; later phases then
 //!    see the fully expanded journal.
-//! 2. **realizer**  — per-transaction fx-realized gain/loss: the trade-day
+//! 2. **realizer**  — per-transaction slippage gain/loss: the trade-day
 //!    execution spread, where each leg's market value diverges from the
 //!    others. Runs on every multi-commodity transaction (buy and sell).
 //! 3. **lotter**    — realized capital gains via FIFO lots: the holding-
 //!    period market move of each disposed lot. Composes with the
 //!    realizer — it books capital (the market move), the realizer books
-//!    fx (the execution spread), so neither double-books the other.
+//!    slippage (the execution spread), so neither double-books the other.
 //! 4. **translator** — currency translation adjustment (CTA) for
 //!    pass-through accounts. Lot-tracked assets enter at their market
 //!    value and leave at that same value as the `{}` cost basis, so they
 //!    net to zero under conversion — CTA sees no drift there.
 //! 5. **revaluator** — opt-in (`-X` with `--unrealized`) mark-to-market of
 //!    every open foreign balance to the latest available rate, booking the
-//!    unrealized FX to the `fx-unrealized` accounts. Off by default, so the
+//!    unrealized revaluation to the `holding` accounts. Off by default, so the
 //!    historical (realized) view is untouched.
 //!
 //! `rebalance`, `filter` and `sort` are deliberately *not* here. They are
@@ -46,13 +46,13 @@ use crate::loader::Journal;
 pub fn enrich(journal: &mut Journal, target: Option<&str>, unrealized: bool) {
     crate::expander::expand(&mut journal.transactions, &journal.auto_rules);
 
-    // The realizer books the per-trade execution spread (fx) on every
+    // The realizer books the per-trade execution spread (slippage) on every
     // multi-commodity transaction; the lotter books the holding-period
     // market move (capital) at each disposal. They compose: the lotter's
     // `{cost}` shifts the disposal leg by the market move, which its own
-    // capital posting offsets, leaving the realizer's fx intact.
+    // capital posting offsets, leaving the realizer's slippage intact.
     if let (Some(t), Some(gain), Some(loss)) =
-        (target, journal.fx_realized_gain.as_deref(), journal.fx_realized_loss.as_deref())
+        (target, journal.slippage_gain.as_deref(), journal.slippage_loss.as_deref())
     {
         crate::realizer::realize(
             &mut journal.transactions,
@@ -95,14 +95,14 @@ pub fn enrich(journal: &mut Journal, target: Option<&str>, unrealized: bool) {
     }
 
     // `--unrealized`: mark open foreign positions to the latest available
-    // rate, booking the unrealized FX to the `fx-unrealized` accounts.
+    // rate, booking the unrealized revaluation to the `holding` accounts.
     // Opt-in and separate from the historical default, so the realized
     // (default) view stays unchanged.
     if let (Some(t), true, Some(rg), Some(rl)) = (
         target,
         unrealized,
-        journal.fx_unrealized_gain.as_deref(),
-        journal.fx_unrealized_loss.as_deref(),
+        journal.holding_gain.as_deref(),
+        journal.holding_loss.as_deref(),
     ) {
         let precision = journal.precisions.get(t).copied().unwrap_or(2);
         crate::revaluator::revaluate(

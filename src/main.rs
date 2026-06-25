@@ -10,7 +10,7 @@ use clap::{Args as ClapArgs, Parser, Subcommand};
 struct Args {
     /// Print version and exit. Lower-case `-v` — upper-case `-V` is taken
     /// by `--unrealized` (reusing the `-V` letter ledger spends on market
-    /// valuation, here for acc's opt-in unrealized-FX revaluation).
+    /// valuation, here for acc's opt-in unrealized revaluation).
     #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
     version: Option<bool>,
 
@@ -58,7 +58,7 @@ struct ReportArgs {
     /// Show real postings only — drop every virtual posting
     /// (paren-virtual `(account)` and bracket-virtual `[account]`)
     /// from the output. The realizer, lotter and translator inject
-    /// *real* postings (fx-realized gain/loss, capital gain/loss, currency
+    /// *real* postings (slippage gain/loss, capital gain/loss, currency
     /// translation adjustment), so `-R` keeps those; it only removes
     /// the `(…)`/`[…]` virtual postings written in the source journal.
     #[arg(short = 'R', long = "real")]
@@ -90,17 +90,17 @@ struct ReportArgs {
     #[arg(short = 'X', long = "exchange", value_name = "COMMODITY")]
     exchange: Option<String>,
 
-    /// Show unrealized FX: revalue open foreign-currency balances at the
+    /// Show unrealized revaluation: revalue open foreign-currency balances at the
     /// latest available exchange rate, instead of the historical
     /// per-posting valuation. Revalues every open foreign balance (scope
     /// with a filter); off by default — the default stays historical
     /// (realized only). Only meaningful together with `-X`, and requires
-    /// `fx-unrealized gain` / `fx-unrealized loss` accounts to be declared.
+    /// `holding gain` / `holding loss` accounts to be declared.
     #[arg(short = 'V', long = "unrealized")]
     unrealized: bool,
 
     /// Keep only transactions whose balance-contributing postings use
-    /// at least N distinct commodities (paren-virtual fx labels are
+    /// at least N distinct commodities (paren-virtual slippage labels are
     /// ignored). Counts native commodities — applied before `-X`
     /// conversion. `--commodities 2` finds every currency-mixing
     /// transaction; `3` those mixing at least three.
@@ -782,7 +782,7 @@ fn start() -> Result<(), acc::Error> {
     }
 
     // `-R` / `--real`: drop every virtual posting from the output.
-    // Realizer/lotter/translator injections (fx-realized gain/loss, capital
+    // Realizer/lotter/translator injections (slippage gain/loss, capital
     // gain/loss, CTA) are real postings, so they survive `-R`; this
     // only removes the `(…)`/`[…]` virtual postings from the source.
     let real = filter_args.map(|f| f.real).unwrap_or(false);

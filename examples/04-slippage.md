@@ -1,4 +1,4 @@
-# 04 — Realised FX gain / loss
+# 04 — Realised slippage gain / loss
 
 Multi-commodity transactions — where you trade one commodity for
 another — happen at the **implied rate** of the transaction (the
@@ -6,7 +6,7 @@ ratio of the two amounts). If that implied rate differs from the
 market rate at the same date, you realised a gain or a loss.
 
 acc's **realizer** phase books this automatically, **when the
-journal declares both `fx-realized gain` and `fx-realized loss` accounts** and `-X`
+journal declares both `slippage gain` and `slippage loss` accounts** and `-X`
 is set.
 
 ## Setup
@@ -17,10 +17,10 @@ commodity $
 commodity €
     alias EUR
 
-account income:fxgain
-    fx-realized gain
-account expenses:fxloss
-    fx-realized loss
+account income:slippage
+    slippage gain
+account expenses:slippage
+    slippage loss
 
 P 2024-06-15 USD EUR 0.90
 P 2024-12-15 USD EUR 0.92
@@ -49,32 +49,32 @@ $ acc -f journal.ledger bal -X €
  €420.00   eur
 €-403.20   usd
    €3.20 expenses
-   €3.20   fxloss
+   €3.20   slippage
  €-20.00 income
- €-20.00   fxgain
+ €-20.00   slippage
 --------
        0
 ```
 
-Balanced. `€-20.00` on `income:fxgain` (a credit, representing a
-realised gain) and `€3.20` on `expenses:fxloss` (a debit,
+Balanced. `€-20.00` on `income:slippage` (a credit, representing a
+realised gain) and `€3.20` on `expenses:slippage` (a debit,
 realised loss). Total effect: `€16.80` of real value captured, now
 sitting on `assets:eur` / `assets:usd`.
 
-## Register view — the injected fx postings
+## Register view — the injected slippage postings
 
 ```
 $ acc -f journal.ledger reg -X €
 2024-06-15 * sold USD for EUR at favourabl…  assets:usd       €-900.00  €-900.00
                                              assets:eur        €920.00    €20.00
-                                             income:fxgain     €-20.00         0
+                                             income:slippage     €-20.00         0
 2024-12-15 * sold EUR for USD below market   assets:eur       €-500.00  €-500.00
                                              assets:usd        €496.80    €-3.20
-                                             expenses:fxloss     €3.20         0
+                                             expenses:slippage     €3.20         0
 ```
 
 The realizer adds a **real** third posting per trade:
-`income:fxgain` or `expenses:fxloss`. Under historical conversion the
+`income:slippage` or `expenses:slippage`. Under historical conversion the
 two traded legs don't balance in EUR — that's the whole point, the
 implied rate diverged from market — so the injected posting absorbs
 the difference, naming *what* the residual is and *where* it belongs
@@ -83,11 +83,11 @@ while leaving the transaction balanced and reloadable 1:1.
 ## Just the gain/loss view
 
 ```
-$ acc -f journal.ledger bal income:fxgain expenses:fxloss -X €
+$ acc -f journal.ledger bal income:slippage expenses:slippage -X €
   €3.20 expenses
-  €3.20   fxloss
+  €3.20   slippage
 €-20.00 income
-€-20.00   fxgain
+€-20.00   slippage
 -------
 €-16.80
 ```
@@ -96,7 +96,7 @@ Combined P&L impact from foreign exchange trading.
 
 ## When the realizer runs
 
-- Both `fx-realized gain` **and** `fx-realized loss` accounts must be declared.
+- Both `slippage gain` **and** `slippage loss` accounts must be declared.
 - `-X TARGET` must be set.
 - The transaction must have ≥2 distinct commodities.
 - Market rate for every posting's commodity pair must be
@@ -111,7 +111,7 @@ Different events:
 
 | Scenario | Handled by | Mechanism |
 |----------|------------|-----------|
-| Multi-commodity trade where implied rate ≠ market rate | Realizer (`fx-realized gain` / `fx-realized loss`) | Paren-virtual posting labels the per-tx gain/loss |
+| Multi-commodity trade where implied rate ≠ market rate | Realizer (`slippage gain` / `slippage loss`) | Paren-virtual posting labels the per-tx gain/loss |
 | Single-commodity transit: money in at one rate, out at another | Translator ([05-cta.md](05-cta.md)) — `cta gain` / `cta loss` | Synthetic adjustment tx with bracket-virtual postings |
 
 They never co-fire. acc's translator excludes any account+commodity

@@ -112,7 +112,7 @@ differently in the opposite direction.
 
 The default values every posting historically. `-V` adds the
 report-date view: open foreign balances are revalued at the **latest
-available rate**, the difference booked to `fx-unrealized` accounts
+available rate**, the difference booked to `holding` accounts
 (declared above). Scope to what you want to value — here the asset
 side:
 
