@@ -28,12 +28,12 @@ use acc::parser::transaction::Transaction;
 /// The full real-mode account set: capital, fx and CTA all declared —
 /// the configuration the new model is built for.
 const ACCOUNTS: &str = "\
-    account in:cap\n    capital gain\n\
-    account ex:cap\n    capital loss\n\
-    account in:fx\n    fx-realized gain\n\
-    account ex:fx\n    fx-realized loss\n\
-    account in:cta\n    cta gain\n\
-    account ex:cta\n    cta loss\n";
+    account income:cap\n    capital gain\n\
+    account expenses:cap\n    capital loss\n\
+    account income:fx\n    fx-realized gain\n\
+    account expenses:fx\n    fx-realized loss\n\
+    account income:cta\n    cta gain\n\
+    account expenses:cta\n    cta loss\n";
 
 fn dec(s: &str) -> Decimal {
     Decimal::parse(s).unwrap()
@@ -41,17 +41,17 @@ fn dec(s: &str) -> Decimal {
 
 /// Net capital booked (income negative, expense positive).
 fn capital(txs: &[Located<Transaction>]) -> Decimal {
-    common::balance(txs, "in:cap", "EUR") + common::balance(txs, "ex:cap", "EUR")
+    common::balance(txs, "income:cap", "EUR") + common::balance(txs, "expenses:cap", "EUR")
 }
 
 /// Net fx booked.
 fn fx(txs: &[Located<Transaction>]) -> Decimal {
-    common::balance(txs, "in:fx", "EUR") + common::balance(txs, "ex:fx", "EUR")
+    common::balance(txs, "income:fx", "EUR") + common::balance(txs, "expenses:fx", "EUR")
 }
 
 /// Net CTA booked.
 fn cta(txs: &[Located<Transaction>]) -> Decimal {
-    common::balance(txs, "in:cta", "EUR") + common::balance(txs, "ex:cta", "EUR")
+    common::balance(txs, "income:cta", "EUR") + common::balance(txs, "expenses:cta", "EUR")
 }
 
 // ─── capital = the market move ────────────────────────────────────────
@@ -94,8 +94,8 @@ fn market_loss_routes_to_loss_account() {
          \tassets:cash   30000 EUR\n"
     );
     let txs = common::run_x(&src, "EUR");
-    assert_eq!(common::balance(&txs, "ex:cap", "EUR"), dec("20000"));
-    assert_eq!(common::balance(&txs, "in:cap", "EUR"), Decimal::zero());
+    assert_eq!(common::balance(&txs, "expenses:cap", "EUR"), dec("20000"));
+    assert_eq!(common::balance(&txs, "income:cap", "EUR"), Decimal::zero());
     assert_eq!(common::balance(&txs, "assets:btc", "EUR"), Decimal::zero());
 }
 
@@ -183,13 +183,13 @@ fn same_commodity_transfer_is_cta_not_capital() {
          P 2024-06-01 USD EUR 0.85\n\
          2024-01-01 * fund\n\
          \tassets:src  -100 USD\n\
-         \tcp:t         100 USD\n\
+         \tcounterparty:t         100 USD\n\
          2024-06-01 * out\n\
-         \tcp:t        -100 USD\n\
+         \tcounterparty:t        -100 USD\n\
          \texpenses:s   100 USD\n"
     );
     let txs = common::run_x(&src, "EUR");
-    assert_eq!(common::balance(&txs, "cp:t", "EUR"), Decimal::zero());
+    assert_eq!(common::balance(&txs, "counterparty:t", "EUR"), Decimal::zero());
     assert_eq!(capital(&txs), Decimal::zero(), "no trade → no capital");
     assert_eq!(fx(&txs), Decimal::zero(), "no trade → no fx");
     assert_ne!(cta(&txs), Decimal::zero(), "held USD across a rate move → CTA");
@@ -211,5 +211,5 @@ fn native_capital_gain_no_conversion() {
          \tassets:cash   50000 USD\n"
     );
     let txs = common::run_native(&src);
-    assert_eq!(common::balance(&txs, "in:cap", "USD"), dec("-20000"));
+    assert_eq!(common::balance(&txs, "income:cap", "USD"), dec("-20000"));
 }

@@ -66,8 +66,8 @@ struct ReportArgs {
 
     /// Related postings. With a pattern filter, show the *other*
     /// postings of the matched transactions — the counter-parties —
-    /// instead of the matched postings themselves. `acc reg ^ex:cta
-    /// -r` shows which accounts balance against ex:cta in each
+    /// instead of the matched postings themselves. `acc reg ^expenses:cta
+    /// -r` shows which accounts balance against expenses:cta in each
     /// transaction.
     #[arg(short = 'r', long = "related")]
     related: bool,

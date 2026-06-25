@@ -186,11 +186,11 @@ mod tests {
             \tassets:usd  -100 USD\n\
             \tassets:eur   92 EUR\n";
         let (mut txs, db) = build(src);
-        realize(&mut txs, "EUR", &db, &HashMap::new(), "in:gain", "ex:loss");
+        realize(&mut txs, "EUR", &db, &HashMap::new(), "income:gain", "expenses:loss");
         let posted = &txs[0].value.postings;
         assert_eq!(posted.len(), 3);
         let injected = &posted[2].value;
-        assert_eq!(injected.account, "in:gain");
+        assert_eq!(injected.account, "income:gain");
         let amt = injected.amount.as_ref().unwrap();
         assert_eq!(amt.commodity, "EUR");
         // 100 × 0.90 = 90, +92 = +2 delta → credit income -2.
@@ -205,9 +205,9 @@ mod tests {
             \tassets:usd  -100 USD\n\
             \tassets:eur   88 EUR\n";
         let (mut txs, db) = build(src);
-        realize(&mut txs, "EUR", &db, &HashMap::new(), "in:gain", "ex:loss");
+        realize(&mut txs, "EUR", &db, &HashMap::new(), "income:gain", "expenses:loss");
         let injected = &txs[0].value.postings[2].value;
-        assert_eq!(injected.account, "ex:loss");
+        assert_eq!(injected.account, "expenses:loss");
         assert_eq!(injected.amount.as_ref().unwrap().value, Decimal::from(2));
     }
 
@@ -218,7 +218,7 @@ mod tests {
             \texpenses:food  -5 EUR\n\
             \tassets:cash     5 EUR\n";
         let (mut txs, db) = build(src);
-        realize(&mut txs, "EUR", &db, &HashMap::new(), "in:gain", "ex:loss");
+        realize(&mut txs, "EUR", &db, &HashMap::new(), "income:gain", "expenses:loss");
         assert_eq!(txs[0].value.postings.len(), 2);
     }
 
@@ -229,7 +229,7 @@ mod tests {
             \tassets:usd  -100 USD\n\
             \tassets:eur    92 EUR\n";
         let (mut txs, db) = build(src);
-        realize(&mut txs, "EUR", &db, &HashMap::new(), "in:gain", "ex:loss");
+        realize(&mut txs, "EUR", &db, &HashMap::new(), "income:gain", "expenses:loss");
         assert_eq!(txs[0].value.postings.len(), 2);
     }
 
@@ -244,7 +244,7 @@ mod tests {
         let (mut txs, db) = build(src);
         let mut precs = HashMap::new();
         precs.insert("EUR".to_string(), 2);
-        realize(&mut txs, "EUR", &db, &precs, "in:gain", "ex:loss");
+        realize(&mut txs, "EUR", &db, &precs, "income:gain", "expenses:loss");
         assert_eq!(txs[0].value.postings.len(), 2);
     }
 
@@ -264,7 +264,7 @@ mod tests {
             \tassets:cash   $50000\n\
             \tincome:gain   $-20000\n";
         let (mut txs, db) = build(src);
-        realize(&mut txs, "$", &db, &HashMap::new(), "in:gain", "ex:loss");
+        realize(&mut txs, "$", &db, &HashMap::new(), "income:gain", "expenses:loss");
         // No fx posting injected — the three source postings are untouched.
         assert_eq!(txs[0].value.postings.len(), 3);
     }

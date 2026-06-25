@@ -84,11 +84,11 @@ mod tests {
         let src = "\
             = /^assets:cash/\n\
             \t[assets:cash]  -1\n\
-            \t[ex:cash]       1\n\
+            \t[expenses:cash]       1\n\
             \n\
             2024-06-15 * coffee\n\
             \tassets:cash   $5\n\
-            \tex:food       $-5\n";
+            \texpenses:food       $-5\n";
         let (mut transactions, rules) = setup(src);
         expand(&mut transactions, &rules);
 
@@ -102,7 +102,7 @@ mod tests {
             crate::decimal::Decimal::from(-5)
         );
         let ex_cash = &tx.postings[3].value;
-        assert_eq!(ex_cash.account, "ex:cash");
+        assert_eq!(ex_cash.account, "expenses:cash");
         assert_eq!(
             ex_cash.amount.as_ref().unwrap().value,
             crate::decimal::Decimal::from(5)
@@ -114,7 +114,7 @@ mod tests {
         let src = "\
             = /^assets:cash/\n\
             \t[assets:cash]  -1\n\
-            \t[ex:cash]       1\n\
+            \t[expenses:cash]       1\n\
             \n\
             2024-06-15 * rent\n\
             \tassets:bank   $-1000\n\
@@ -129,22 +129,22 @@ mod tests {
     fn fractional_multiplier_vat_split() {
         // Gross income split 19% / 81%.
         let src = "\
-            = /^in:gross/\n\
-            \t[in:gross]  -1\n\
+            = /^income:gross/\n\
+            \t[income:gross]  -1\n\
             \t[liabilities:vat]  0.19\n\
             \t[income:net]    0.81\n\
             \n\
             2024-06-15 * invoice\n\
-            \tin:gross    $-1000\n\
-            \tas:bank      $1000\n";
+            \tincome:gross    $-1000\n\
+            \tassets:bank      $1000\n";
         let (mut transactions, rules) = setup(src);
         expand(&mut transactions, &rules);
         let tx = &transactions[0].value;
         // Original 2 + injected 3 = 5.
         assert_eq!(tx.postings.len(), 5);
-        // `in:gross -1000 * -1 = 1000` back on in:gross.
+        // `income:gross -1000 * -1 = 1000` back on income:gross.
         let flush = &tx.postings[2].value;
-        assert_eq!(flush.account, "in:gross");
+        assert_eq!(flush.account, "income:gross");
         assert_eq!(
             flush.amount.as_ref().unwrap().value,
             crate::decimal::Decimal::from(1000)
@@ -168,16 +168,16 @@ mod tests {
     #[test]
     fn auto_postings_do_not_retrigger_in_same_tx() {
         // Rule matches any posting containing "cash". Without the
-        // snapshot, the injected `[ex:cash]` posting would re-match
+        // snapshot, the injected `[expenses:cash]` posting would re-match
         // and blow up. The expander must only scan original postings.
         let src = "\
             = /cash/\n\
             \t[assets:cash]  -1\n\
-            \t[ex:cash]       1\n\
+            \t[expenses:cash]       1\n\
             \n\
             2024-06-15 * coffee\n\
             \tassets:cash   $5\n\
-            \tex:food       $-5\n";
+            \texpenses:food       $-5\n";
         let (mut transactions, rules) = setup(src);
         expand(&mut transactions, &rules);
         // Only one expansion — 2 original + 2 injected = 4. Not

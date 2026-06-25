@@ -109,9 +109,9 @@ fn rebalance_lot_posting_converts_via_cost_weight() {
 #[test]
 fn cta_labels_transit_drift_on_declared_account() {
     let mut j = common::load(
-        "account in:cta\n\
+        "account income:cta\n\
          \tcta gain\n\
-         account ex:cta\n\
+         account expenses:cta\n\
          \tcta loss\n\
          P 2024-01-15 EUR USD 1.10\n\
          P 2024-06-15 EUR USD 1.05\n\
@@ -126,14 +126,14 @@ fn cta_labels_transit_drift_on_declared_account() {
          \texpenses:food         10 EUR\n\
          \tassets:savings       -10 EUR\n",
     );
-    assert_eq!(j.cta_gain.as_deref(), Some("in:cta"));
-    assert_eq!(j.cta_loss.as_deref(), Some("ex:cta"));
+    assert_eq!(j.cta_gain.as_deref(), Some("income:cta"));
+    assert_eq!(j.cta_loss.as_deref(), Some("expenses:cta"));
     acc::translator::translate(
         &mut j.transactions,
         "USD",
         &j.prices,
-        "in:cta",
-        "ex:cta",
+        "income:cta",
+        "expenses:cta",
         2,
     );
     acc::rebalancer::rebalance(&mut j.transactions, "USD", &j.prices);
@@ -142,7 +142,7 @@ fn cta_labels_transit_drift_on_declared_account() {
     let mut cta_sum = Decimal::zero();
     for lt in &j.transactions {
         for lp in &lt.value.postings {
-            if lp.value.account != "in:cta" && lp.value.account != "ex:cta" {
+            if lp.value.account != "income:cta" && lp.value.account != "expenses:cta" {
                 continue;
             }
             if let Some(a) = &lp.value.amount {

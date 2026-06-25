@@ -193,7 +193,7 @@ mod tests {
     }
 
     fn accounts() -> RevaluationAccounts<'static> {
-        RevaluationAccounts { gain: "in:reval", loss: "ex:reval" }
+        RevaluationAccounts { gain: "income:reval", loss: "expenses:reval" }
     }
 
     /// Sum of `account`'s `commodity` postings across the journal.
@@ -234,7 +234,7 @@ mod tests {
         // The revaluation posting itself (target currency) on assets:usd.
         assert_eq!(balance(&txs, "assets:usd", "EUR"), Decimal::parse("150").unwrap());
         // Gain booked (income, negative).
-        assert_eq!(balance(&txs, "in:reval", "EUR"), Decimal::parse("-150").unwrap());
+        assert_eq!(balance(&txs, "income:reval", "EUR"), Decimal::parse("-150").unwrap());
         // Native USD untouched.
         assert_eq!(balance(&txs, "assets:usd", "USD"), Decimal::parse("100").unwrap());
     }

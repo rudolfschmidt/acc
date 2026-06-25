@@ -386,15 +386,15 @@ mod tests {
 
     #[test]
     fn resolves_role_account_references() {
-        let src = "account in:cap:market\n    capital gain\n\
-                   account ex:cap:market\n    capital loss\n\
-                   account in:cap:cta\n    cta gain\n\
+        let src = "account income:cap:market\n    capital gain\n\
+                   account expenses:cap:market\n    capital loss\n\
+                   account income:cap:cta\n    cta gain\n\
                    2024-06-15 * sell\n    assets:eth  -6 EUR\n    $capital:gain  2 EUR\n    $capital:loss  2 EUR\n    $cta:gain  2 EUR\n";
         let out = resolve(parsed(src)).unwrap();
         let acct = |i: usize| out.transactions[0].value.postings[i].value.account.as_str();
-        assert_eq!(acct(1), "in:cap:market"); // $capital:gain
-        assert_eq!(acct(2), "ex:cap:market"); // $capital:loss
-        assert_eq!(acct(3), "in:cap:cta"); // $cta:gain
+        assert_eq!(acct(1), "income:cap:market"); // $capital:gain
+        assert_eq!(acct(2), "expenses:cap:market"); // $capital:loss
+        assert_eq!(acct(3), "income:cap:cta"); // $cta:gain
     }
 
     #[test]
@@ -403,7 +403,7 @@ mod tests {
         // typo) is left verbatim, not an error — so `acc format` can
         // round-trip a single file without the central config. `acc check`
         // is what flags the leftover `$…` account.
-        let src = "account in:cap\n    capital gain\n\
+        let src = "account income:cap\n    capital gain\n\
                    2024-06-15 * x\n    a  -2 EUR\n    $fx:gain  1 EUR\n    $captial:gain  1 EUR\n";
         let out = resolve(parsed(src)).unwrap();
         let acct = |i: usize| out.transactions[0].value.postings[i].value.account.as_str();
