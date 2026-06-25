@@ -265,7 +265,7 @@ mod tests {
             \texpenses:food     10 EUR\n\
             \tassets:checking  -10 EUR\n";
         let (mut txs, db) = setup(src);
-        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
 
         // Three txs now: 2 originals + 1 synthetic release.
         assert_eq!(txs.len(), 3);
@@ -285,7 +285,7 @@ mod tests {
         // EUR weakened 1.10→1.05 during the holding period; the
         // transit held less target-value at outflow than inflow, so
         // the positive running drift routes to the loss account.
-        assert_eq!(credit.account, "ex:cta");
+        assert_eq!(credit.account, "expenses:cta");
         assert_eq!(
             credit.amount.as_ref().unwrap().value,
             Decimal::parse("0.50").unwrap()
@@ -301,7 +301,7 @@ mod tests {
             \tincome:salary    -10 EUR\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
         assert_eq!(txs.len(), original);
     }
 
@@ -318,7 +318,7 @@ mod tests {
             \tassets:checking  -10 EUR\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
         assert_eq!(txs.len(), original);
     }
 
@@ -333,7 +333,7 @@ mod tests {
             \tassets:checking  -10 EUR\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
         assert_eq!(txs.len(), original);
     }
 
@@ -348,20 +348,20 @@ mod tests {
             P 2024-01-15 USD EUR 1.10\n\
             P 2024-06-15 USD EUR 1.05\n\
             2024-01-15 * in\n\
-            \tcp:partner    -100 USD\n\
+            \tcounterparty:partner    -100 USD\n\
             \tincome:sales   110 EUR\n\
             2024-06-15 * out\n\
-            \tcp:partner     100 USD\n\
+            \tcounterparty:partner     100 USD\n\
             \tassets:bank   -105 EUR\n";
         let (mut txs, db) = setup(src);
-        translate(&mut txs, "EUR", &db, "in:cta", "ex:cta", 2);
+        translate(&mut txs, "EUR", &db, "income:cta", "expenses:cta", 2);
         let release = txs
             .iter()
             .find(|lt| lt.value.description == "currency translation adjustment")
             .expect("CTA must fire on a multi-commodity pass-through account");
-        // cp:partner: -100×1.10 + 100×1.05 = -110 + 105 = -5 drift.
+        // counterparty:partner: -100×1.10 + 100×1.05 = -110 + 105 = -5 drift.
         let debit = &release.value.postings[0].value;
-        assert_eq!(debit.account, "cp:partner");
+        assert_eq!(debit.account, "counterparty:partner");
         assert_eq!(
             debit.amount.as_ref().unwrap().value,
             Decimal::parse("5").unwrap()

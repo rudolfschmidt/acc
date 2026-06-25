@@ -943,7 +943,7 @@ The flag was added with semantics taken directly from ledger-cli:
 when a pattern filter would have dropped every non-matching
 posting, `-r` flips the filter to keep the **sibling** postings of
 the matched transactions instead — the counter-parties, the other
-half of each trade. `acc reg ^ex:cta -r` answers "what accounts
+half of each trade. `acc reg ^expenses:cta -r` answers "what accounts
 did the CTA drift balance against in each adjustment" without
 having to stare at full transactions.
 

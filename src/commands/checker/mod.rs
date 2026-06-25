@@ -239,7 +239,7 @@ mod tests {
     fn role_refs_accept_resolved() {
         // Declared → the reference resolves before check ever sees it.
         let txs = setup(
-            "account in:cap\n    capital gain\n\
+            "account income:cap\n    capital gain\n\
              2024-01-01 * x\n\
              \tassets:a       -1 EUR\n\
              \t$capital:gain   1 EUR\n",

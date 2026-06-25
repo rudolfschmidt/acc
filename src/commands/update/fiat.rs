@@ -167,7 +167,7 @@ mod tests {
             "timestamp": 1609459200,
             "base": "USD",
             "rates": {
-                "AED": 3.673,
+                "AUD": 1.532,
                 "EUR": 0.816,
                 "CHF": 0.89
             }
@@ -175,7 +175,7 @@ mod tests {
         let r = parse_response(body).unwrap();
         assert_eq!(r.len(), 3);
         // sorted alphabetically
-        assert_eq!(r[0].0, "AED");
+        assert_eq!(r[0].0, "AUD");
         assert_eq!(r[1].0, "CHF");
         assert_eq!(r[2].0, "EUR");
     }

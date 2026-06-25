@@ -461,8 +461,8 @@ fn extract_posting_parts(source_line: &str) -> PostingParts {
 }
 
 /// Glue the commodity symbol directly onto the number, dropping
-/// any whitespace between them. Turns `DZD -90000.00` into
-/// `DZD-90000.00` and leaves `DZD-20000.00` / `$5.00` untouched.
+/// any whitespace between them. Turns `USD -1200.00` into
+/// `USD-1200.00` and leaves `USD-300.00` / `$5.00` untouched.
 /// Only touches leading-commodity amounts; trailing-commodity form
 /// like `100 EUR` stays as-is.
 fn normalise_commodity_glue(s: &str) -> String {

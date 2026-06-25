@@ -115,7 +115,7 @@ fn collect_pairs(old: &Path, new: &Path) -> Result<Vec<FilePair>, Error> {
 /// Algorithm per working path:
 /// 1. Resolve to absolute path.
 /// 2. Walk the path components from right to left, joining them as
-///    a suffix (`ccp.ledger`, `@cash/ccp.ledger`, …).
+///    a suffix (`cash.ledger`, `2024/cash.ledger`, …).
 /// 3. The **longest** suffix for which `snapshot_root/suffix` exists
 ///    on disk wins.
 /// 4. If nothing matches → error listing what was searched.
@@ -247,8 +247,8 @@ fn index_dir(root: &Path) -> BTreeMap<PathBuf, PathBuf> {
 // ---------------------------------------------------------------------
 
 /// Strip every whitespace character before comparing — matches
-/// `diff -w` (`--ignore-all-space`) exactly. `DZD -20000.00` and
-/// `DZD-20000.00` compare equal, so only genuine token content
+/// `diff -w` (`--ignore-all-space`) exactly. `USD -1200.00` and
+/// `USD-1200.00` compare equal, so only genuine token content
 /// differences surface.
 fn normalise(line: &str) -> String {
     line.chars().filter(|c| !c.is_whitespace()).collect()
