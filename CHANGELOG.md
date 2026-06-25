@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.11.0 — 2026-06-25
+
+### Thu 25 Jun 2026 - commodity-neutral role names: slippage / holding / cta
+
+**Breaking.** The role-account keywords are renamed so they hold for any
+commodity, not just fiat currency:
+
+- `fx-realized gain` / `fx-realized loss` → **`slippage gain` / `slippage loss`**
+- `fx-unrealized gain` / `fx-unrealized loss` → **`holding gain` / `holding loss`**
+- `capital` and `cta` are unchanged.
+
+Journals declaring the old keys must rename them; nothing else changes.
+
+The reason is correctness, not taste. "fx" means *foreign exchange* — the
+exchange of government currencies (IAS 21 / ASC 830). But acc values any
+commodity, and a crypto asset is **not** a foreign currency: every
+standard classifies it as property / an intangible asset (IFRS IC 2019 →
+IAS 38, IRS Notice 2014-21, German BMF 2022), so a gain on a crypto trade
+is a capital / asset result, never an FX one. Labelling it `fx` mis-files
+it.
+
+The replacement names are the asset-world terms — which also subsume
+fiat, so nothing is lost:
+
+- **slippage** (the realizer) — the per-trade execution spread: the gap
+  between your booked rate and the market reference, realised on the
+  trade. The standard term (Perold's *implementation shortfall*); applies
+  to crypto and FX alike.
+- **holding** (the revaluator) — the unrealised mark-to-market of an open
+  position. "Unrealised holding gain" is the GAAP account name (FAS 115 /
+  ASC 820) for exactly this.
+- **cta** stays — but reframed as **Commodity** Translation Adjustment
+  rather than Currency: the translator's synthetic-transaction title goes
+  from `currency translation adjustment` to **`commodity translation
+  adjustment`**, so the C is no longer fiat-bound.
+
+The revaluator's per-commodity title drops the misnomer too:
+`unrealized fx revaluation $` → **`holding revaluation $`**.
+
+Internally the sweep is total: every "fx" concept reference in source
+comments, tests, and the worked examples is now "slippage", and the
+`04-fx-gain-loss` example is renamed `04-slippage`. `capital` was already
+the right word; only the two fx pairs and the CTA framing moved.
+
 ## 0.10.2 — 2026-06-25
 
 ### Thu 25 Jun 2026 - HTTPS backend: native-tls instead of rustls

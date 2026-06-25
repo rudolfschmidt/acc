@@ -6,7 +6,7 @@
 //!
 //! - commodity aliases are applied to every Price and every Posting
 //!   Amount slot (amount, costs, balance_assertion);
-//! - `fx-realized gain`/`fx-realized loss`, `cta gain`/`cta loss` and
+//! - `slippage gain`/`slippage loss`, `cta gain`/`cta loss` and
 //!   `capital gain`/`capital loss` account declarations are extracted;
 //! - transactions and prices are split into separate, date-sorted vecs;
 //! - all other entries (Commodity/Account scaffolds, Comment) are
@@ -34,18 +34,18 @@ pub use error::ResolveError;
 pub struct Resolved {
     pub transactions: Vec<Located<Transaction>>,
     pub prices: Vec<Located<Price>>,
-    pub fx_realized_gain: Option<String>,
-    pub fx_realized_loss: Option<String>,
+    pub slippage_gain: Option<String>,
+    pub slippage_loss: Option<String>,
     pub cta_gain: Option<String>,
     pub cta_loss: Option<String>,
     /// Declared via `account NAME / capital gain` / `capital loss`.
     /// Both must be present for the lot/capital-gains phase to run.
     pub capital_gain: Option<String>,
     pub capital_loss: Option<String>,
-    /// Declared via `account NAME / fx-unrealized gain` / `fx-unrealized
+    /// Declared via `account NAME / holding gain` / `holding
     /// loss`. Both must be present for the `--unrealized` revaluator to run.
-    pub fx_unrealized_gain: Option<String>,
-    pub fx_unrealized_loss: Option<String>,
+    pub holding_gain: Option<String>,
+    pub holding_loss: Option<String>,
     /// Explicit `precision N` values from `commodity` directives.
     /// The loader merges these over the amount-derived `Journal.precisions`
     /// so declared commodities render with exactly N fractional digits,
@@ -69,14 +69,14 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
     // The pipeline phases consume specific roles by name; this is the one
     // place those semantic keys live. Everything else — parsing, conflict
     // checks, `$role:slot` resolution — stays generic over `roles`.
-    let fx_realized_gain = roles.get("fx-realized gain").cloned();
-    let fx_realized_loss = roles.get("fx-realized loss").cloned();
+    let slippage_gain = roles.get("slippage gain").cloned();
+    let slippage_loss = roles.get("slippage loss").cloned();
     let cta_gain = roles.get("cta gain").cloned();
     let cta_loss = roles.get("cta loss").cloned();
     let capital_gain = roles.get("capital gain").cloned();
     let capital_loss = roles.get("capital loss").cloned();
-    let fx_unrealized_gain = roles.get("fx-unrealized gain").cloned();
-    let fx_unrealized_loss = roles.get("fx-unrealized loss").cloned();
+    let holding_gain = roles.get("holding gain").cloned();
+    let holding_loss = roles.get("holding loss").cloned();
 
     // Parallel Arc-based alias table for the Price path. Each alias
     // maps to an interned primary `Arc<str>`; the same interner is
@@ -169,14 +169,14 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
     Ok(Resolved {
         transactions,
         prices,
-        fx_realized_gain,
-        fx_realized_loss,
+        slippage_gain,
+        slippage_loss,
         cta_gain,
         cta_loss,
         capital_gain,
         capital_loss,
-        fx_unrealized_gain,
-        fx_unrealized_loss,
+        holding_gain,
+        holding_loss,
         precisions,
         aliases,
         auto_rules,
@@ -353,11 +353,11 @@ mod tests {
     }
 
     #[test]
-    fn extracts_fx_accounts() {
-        let src = "account Equity:FxGain\n    fx-realized gain\naccount Equity:FxLoss\n    fx-realized loss\n";
+    fn extracts_slippage_accounts() {
+        let src = "account Equity:SlippageGain\n    slippage gain\naccount Equity:SlippageLoss\n    slippage loss\n";
         let out = resolve(parsed(src)).unwrap();
-        assert_eq!(out.fx_realized_gain.as_deref(), Some("Equity:FxGain"));
-        assert_eq!(out.fx_realized_loss.as_deref(), Some("Equity:FxLoss"));
+        assert_eq!(out.slippage_gain.as_deref(), Some("Equity:SlippageGain"));
+        assert_eq!(out.slippage_loss.as_deref(), Some("Equity:SlippageLoss"));
     }
 
     #[test]
@@ -378,10 +378,10 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_fx_gain_error() {
-        let src = "account Equity:A\n    fx-realized gain\naccount Equity:B\n    fx-realized gain\n";
+    fn conflicting_slippage_gain_error() {
+        let src = "account Equity:A\n    slippage gain\naccount Equity:B\n    slippage gain\n";
         let err = resolve(parsed(src)).unwrap_err();
-        assert!(err.message.contains("fx-realized gain"));
+        assert!(err.message.contains("slippage gain"));
     }
 
     #[test]
@@ -399,15 +399,15 @@ mod tests {
 
     #[test]
     fn unresolved_role_reference_passes_through() {
-        // A `$ref` to a role no `account` declares (here `fx-realized gain`, and a
+        // A `$ref` to a role no `account` declares (here `unknown gain`, and a
         // typo) is left verbatim, not an error — so `acc format` can
         // round-trip a single file without the central config. `acc check`
         // is what flags the leftover `$…` account.
         let src = "account income:cap\n    capital gain\n\
-                   2024-06-15 * x\n    a  -2 EUR\n    $fx:gain  1 EUR\n    $captial:gain  1 EUR\n";
+                   2024-06-15 * x\n    a  -2 EUR\n    $unknown:gain  1 EUR\n    $captial:gain  1 EUR\n";
         let out = resolve(parsed(src)).unwrap();
         let acct = |i: usize| out.transactions[0].value.postings[i].value.account.as_str();
-        assert_eq!(acct(1), "$fx:gain");
+        assert_eq!(acct(1), "$unknown:gain");
         assert_eq!(acct(2), "$captial:gain");
     }
 
@@ -417,7 +417,7 @@ mod tests {
         let out = resolve(parsed(src)).unwrap();
         assert!(out.transactions.is_empty());
         assert!(out.prices.is_empty());
-        assert!(out.fx_realized_gain.is_none());
-        assert!(out.fx_realized_loss.is_none());
+        assert!(out.slippage_gain.is_none());
+        assert!(out.slippage_loss.is_none());
     }
 }

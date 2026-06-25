@@ -12,7 +12,7 @@ use super::transaction::Transaction;
 /// Block directives (`commodity`, `account`) carry their indented
 /// sub-directives inline: a `commodity` block folds its `alias` children
 /// into `Commodity.aliases`. An `account` block with an indented role
-/// sub-directive (`fx-realized gain`, `capital loss`, …) is upgraded to a
+/// sub-directive (`slippage gain`, `capital loss`, …) is upgraded to a
 /// `RoleAccount` carrying that role. The parser accumulates these by
 /// mutating the last emitted entry when a new indented line arrives,
 /// which lets it remain state-less between lines.
@@ -41,7 +41,7 @@ pub enum Entry {
     Account(String),
 
     /// Produced when `account NAME` is followed by an indented role
-    /// sub-directive such as `fx-realized gain`, `cta loss`, or `capital gain`.
+    /// sub-directive such as `slippage gain`, `cta loss`, or `capital gain`.
     /// `role` is the directive text verbatim (whitespace-collapsed),
     /// `account` the declared name. The role string is the single source
     /// of truth: the resolver indexes these by role, the pipeline phases

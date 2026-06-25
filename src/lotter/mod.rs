@@ -20,10 +20,10 @@
 //!
 //! The trade-day **execution spread** (where the booked rate diverges
 //! from the market rate — slippage/fees) is *not* the lotter's job: the
-//! [realizer](crate::realizer) books it as `fx` on every multi-commodity
+//! [realizer](crate::realizer) books it as `slippage` on every multi-commodity
 //! transaction, buy and sell. The two compose: the lotter's `{cost}`
 //! shifts the disposal leg by the market move, and its capital posting
-//! offsets that shift exactly, so the realizer's fx stays valid and the
+//! offsets that shift exactly, so the realizer's slippage stays valid and the
 //! transaction still sums to zero.
 //!
 //! ## Without `-X`: the native trade gain
@@ -399,7 +399,7 @@ fn rewrite_tx(
         // commodity (the rebalancer converts it to the target at the
         // disposal date). It balances against the `{}` cost-basis on the
         // asset legs, so the tx still sums to zero. The execution spread
-        // (fx) is booked separately by the realizer — not here.
+        // (slippage) is booked separately by the realizer — not here.
         if !disp.gain.is_display_zero(price_prec) {
             let account = if disp.gain.is_negative() {
                 accounts.capital_loss
@@ -571,7 +571,7 @@ mod tests {
         // Target = USD. The lotter books the *market move* as capital:
         //   48000 − 30000 = 18000.
         // The trade-day spread (booked 29000 vs market 30000 on the buy,
-        // 51000 vs 48000 on the sell) is the realizer's fx — not here.
+        // 51000 vs 48000 on the sell) is the realizer's slippage — not here.
         let src = "\
             P 2024-01-01 BTC USD 30000\n\
             P 2024-06-01 BTC USD 48000\n\

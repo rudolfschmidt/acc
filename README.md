@@ -143,8 +143,8 @@ ledger-aware file / tree comparison); transactions with states,
 codes, arithmetic expressions in amounts, `@` / `@@` cost
 annotations, `{COST}` lot annotations, virtual postings, balance
 assertions and assignments; directives `commodity` (with `alias`,
-`precision`), `account` (with `fx-realized gain` / `fx-realized
-loss` / `fx-unrealized gain` / `fx-unrealized loss` / `cta gain`
+`precision`), `account` (with `slippage gain` / `slippage
+loss` / `holding gain` / `holding loss` / `cta gain`
 / `cta loss` / `capital gain` / `capital loss`), `P`, and
 ledger-style **automated transactions**
 (line-leading `= /pattern/` rules that inject scaled postings
@@ -153,10 +153,10 @@ description / code / commodity plus `-r` sibling-posting view;
 per-posting currency conversion at `tx.date`; multi-hop price
 lookups; **FIFO realised capital gains** (`capital gain` /
 `capital loss`) — the disposed lot's holding-period market move,
-composed under `-X` with the per-trade execution spread on `fx
-realized gain` / `fx-realized loss`; **opt-in mark-to-market**
+composed under `-X` with the per-trade execution spread on `slippage
+gain` / `slippage loss`; **opt-in mark-to-market**
 (`-V` / `--unrealized`) revaluing open foreign balances to the
-latest rate on `fx-unrealized gain` / `fx-unrealized loss`;
+latest rate on `holding gain` / `holding loss`;
 **automatic IAS 21 / ASC 830 translation adjustment** (CTA) for
 same-commodity transit accounts; `-R` real-only output.
 
@@ -190,8 +190,8 @@ multi-currency reporting without distorting historical records.
 | Rule | What the standard says | How acc handles it |
 |------|-----------------------|---------------------|
 | **(1) Income & expense** | Translate at the rate of each transaction (or period average). Must not revalue retroactively — quarterly and annual comparisons would break. | Default: per-posting conversion at `tx.date`. A 2020 expense stays at its 2020 `$`-value forever under `-X $`. |
-| **(2) Monetary balance items** | Cash, receivables, payables are shown at the **current rate** at the report date — what's in the account is worth what it's worth today. | **Opt-in** via `-V` / `--unrealized`: open foreign balances are marked to the latest available rate, the unrealized FX booked to `fx-unrealized`. Off by default — the default values historically (rule 1) and resolves realized transit drift via CTA (rule 3), so period comparisons stay stable. |
-| **(3) Cumulative Translation Adjustment (CTA)** | The difference arising from applying different rates under (1) vs (2) is booked to a dedicated equity account under Other Comprehensive Income. | Implemented: declare `cta gain` / `cta loss` accounts. See [`cta gain` / `cta loss`](#cta-gain--cta-loss--currency-translation-adjustment). |
+| **(2) Monetary balance items** | Cash, receivables, payables are shown at the **current rate** at the report date — what's in the account is worth what it's worth today. | **Opt-in** via `-V` / `--unrealized`: open foreign balances are marked to the latest available rate, the unrealized revaluation booked to `holding`. Off by default — the default values historically (rule 1) and resolves realized transit drift via CTA (rule 3), so period comparisons stay stable. |
+| **(3) Cumulative Translation Adjustment (CTA)** | The difference arising from applying different rates under (1) vs (2) is booked to a dedicated equity account under Other Comprehensive Income. | Implemented: declare `cta gain` / `cta loss` accounts. See [`cta gain` / `cta loss`](#cta-gain--cta-loss--commodity-translation-adjustment). |
 
 ### Why this matters — and how acc differs
 
@@ -211,7 +211,7 @@ of IAS 21. It deliberately does not offer a report-date snapshot
 mode for rule (2); instead `cta gain` / `cta loss` resolves the
 valuation difference on transit accounts to equity under rule (3).
 **acc is the first plaintext-accounting tool that books IFRS IAS 21
-currency translation adjustments automatically** — the other tools
+commodity translation adjustments automatically** — the other tools
 either skip drift by collapsing to a single rate (losing historical
 stability) or carry the option in their schema without wiring up the
 booking.
@@ -253,8 +253,8 @@ acc [GLOBAL OPTIONS] <COMMAND> [COMMAND OPTIONS] [ARGS]
 | `--future`                 | off     | Include transactions dated after today. Hidden by default (rent, subscriptions, recurring forward-dated entries shouldn't clutter "what has happened" reports). When also using `-e` / `-p`, the earlier cutoff wins. |
 | `-S`, `--sort FIELD`       | `date`  | Sort key: `date` (alias `d`), `amount` (`amt`), `account` (`acc`), `description` (`desc`, `payee`). Prefix with `-` for reverse (`--sort -amount`). Repeat `--sort` for secondary / tertiary keys. Unknown fields silently fall back to `date`. |
 | `-X`, `--exchange SYMBOL`  | —       | Convert every amount into `SYMBOL` using the price DB. Each posting is converted at its own `tx.date` rate. |
-| `-V`, `--unrealized`       | off     | Mark-to-market: revalue open foreign-currency balances at the latest available rate instead of the historical per-posting valuation, booking the unrealized FX to `fx-unrealized gain` / `fx-unrealized loss`. Only meaningful with `-X`, and only when those accounts are declared. The default stays historical (realized only). `-V` reuses the letter ledger spends on market valuation, here for acc's opt-in unrealized-FX revaluation. |
-| `-R`, `--real`             | off     | Drop virtual postings from the output (both `(account)` paren-virtual and `[account]` bracket-virtual). The realizer, lotter and translator inject *real* postings (fx-realized/unrealized, capital gain/loss, CTA), so `-R` keeps them; only the `(…)` / `[…]` postings written in the source journal are removed. |
+| `-V`, `--unrealized`       | off     | Mark-to-market: revalue open foreign-currency balances at the latest available rate instead of the historical per-posting valuation, booking the unrealized revaluation to `holding gain` / `holding loss`. Only meaningful with `-X`, and only when those accounts are declared. The default stays historical (realized only). `-V` reuses the letter ledger spends on market valuation, here for acc's opt-in unrealized revaluation. |
+| `-R`, `--real`             | off     | Drop virtual postings from the output (both `(account)` paren-virtual and `[account]` bracket-virtual). The realizer, lotter and translator inject *real* postings (slippage/unrealized, capital gain/loss, CTA), so `-R` keeps them; only the `(…)` / `[…]` postings written in the source journal are removed. |
 | `-r`, `--related`          | off     | With a pattern filter, show the *other* postings of matched transactions — the counter-parties — instead of the matched postings themselves. `acc reg ^expenses -r` shows which accounts balanced against expenses. Modeled on ledger-cli's `--related`. |
 | `--related-all`            | off     | Show *every* posting of a matched transaction — the matched posting **and** its counter-parties — not just the counter-parties (`-r`) or just the match (default). Modeled on ledger-cli's `--related-all`. |
 | `--commodities N`          | —       | Keep only transactions whose balance-contributing postings use at least `N` distinct commodities; paren-virtual `(account)` postings are skipped. `--commodities 2` finds every currency-mixing transaction. |
@@ -601,7 +601,7 @@ $ acc -f journal.ledger reg
 
 Everything else — `print`, `accounts`, `commodities`, `codes`,
 `check`, filter patterns, `-X` currency conversion,
-fx-realized gain/loss, CTA, lot annotations, balance assertions — is
+slippage gain/loss, CTA, lot annotations, balance assertions — is
 covered in topic-specific walkthroughs with journal inline and
 verbatim output:
 
@@ -611,7 +611,7 @@ verbatim output:
   DSL, `-r`, `-R`, multi-`-p`, date ranges
 - [`examples/03-currency-conversion.md`](examples/03-currency-conversion.md) —
   `-X`, multi-hop
-- [`examples/04-fx-gain-loss.md`](examples/04-fx-gain-loss.md) —
+- [`examples/04-slippage.md`](examples/04-slippage.md) —
   realising gain/loss on multi-commodity trades
 - [`examples/05-cta.md`](examples/05-cta.md) — IAS 21 / ASC 830
   Cumulative Translation Adjustment
@@ -1022,16 +1022,16 @@ export ACC_PRICES_DIR=~/accounting/prices/
 You can put both acc-fetched (`acc update`) and hand-written `P`
 directives here. No-op when `-X` is absent.
 
-### `fx-realized gain` / `fx-realized loss` realisation
+### `slippage gain` / `slippage loss` realisation
 
 Declare the two accounts:
 
 ```
-account Equity:FxGain
-    fx-realized gain
+account Equity:SlippageGain
+    slippage gain
 
-account Equity:FxLoss
-    fx-realized loss
+account Equity:SlippageLoss
+    slippage loss
 ```
 
 With `-X TARGET` and both accounts declared, acc converts every
@@ -1039,8 +1039,8 @@ posting of a multi-commodity transaction to the target at the
 market rate on `tx.date` and sums them up. If the sum is non-zero,
 the transaction's implied rate differed from the market rate — the
 difference becomes the realised gain or loss, and acc injects a
-real posting to close it out: `fx-realized gain` when the user came out
-ahead of market, `fx-realized loss` when behind. Differences below the
+real posting to close it out: `slippage gain` when the user came out
+ahead of market, `slippage loss` when behind. Differences below the
 target's display precision are ignored.
 
 **Example.** Target `€`, market rate `P 2024-06-15 USD EUR 0.90`.
@@ -1055,19 +1055,19 @@ At market rate `$1000` is worth `€900`, but the user got `€920` —
 `€20` gain. acc adds:
 
 ```
-    Equity:FxGain  €-20
+    Equity:SlippageGain  €-20
 ```
 
 Report on them directly:
 
 ```
-acc bal Equity:FxGain Equity:FxLoss -X €    # total realised gains / losses
-acc reg Equity:FxGain -X €                  # per-transaction breakdown
+acc bal Equity:SlippageGain Equity:SlippageLoss -X €    # total realised gains / losses
+acc reg Equity:SlippageGain -X €                  # per-transaction breakdown
 ```
 
-### `fx-unrealized gain` / `fx-unrealized loss` — mark to market
+### `holding gain` / `holding loss` — mark to market
 
-`fx-realized` closes the gap on *trades* — money actually changed
+`slippage` closes the gap on *trades* — money actually changed
 hands at an off-market rate. But a position you still **hold** in a
 foreign currency also drifts as rates move, and that drift is
 **unrealized** until you convert back. By default acc ignores it: the
@@ -1078,16 +1078,16 @@ default report values every posting historically (rule 1), so an open
 the accounts:
 
 ```
-account Equity:FxUnrealized:Gain
-    fx-unrealized gain
+account Equity:Holding:Gain
+    holding gain
 
-account Equity:FxUnrealized:Loss
-    fx-unrealized loss
+account Equity:Holding:Loss
+    holding loss
 ```
 
 Under `-X TARGET -V`, acc marks every open foreign **balance** to the
 **latest available rate** and books the difference — current value
-minus historical value — to `fx-unrealized gain` / `fx-unrealized
+minus historical value — to `holding gain` / `holding
 loss`:
 
 ```
@@ -1108,15 +1108,15 @@ disturb the ones you do.
 
 The revaluation is one synthetic transaction per open
 `(account, commodity)` — its description carries that commodity
-(`unrealized fx revaluation $`), so several foreign currencies on one
+(`holding revaluation $`), so several foreign currencies on one
 account stay distinguishable — dated today, so the journal still
 reloads 1:1. It is opt-in and
 orthogonal to the historical default — without `-V` nothing is
-revalued, so the realized / tax-relevant view is untouched: `fx
-realized` and `cta` book **realized** results; `fx-unrealized` is the
+revalued, so the realized / tax-relevant view is untouched: `slippage`
+and `cta` book **realized** results; `holding` is the
 only place an **un**realized number appears.
 
-### `cta gain` / `cta loss` — Currency Translation Adjustment
+### `cta gain` / `cta loss` — Commodity Translation Adjustment
 
 This is the feature that makes acc IFRS-compliant for multi-currency
 reporting. If you never report in a currency different from your
@@ -1173,7 +1173,7 @@ rate movement happened to touch, which violates both standards.
 #### How to enable it
 
 Declare two accounts — one for positive drift, one for negative —
-exactly like the existing `fx-realized gain` / `fx-realized loss` pair:
+exactly like the existing `slippage gain` / `slippage loss` pair:
 
 ```
 account equity:cta:gain
@@ -1198,7 +1198,7 @@ native balance where the running target is non-zero, a synthetic
 transaction is emitted on that date:
 
 ```
-<date> * currency translation adjustment
+<date> * commodity translation adjustment
     <transit-account>    TARGET -drift
     <cta-account>        TARGET drift
 ```
@@ -1253,16 +1253,16 @@ $ acc reg -X USD
                                      income:salary         USD-11000.00
 2024-06-15 * invoice paid            expenses:services      USD10500.00
                                      assets:checking       USD-10500.00
-2024-06-15 * currency translation adjustment  assets:checking   USD-500.00
+2024-06-15 * commodity translation adjustment  assets:checking   USD-500.00
                                               equity:cta:loss    USD500.00
 ```
 
 Auditable, reproducible, name-attributable.
 
-#### Interaction with `fx-realized gain` / `fx-realized loss` and `capital gain` / `capital loss`
+#### Interaction with `slippage gain` / `slippage loss` and `capital gain` / `capital loss`
 
 The three mechanisms measure different things and never double-book.
-The realizer's **fx** is the trade-day execution deviation *within* one
+The realizer's **slippage** is the trade-day execution deviation *within* one
 multi-commodity transaction (implied/booked rate vs. market on
 `tx.date`). The lotter's **capital** is the disposed asset's market
 move *over its holding period*. The translator's **CTA** is the
@@ -1353,11 +1353,11 @@ phases that run together — so a single trade can show both:
   disposal leg carries that acquisition-date market value as its `{}`
   cost basis, so the asset enters and leaves at the same value and nets
   to zero.
-- **fx** (`fx-realized gain` / `fx-realized loss`, the realizer) — the *execution spread*
+- **slippage** (`slippage gain` / `slippage loss`, the realizer) — the *execution spread*
   on every trade, buy and sell: the booked rate's deviation from the
-  market rate that day. Declare the fx accounts so a multi-commodity
+  market rate that day. Declare the slippage accounts so a multi-commodity
   trade balances at market (the realizer strips the `@` so each leg
-  converts at market, and the gap to market becomes fx).
+  converts at market, and the gap to market becomes slippage).
 
 A same-commodity *transfer* — a foreign currency passing through an
 account across a rate move, with no trade — is not a capital event; its
@@ -1460,17 +1460,17 @@ match case-insensitively, as a user-friendliness convenience.
 ### `account`
 
 ```
-account Equity:FxRealized:Gain
-    fx-realized gain
+account Equity:Slippage:Gain
+    slippage gain
 
-account Equity:FxRealized:Loss
-    fx-realized loss
+account Equity:Slippage:Loss
+    slippage loss
 
-account Equity:FxUnrealized:Gain
-    fx-unrealized gain
+account Equity:Holding:Gain
+    holding gain
 
-account Equity:FxUnrealized:Loss
-    fx-unrealized loss
+account Equity:Holding:Loss
+    holding loss
 
 account Equity:CTA:Gain
     cta gain
@@ -1487,19 +1487,19 @@ account Equity:Capital:Loss
 
 Eight sub-directives, in four pairs:
 
-- `fx-realized gain` / `fx-realized loss` — the realiser's per-trade
+- `slippage gain` / `slippage loss` — the realiser's per-trade
   execution spread on multi-commodity transactions whose implied
   conversion rate diverges from the market rate. See
-  [`fx-realized gain` / `fx-realized loss` realisation](#fx-realized-gain--fx-realized-loss-realisation).
-- `fx-unrealized gain` / `fx-unrealized loss` — the revaluator's
+  [`slippage gain` / `slippage loss` realisation](#slippage-gain--slippage-loss-realisation).
+- `holding gain` / `holding loss` — the revaluator's
   report-date mark-to-market of open foreign balances, booked only
   under `-V` / `--unrealized`. See
-  [`fx-unrealized gain` / `fx-unrealized loss`](#fx-unrealized-gain--fx-unrealized-loss--mark-to-market).
+  [`holding gain` / `holding loss`](#holding-gain--holding-loss--mark-to-market).
 - `cta gain` / `cta loss` — the translator's IAS 21 / ASC 830
   Cumulative Translation Adjustment: the holding-period drift on
   single-commodity transit accounts when rates move between inflow
   and outflow. See
-  [`cta gain` / `cta loss`](#cta-gain--cta-loss--currency-translation-adjustment).
+  [`cta gain` / `cta loss`](#cta-gain--cta-loss--commodity-translation-adjustment).
 - `capital gain` / `capital loss` — the lotter's FIFO realised
   capital gain on disposed lots (the holding-period market move). See
   [`capital gain` / `capital loss`](#capital-gain--capital-loss--realised-gains-via-fifo-lots).
@@ -1684,13 +1684,13 @@ effective amount on the cost side.
   allocations).
 - Plain accounts — the default; everything balances.
 
-### How do I see realised FX gain/loss?
+### How do I see realised slippage gain/loss?
 
-Declare `fx-realized gain` and `fx-realized loss` accounts (see [Currency
+Declare `slippage gain` and `slippage loss` accounts (see [Currency
 conversion](#currency-conversion)) and run with `-X`:
 
 ```
-acc bal Equity:FxGain Equity:FxLoss -X €
+acc bal Equity:SlippageGain Equity:SlippageLoss -X €
 ```
 
 The realiser automatically injects the gain/loss postings for

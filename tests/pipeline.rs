@@ -78,13 +78,13 @@ fn sorts_transactions_by_date() {
 }
 
 #[test]
-fn fx_accounts_extracted_into_journal() {
+fn slippage_accounts_extracted_into_journal() {
     let j = common::load(
-        "account Equity:FxGain\n    fx-realized gain\n\
-         account Equity:FxLoss\n    fx-realized loss\n",
+        "account Equity:SlippageGain\n    slippage gain\n\
+         account Equity:SlippageLoss\n    slippage loss\n",
     );
-    assert_eq!(j.fx_realized_gain.as_deref(), Some("Equity:FxGain"));
-    assert_eq!(j.fx_realized_loss.as_deref(), Some("Equity:FxLoss"));
+    assert_eq!(j.slippage_gain.as_deref(), Some("Equity:SlippageGain"));
+    assert_eq!(j.slippage_loss.as_deref(), Some("Equity:SlippageLoss"));
 }
 
 #[test]

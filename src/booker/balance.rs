@@ -384,7 +384,7 @@ mod tests {
         // (and the journal-wide 2 decimals for €), not at the cost's
         // 7 decimals.
         let src = "2020-09-02 * x\n\
-                   \tassets:fx    FCU-7524 {=€0.0380117}\n\
+                   \tassets:fcu    FCU-7524 {=€0.0380117}\n\
                    \texpenses:t   €286.00\n";
         assert!(balance_one(src).is_ok());
     }

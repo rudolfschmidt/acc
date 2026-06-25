@@ -1,12 +1,12 @@
 //! Revaluator phase — mark-to-market revaluation of open positions.
 //!
 //! Runs only under `-X TARGET` with `--unrealized`, and only when both a
-//! `fx-unrealized gain` and a `fx-unrealized loss` account are declared. For
+//! `holding gain` and a `holding loss` account are declared. For
 //! every account holding an **open** (non-zero native) position in a
 //! non-target commodity, it injects one synthetic transaction that moves
 //! the account's *converted* value from its historical sum to
 //! `native_balance × latest available rate`, booking the difference — the
-//! **unrealized** FX — to the revaluation accounts.
+//! **unrealized** revaluation — to the holding accounts.
 //!
 //! Unlike the translator (CTA), which releases the **realized** drift when
 //! a position returns to zero, the revaluator marks **open** positions to
@@ -168,7 +168,7 @@ fn build_tx(
             date,
             state: State::Cleared,
             code: None,
-            description: format!("unrealized fx revaluation {commodity}"),
+            description: format!("holding revaluation {commodity}"),
             postings: vec![
                 Located { file: file.clone(), line, value: asset },
                 Located { file: file.clone(), line, value: counter },

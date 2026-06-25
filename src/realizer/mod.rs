@@ -1,4 +1,4 @@
-//! Realizer phase — inject FX gain/loss postings.
+//! Realizer phase — inject slippage gain/loss postings.
 //!
 //! Runs inside the enrich pipeline (after the expander), i.e. *before*
 //! filtering and rebalance, and only when the user passes `-X TARGET`.
@@ -9,19 +9,19 @@
 //! say and what the market says:
 //!
 //! - `delta > 0` → the user got more value than the market implied →
-//!   **gain** → credit the `fx-realized gain` account (income, negative posting)
+//!   **gain** → credit the `slippage gain` account (income, negative posting)
 //! - `delta < 0` → the user got less value → **loss** → debit the
-//!   `fx-realized loss` account (expense, positive posting)
+//!   `slippage loss` account (expense, positive posting)
 //! - `|delta|` below the target commodity's display precision → noop
 //!   (rounding artefact from per-unit cost math)
 //!
 //! Skipped when:
-//! - the journal declares no `fx-realized gain` / `fx-realized loss` accounts,
+//! - the journal declares no `slippage gain` / `slippage loss` accounts,
 //! - a conversion rate is missing for any posting (the transaction's
 //!   implied rate can't be compared to a market that isn't known),
 //! - a contributing leg carries a user-written `{cost}` lot — the
 //!   disposal is booked by hand against a cost basis, so a market-based
-//!   fx would unbalance the converted books.
+//!   slippage would unbalance the converted books.
 
 use std::collections::{HashMap, HashSet};
 
@@ -31,7 +31,7 @@ use crate::parser::located::Located;
 use crate::parser::posting::{Amount, Posting};
 use crate::parser::transaction::Transaction;
 
-/// Augment every transaction in-place with an FX gain/loss posting
+/// Augment every transaction in-place with a slippage gain/loss posting
 /// where the implied rate diverges from the market rate. See the
 /// module docs for the full semantics.
 pub fn realize(
@@ -39,12 +39,12 @@ pub fn realize(
     target: &str,
     db: &Index,
     precisions: &HashMap<String, usize>,
-    fx_realized_gain: &str,
-    fx_realized_loss: &str,
+    slippage_gain: &str,
+    slippage_loss: &str,
 ) {
     let precision = precisions.get(target).copied().unwrap_or(2);
     for lt in txs.iter_mut() {
-        augment(lt, target, db, precision, fx_realized_gain, fx_realized_loss);
+        augment(lt, target, db, precision, slippage_gain, slippage_loss);
     }
 }
 
@@ -53,8 +53,8 @@ fn augment(
     target: &str,
     db: &Index,
     precision: usize,
-    fx_realized_gain: &str,
-    fx_realized_loss: &str,
+    slippage_gain: &str,
+    slippage_loss: &str,
 ) {
     // Only balance-contributing postings participate: real postings
     // and bracket-virtual (`[account]`); paren-virtual (`(account)`)
@@ -62,7 +62,7 @@ fn augment(
     let contributes = |p: &Posting| !p.is_virtual || p.balanced;
 
     // Need ≥2 distinct commodities — single-commodity transactions
-    // can't have FX delta by definition.
+    // can't have slippage delta by definition.
     let mut commodities: HashSet<&str> = HashSet::new();
     for lp in &lt.value.postings {
         if !contributes(&lp.value) {
@@ -79,7 +79,7 @@ fn augment(
     // A user-written `{cost}` lot means the disposal is hand-booked
     // against a cost basis. The rebalancer will weight that leg by its
     // lot cost (not the market rate), so valuing it at market here would
-    // inject a spurious fx that unbalances the converted books. At
+    // inject a spurious slippage that unbalances the converted books. At
     // realizer time any `lot_cost` is user-written — the lotter runs after
     // this phase — so its presence is the signal to leave the tx alone.
     let has_user_lot = lt
@@ -111,11 +111,11 @@ fn augment(
         return;
     }
 
-    // The fx posting balances the legs at their MARKET value. An explicit
+    // The slippage posting balances the legs at their MARKET value. An explicit
     // `@`/`@@` cost would otherwise make the rebalancer weight a leg by its
     // booked rate (e.g. `ETH @ BTC0.0904` → the BTC paid) instead of the
-    // commodity's market value — leaving the fx unbalanced. The booked
-    // rate's deviation from market is exactly what fx captures, so strip
+    // commodity's market value — leaving the slippage unbalanced. The booked
+    // rate's deviation from market is exactly what slippage captures, so strip
     // the cost annotations and let every contributing leg convert at
     // market. (A user-written `{}` lot-cost would have skipped this
     // transaction above; the lotter's own `{}` is added only after this
@@ -131,9 +131,9 @@ fn augment(
     // credit income (negative posting). Negative delta = loss: debit
     // expense (positive posting).
     let (account, value) = if total.is_negative() {
-        (fx_realized_loss, -total)
+        (slippage_loss, -total)
     } else {
-        (fx_realized_gain, -total)
+        (slippage_gain, -total)
     };
 
     lt.value.postings.push(Located {
@@ -253,7 +253,7 @@ mod tests {
         // A hand-booked disposal carrying a user `{cost}` balances natively
         // and the rebalancer weights the lot leg by its cost basis, not the
         // market rate. The realizer must leave it alone — injecting a
-        // market-based fx here would unbalance the `-X` books.
+        // market-based slippage here would unbalance the `-X` books.
         let src = "\
             commodity $\n\
             commodity BTC\n\
@@ -265,7 +265,7 @@ mod tests {
             \tincome:gain   $-20000\n";
         let (mut txs, db) = build(src);
         realize(&mut txs, "$", &db, &HashMap::new(), "income:gain", "expenses:loss");
-        // No fx posting injected — the three source postings are untouched.
+        // No slippage posting injected — the three source postings are untouched.
         assert_eq!(txs[0].value.postings.len(), 3);
     }
 }

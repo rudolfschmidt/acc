@@ -1,4 +1,4 @@
-//! Capital / fx / CTA integration: the cross-phase behaviour the lotter,
+//! Capital / slippage / CTA integration: the cross-phase behaviour the lotter,
 //! the realizer and the translator produce *together* under `-X TARGET`.
 //! Each test runs the full post-load pipeline via `common::run_x` /
 //! `run_native` and asserts on converted balances.
@@ -10,7 +10,7 @@
 //!   its holding period (`market_sell − market_buy`). The disposal leg
 //!   carries `market_buy` as its `{}` cost-basis, so the asset enters at
 //!   market and leaves at that cost and the account nets to zero.
-//! - **fx** (realizer) — the trade-day *execution spread* (booked rate vs
+//! - **slippage** (realizer) — the trade-day *execution spread* (booked rate vs
 //!   market), booked on every multi-commodity transaction, buy and sell.
 //! - **cta** (translator) — same-commodity *transfer* drift, where a
 //!   pass-through holds a commodity across a rate move with no trade.
@@ -25,13 +25,13 @@ use acc::decimal::Decimal;
 use acc::parser::located::Located;
 use acc::parser::transaction::Transaction;
 
-/// The full real-mode account set: capital, fx and CTA all declared —
+/// The full real-mode account set: capital, slippage and CTA all declared —
 /// the configuration the new model is built for.
 const ACCOUNTS: &str = "\
     account income:cap\n    capital gain\n\
     account expenses:cap\n    capital loss\n\
-    account income:fx\n    fx-realized gain\n\
-    account expenses:fx\n    fx-realized loss\n\
+    account income:slippage\n    slippage gain\n\
+    account expenses:slippage\n    slippage loss\n\
     account income:cta\n    cta gain\n\
     account expenses:cta\n    cta loss\n";
 
@@ -44,9 +44,9 @@ fn capital(txs: &[Located<Transaction>]) -> Decimal {
     common::balance(txs, "income:cap", "EUR") + common::balance(txs, "expenses:cap", "EUR")
 }
 
-/// Net fx booked.
-fn fx(txs: &[Located<Transaction>]) -> Decimal {
-    common::balance(txs, "income:fx", "EUR") + common::balance(txs, "expenses:fx", "EUR")
+/// Net slippage booked.
+fn slippage(txs: &[Located<Transaction>]) -> Decimal {
+    common::balance(txs, "income:slippage", "EUR") + common::balance(txs, "expenses:slippage", "EUR")
 }
 
 /// Net CTA booked.
@@ -59,7 +59,7 @@ fn cta(txs: &[Located<Transaction>]) -> Decimal {
 #[test]
 fn capital_is_the_market_move() {
     // Buy and sell exactly at market (30000 → 50000): no execution
-    // spread, so fx is zero and the whole holding gain is the market
+    // spread, so slippage is zero and the whole holding gain is the market
     // move — 20000 capital. The asset account nets to zero.
     let src = format!(
         "{ACCOUNTS}\
@@ -74,7 +74,7 @@ fn capital_is_the_market_move() {
     );
     let txs = common::run_x(&src, "EUR");
     assert_eq!(capital(&txs), dec("-20000"), "market move 30000→50000");
-    assert_eq!(fx(&txs), Decimal::zero(), "traded at market → no fx");
+    assert_eq!(slippage(&txs), Decimal::zero(), "traded at market → no slippage");
     assert_eq!(common::balance(&txs, "assets:btc", "EUR"), Decimal::zero());
 }
 
@@ -99,13 +99,13 @@ fn market_loss_routes_to_loss_account() {
     assert_eq!(common::balance(&txs, "assets:btc", "EUR"), Decimal::zero());
 }
 
-// ─── fx = the execution spread, on every trade ────────────────────────
+// ─── slippage = the execution spread, on every trade ────────────────────────
 
 #[test]
-fn fx_booked_on_buy_and_sell() {
+fn slippage_booked_on_buy_and_sell() {
     // Market 30000 → 50000. Bought 1000 *below* market (paid 29000) and
-    // sold 1000 *above* market (got 51000): a 1000 fx-realized gain on each trade
-    // → 2000 fx total. The market move (20000) stays on capital — the
+    // sold 1000 *above* market (got 51000): a 1000 slippage gain on each trade
+    // → 2000 slippage total. The market move (20000) stays on capital — the
     // realizer and the lotter split the 22000 total cleanly.
     let src = format!(
         "{ACCOUNTS}\
@@ -119,15 +119,15 @@ fn fx_booked_on_buy_and_sell() {
          \tassets:cash   51000 EUR\n"
     );
     let txs = common::run_x(&src, "EUR");
-    assert_eq!(fx(&txs), dec("-2000"), "1000 below on buy + 1000 above on sell");
-    assert_eq!(capital(&txs), dec("-20000"), "market move untouched by fx");
+    assert_eq!(slippage(&txs), dec("-2000"), "1000 below on buy + 1000 above on sell");
+    assert_eq!(capital(&txs), dec("-20000"), "market move untouched by slippage");
 }
 
 #[test]
 fn disposal_account_zeroes_and_journal_balances() {
     // The same off-market round-trip: the asset enters at market and
     // leaves at its `{cost}`, so assets:btc nets to zero — and capital +
-    // fx make every converted transaction balance, so the whole journal
+    // slippage make every converted transaction balance, so the whole journal
     // sums to zero.
     let src = format!(
         "{ACCOUNTS}\
@@ -153,7 +153,7 @@ fn disposal_account_zeroes_and_journal_balances() {
 #[test]
 fn realizer_runs_alongside_capital_tracking() {
     // Capital accounts are declared, yet the realizer still runs: a buy
-    // 2000 below market books a 2000 fx-realized gain. The buy only opens a lot,
+    // 2000 below market books a 2000 slippage gain. The buy only opens a lot,
     // so no capital is realized yet — proving the realizer is no longer
     // skipped when capital tracking is active. No transfer → no CTA.
     let src = format!(
@@ -164,7 +164,7 @@ fn realizer_runs_alongside_capital_tracking() {
          \tassets:cash  -48000 EUR\n"
     );
     let txs = common::run_x(&src, "EUR");
-    assert_eq!(fx(&txs), dec("-2000"), "realizer books the buy spread");
+    assert_eq!(slippage(&txs), dec("-2000"), "realizer books the buy spread");
     assert_eq!(capital(&txs), Decimal::zero(), "an opening buy realizes nothing");
     assert_eq!(cta(&txs), Decimal::zero(), "no same-commodity transfer → no CTA");
 }
@@ -191,7 +191,7 @@ fn same_commodity_transfer_is_cta_not_capital() {
     let txs = common::run_x(&src, "EUR");
     assert_eq!(common::balance(&txs, "counterparty:t", "EUR"), Decimal::zero());
     assert_eq!(capital(&txs), Decimal::zero(), "no trade → no capital");
-    assert_eq!(fx(&txs), Decimal::zero(), "no trade → no fx");
+    assert_eq!(slippage(&txs), Decimal::zero(), "no trade → no slippage");
     assert_ne!(cta(&txs), Decimal::zero(), "held USD across a rate move → CTA");
 }
 
