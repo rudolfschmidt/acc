@@ -18,7 +18,10 @@
 //! Skipped when:
 //! - the journal declares no `fx-realized gain` / `fx-realized loss` accounts,
 //! - a conversion rate is missing for any posting (the transaction's
-//!   implied rate can't be compared to a market that isn't known).
+//!   implied rate can't be compared to a market that isn't known),
+//! - a contributing leg carries a user-written `{cost}` lot — the
+//!   disposal is booked by hand against a cost basis, so a market-based
+//!   fx would unbalance the converted books.
 
 use std::collections::{HashMap, HashSet};
 
@@ -73,6 +76,21 @@ fn augment(
         return;
     }
 
+    // A user-written `{cost}` lot means the disposal is hand-booked
+    // against a cost basis. The rebalancer will weight that leg by its
+    // lot cost (not the market rate), so valuing it at market here would
+    // inject a spurious fx that unbalances the converted books. At
+    // realizer time any `lot_cost` is user-written — the lotter runs after
+    // this phase — so its presence is the signal to leave the tx alone.
+    let has_user_lot = lt
+        .value
+        .postings
+        .iter()
+        .any(|lp| contributes(&lp.value) && lp.value.lot_cost.is_some());
+    if has_user_lot {
+        return;
+    }
+
     // Sum contributing postings after conversion to target. A missing
     // rate disqualifies the whole transaction from realizer treatment.
     let date = lt.value.date.to_string();
@@ -99,8 +117,9 @@ fn augment(
     // commodity's market value — leaving the fx unbalanced. The booked
     // rate's deviation from market is exactly what fx captures, so strip
     // the cost annotations and let every contributing leg convert at
-    // market. (`{}` lot-costs don't exist yet — the lotter adds them after
-    // this phase and they are intentionally kept.)
+    // market. (A user-written `{}` lot-cost would have skipped this
+    // transaction above; the lotter's own `{}` is added only after this
+    // phase, so none are present here.)
     for lp in lt.value.postings.iter_mut() {
         if contributes(&lp.value) {
             lp.value.costs = None;
@@ -227,5 +246,26 @@ mod tests {
         precs.insert("EUR".to_string(), 2);
         realize(&mut txs, "EUR", &db, &precs, "in:gain", "ex:loss");
         assert_eq!(txs[0].value.postings.len(), 2);
+    }
+
+    #[test]
+    fn user_lot_cost_disposal_not_realized() {
+        // A hand-booked disposal carrying a user `{cost}` balances natively
+        // and the rebalancer weights the lot leg by its cost basis, not the
+        // market rate. The realizer must leave it alone — injecting a
+        // market-based fx here would unbalance the `-X` books.
+        let src = "\
+            commodity $\n\
+            commodity BTC\n\
+            \tprecision 8\n\
+            P 2024-06-15 BTC $ 50000\n\
+            2024-06-15 * sell\n\
+            \tassets:btc   BTC -1 {$30000} @ $50000\n\
+            \tassets:cash   $50000\n\
+            \tincome:gain   $-20000\n";
+        let (mut txs, db) = build(src);
+        realize(&mut txs, "$", &db, &HashMap::new(), "in:gain", "ex:loss");
+        // No fx posting injected — the three source postings are untouched.
+        assert_eq!(txs[0].value.postings.len(), 3);
     }
 }
