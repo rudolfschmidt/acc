@@ -9,14 +9,14 @@
 //! say and what the market says:
 //!
 //! - `delta > 0` → the user got more value than the market implied →
-//!   **gain** → credit the `fx gain` account (income, negative posting)
+//!   **gain** → credit the `fx-realized gain` account (income, negative posting)
 //! - `delta < 0` → the user got less value → **loss** → debit the
-//!   `fx loss` account (expense, positive posting)
+//!   `fx-realized loss` account (expense, positive posting)
 //! - `|delta|` below the target commodity's display precision → noop
 //!   (rounding artefact from per-unit cost math)
 //!
 //! Skipped when:
-//! - the journal declares no `fx gain` / `fx loss` accounts,
+//! - the journal declares no `fx-realized gain` / `fx-realized loss` accounts,
 //! - a conversion rate is missing for any posting (the transaction's
 //!   implied rate can't be compared to a market that isn't known).
 
@@ -36,12 +36,12 @@ pub fn realize(
     target: &str,
     db: &Index,
     precisions: &HashMap<String, usize>,
-    fx_gain: &str,
-    fx_loss: &str,
+    fx_realized_gain: &str,
+    fx_realized_loss: &str,
 ) {
     let precision = precisions.get(target).copied().unwrap_or(2);
     for lt in txs.iter_mut() {
-        augment(lt, target, db, precision, fx_gain, fx_loss);
+        augment(lt, target, db, precision, fx_realized_gain, fx_realized_loss);
     }
 }
 
@@ -50,8 +50,8 @@ fn augment(
     target: &str,
     db: &Index,
     precision: usize,
-    fx_gain: &str,
-    fx_loss: &str,
+    fx_realized_gain: &str,
+    fx_realized_loss: &str,
 ) {
     // Only balance-contributing postings participate: real postings
     // and bracket-virtual (`[account]`); paren-virtual (`(account)`)
@@ -112,9 +112,9 @@ fn augment(
     // credit income (negative posting). Negative delta = loss: debit
     // expense (positive posting).
     let (account, value) = if total.is_negative() {
-        (fx_loss, -total)
+        (fx_realized_loss, -total)
     } else {
-        (fx_gain, -total)
+        (fx_realized_gain, -total)
     };
 
     lt.value.postings.push(Located {

@@ -4,9 +4,15 @@ use clap::{Args as ClapArgs, Parser, Subcommand};
 #[command(
     name = "acc",
     version,
-    about = "plaintext double-entry accounting command line tool"
+    about = "plaintext double-entry accounting command line tool",
+    disable_version_flag = true
 )]
 struct Args {
+    /// Print version and exit. Lower-case `-v` — upper-case `-V` is
+    /// `--unrealized` (mirroring ledger's market-valuation flag).
+    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
+    version: Option<bool>,
+
     /// Ledger file or directory to load. Directories are walked
     /// recursively. May be given multiple times; order is preserved
     /// and matters for transactions with identical dates. Pre-parsed
@@ -51,7 +57,7 @@ struct ReportArgs {
     /// Show real postings only — drop every virtual posting
     /// (paren-virtual `(account)` and bracket-virtual `[account]`)
     /// from the output. The realizer, lotter and translator inject
-    /// *real* postings (fx gain/loss, capital gain/loss, currency
+    /// *real* postings (fx-realized gain/loss, capital gain/loss, currency
     /// translation adjustment), so `-R` keeps those; it only removes
     /// the `(…)`/`[…]` virtual postings written in the source journal.
     #[arg(short = 'R', long = "real")]
@@ -82,6 +88,15 @@ struct ReportArgs {
     /// rate on its own transaction date (historical valuation).
     #[arg(short = 'X', long = "exchange", value_name = "COMMODITY")]
     exchange: Option<String>,
+
+    /// Show unrealized FX: revalue open foreign-currency balances at the
+    /// latest available exchange rate, instead of the historical
+    /// per-posting valuation. Revalues every open foreign balance (scope
+    /// with a filter); off by default — the default stays historical
+    /// (realized only). Only meaningful together with `-X`, and requires
+    /// `fx-unrealized gain` / `fx-unrealized loss` accounts to be declared.
+    #[arg(short = 'V', long = "unrealized")]
+    unrealized: bool,
 
     /// Keep only transactions whose balance-contributing postings use
     /// at least N distinct commodities (paren-virtual fx labels are
@@ -694,13 +709,14 @@ fn start() -> Result<(), acc::Error> {
                 .unwrap_or_else(|| t.to_string())
         });
 
-    // Enrichment phases (expander → realizer → lotter → translator). These
-    // must see the whole journal — the lotter tracks lots FIFO across all
-    // transactions and the translator identifies pass-through accounts by
-    // their journal-wide native sum — so they run before any filtering and
-    // live together in `pipeline::enrich`, which also encodes the
-    // realizer/lotter exclusivity and the CTA-without-exclusion rule.
-    acc::pipeline::enrich(&mut journal, exchange_target.as_deref());
+    // Enrichment phases (expander → realizer → lotter → translator, plus
+    // the `--unrealized` revaluator). These must see the whole journal —
+    // the lotter tracks lots FIFO across all transactions; the translator
+    // and revaluator identify pass-through / open positions by their
+    // journal-wide native sum — so they run before any filtering, together
+    // in `pipeline::enrich`.
+    let unrealized = filter_args.map(|f| f.unrealized).unwrap_or(false);
+    acc::pipeline::enrich(&mut journal, exchange_target.as_deref(), unrealized);
 
     // Resolve the -b / -e / -p date filter plus the default future
     // cutoff. The owned bounds are borrowed for the filter below.
@@ -765,7 +781,7 @@ fn start() -> Result<(), acc::Error> {
     }
 
     // `-R` / `--real`: drop every virtual posting from the output.
-    // Realizer/lotter/translator injections (fx gain/loss, capital
+    // Realizer/lotter/translator injections (fx-realized gain/loss, capital
     // gain/loss, CTA) are real postings, so they survive `-R`; this
     // only removes the `(…)`/`[…]` virtual postings from the source.
     let real = filter_args.map(|f| f.real).unwrap_or(false);

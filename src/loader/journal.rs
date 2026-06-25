@@ -15,8 +15,8 @@ use crate::parser::transaction::Transaction;
 pub struct Journal {
     pub transactions: Vec<Located<Transaction>>,
     pub prices: Index,
-    pub fx_gain: Option<String>,
-    pub fx_loss: Option<String>,
+    pub fx_realized_gain: Option<String>,
+    pub fx_realized_loss: Option<String>,
     /// Account for positive Currency Translation Adjustments.
     /// Declared via `account NAME / cta gain`. Both `cta_gain` and
     /// `cta_loss` must be declared for the translator phase to run.
@@ -29,6 +29,11 @@ pub struct Journal {
     /// declared for the lot/capital-gains phase to run.
     pub capital_gain: Option<String>,
     pub capital_loss: Option<String>,
+    /// Unrealized mark-to-market accounts, declared via
+    /// `account NAME / fx-unrealized gain` / `fx-unrealized loss`. Both must
+    /// be declared for the `--unrealized` revaluator phase to run.
+    pub fx_unrealized_gain: Option<String>,
+    pub fx_unrealized_loss: Option<String>,
     /// Maximum fractional digits observed for each commodity across
     /// every posting amount / cost / balance-assertion. Reports use
     /// this to render all amounts of a commodity consistently.

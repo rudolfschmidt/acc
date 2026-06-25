@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0 — 2026-06-24
+## 0.9.0 — 2026-06-25
 
 ### Wed 24 Jun 2026 - capital gains, rebuilt: market move + per-trade fx that compose
 
@@ -54,7 +54,7 @@ asset pick.
 
 ### Wed 24 Jun 2026 - `$role:slot` account references
 
-Account roles (`fx gain`, `cta loss`, `capital gain`, …) are now a
+Account roles (`fx-realized gain`, `cta loss`, `capital gain`, …) are now a
 uniform index rather than a handful of hard-wired special cases. The role
 string a declaration carries is the single source of truth: the resolver
 indexes declared accounts by role, each pipeline phase looks up the ones
@@ -69,6 +69,52 @@ A clippy pass across the tree (collapsible conditionals, compound
 assignment, slice-over-`Vec` parameters, simplified `map_or`, elided
 lifetimes) and refreshed module documentation for the rebuilt phases. No
 behavioural change.
+
+### Thu 25 Jun 2026 - fx-realized vs unrealized, and `--unrealized` mark-to-market
+
+The rebuilt fx number above books a *realized* result — money that
+actually changed hands at an off-market rate on a trade. A foreign
+position you still **hold** also drifts as rates move, but that drift is
+**unrealized** until you convert back, and the default report never shows
+it: every posting is valued historically at its own `tx.date` (IAS 21
+rule 1), so an open balance keeps its acquisition-date value and reports
+across periods stay comparable.
+
+`-V` / `--unrealized` adds the report-date view on demand. A new
+`revaluator` phase marks every open foreign balance to the **latest
+available rate**, booking the difference — current value minus historical
+value — to dedicated `fx-unrealized gain` / `fx-unrealized loss`
+accounts. It is one synthetic transaction per revalued balance, dated
+today, that nets to zero: the journal still reloads 1:1 and the report's
+grand total is unchanged (verified — toggling the flag moves no total).
+Opt-in and orthogonal to the default, so without `-V` the realized /
+tax-relevant view is untouched. This is IAS 21 rule 2, separated from
+rule 1 by a flag rather than baked in — in ledger terms the default is
+`-H --no-revalued` and `--unrealized` is its `bal`-as-of-today valuation,
+named after the unrealized gains it surfaces (ledger spells the same
+accounts `--unrealized-gains`).
+
+The phase keeps **no** monetary / non-monetary classification — it
+revalues *every* account holding an open foreign-currency balance,
+income and expense included. That is by design: which accounts are
+balance-sheet and which are P&L is the user's call, expressed through
+their account structure and the report filter, not something acc
+hard-codes. You scope what you value (`bal ^assets -V`), and because each
+revaluation nets to zero, balances outside the filter never disturb the
+ones inside it.
+
+The revaluation transaction is dated **today**, not at the journal's last
+entry: a journal carrying forward-dated postings (a multi-year
+depreciation schedule, say) has its maximum date in the future, and a
+revaluation dated there would be hidden by the default future cutoff.
+
+To make the pair explicit, the realized accounts are renamed `fx gain` /
+`fx loss` → `fx-realized gain` / `fx-realized loss`, so the four trade
+outcomes read as one scheme: `fx-realized` (execution spread, realized),
+`fx-unrealized` (open-position revaluation, unrealized), `capital` (the
+asset's own market move, realized), and `cta` (holding-period drift on
+transfers, realized). Only `fx-unrealized` ever carries an unrealized
+number.
 
 ## 0.8.0 — 2026-06-24
 

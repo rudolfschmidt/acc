@@ -1,8 +1,9 @@
 # 03 — Currency conversion
 
-`-x TARGET` converts every amount into `TARGET` using the price DB
-assembled from `P` directives. Two modes: per-posting historical
-(default, stable) and `--market [DATE]` snapshot (current-value).
+`-X TARGET` converts every amount into `TARGET` using the price DB
+assembled from `P` directives. Two views: per-posting historical
+(default, stable) and opt-in mark-to-market via `-V` / `--unrealized`
+(open foreign balances at the latest rate).
 
 ## Journal
 
@@ -58,10 +59,10 @@ $-1000.00
 
 Each account shows every commodity it holds.
 
-## `-x €` — per-posting at `tx.date` (the default)
+## `-X €` — per-posting at `tx.date` (the default)
 
 ```
-$ acc -f journal.ledger bal -x €
+$ acc -f journal.ledger bal -X €
  €1240.00 assets
  €1810.00   checking
  €-570.00   eu-bank
@@ -88,10 +89,10 @@ drift on this specific tx. The `€-20` comes from the rest of the
 journal's per-account drift under historical conversion. See
 [05-cta.md](05-cta.md) for how to absorb that cleanly.
 
-## `-x $` — same journal, opposite direction
+## `-X $` — same journal, opposite direction
 
 ```
-$ acc -f journal.ledger bal -x $
+$ acc -f journal.ledger bal -X $
  $1366.04 assets
  $2000.00   checking
  $-633.96   eu-bank
@@ -107,38 +108,49 @@ USD postings stay, EUR postings convert to USD via the inverse rate.
 Different grand total because rate movement distributes the drift
 differently in the opposite direction.
 
-## `--market [DATE]` — snapshot revaluation
+## `-V` / `--unrealized` — mark to market
 
-Convert every posting at **one** fixed date's rate:
-
-```
-$ acc -f journal.ledger bal -x € --market 2024-12-15
- €1330.00 assets
- €1900.00   checking
- €-570.00   eu-bank
- €1500.00 expenses
- €1500.00   rent
-€-2850.00 income
-€-2850.00   salary
----------
-  €-20.00
-```
-
-Good for:
-- Year-end financial statements at a consolidation rate.
-- "What's my portfolio worth *today*?" reports.
-- Matching how ledger-cli's `-V` default works.
-
-Trade-off: the income statement no longer stable. Rerun the report
-next year with a different `--market` date and `income:salary`
-shows a different number — the 2024 salary wasn't physically
-different, only its current-rate-translated value moved.
-
-Without a date argument, `--market` = today:
+The default values every posting historically. `-V` adds the
+report-date view: open foreign balances are revalued at the **latest
+available rate**, the difference booked to `fx-unrealized` accounts
+(declared above). Scope to what you want to value — here the asset
+side:
 
 ```
-acc bal -x € --market
+$ acc -f journal.ledger bal ^assets -X €        # historical
+€1240.00 assets
+€1810.00   checking
+€-570.00   eu-bank
+--------
+€1240.00
+
+$ acc -f journal.ledger bal ^assets -X € -V     # marked to market
+€1330.00 assets
+€1900.00   checking
+€-570.00   eu-bank
+--------
+€1330.00
 ```
+
+`assets:checking` holds an open `$2000` position: historically it
+sits at its acquisition-date €-value (`€1810`); under `-V` it is
+marked to the latest rate (`$2000 × 0.95 = €1900`). `assets:eu-bank`
+is already in `€` (the target), so it is left untouched.
+
+Good for "what is my open foreign cash worth *now*?" — the
+current-value counterpart to the stable historical default.
+
+Two things to keep in mind:
+- It is **opt-in**. Without `-V` nothing is revalued, so the
+  historical / tax-relevant view stays stable across reruns.
+- acc keeps no monetary / non-monetary classification: `-V` revalues
+  *every* open foreign balance, income and expense included. You
+  choose what to value by filtering (`^assets` here); since each
+  revaluation nets to zero, accounts outside the filter never disturb
+  the ones inside.
+
+`-V` mirrors ledger-cli's market-valuation flag; acc spells the
+report-date rate as "latest available", with no date argument.
 
 ## Multi-hop rate lookups
 
@@ -165,7 +177,7 @@ P 2024-06-15 BTC USDT 60000
 ```
 
 ```
-$ acc -f journal.ledger bal -x €
+$ acc -f journal.ledger bal -X €
 €-5580.00 cash
  €5580.00 wallet
 ---------

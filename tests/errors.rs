@@ -42,8 +42,8 @@ fn conflicting_commodity_aliases() {
 #[test]
 fn duplicate_fx_gain_accounts() {
     let e = load_err(
-        "account Equity:A\n    fx gain\n\
-         account Equity:B\n    fx gain\n",
+        "account Equity:A\n    fx-realized gain\n\
+         account Equity:B\n    fx-realized gain\n",
     );
     assert!(matches!(e, acc::LoadError::Resolve(_)));
 }

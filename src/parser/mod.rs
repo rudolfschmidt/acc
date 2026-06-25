@@ -392,7 +392,7 @@ fn extend_block(
                     line,
                     1,
                     "expected a role sub-directive of two or more words, \
-                     e.g. `fx gain`, `cta loss`, or `capital gain`",
+                     e.g. `fx-realized gain`, `cta loss`, or `capital gain`",
                 ));
             }
             upgrade = Some(Entry::RoleAccount { role, account: std::mem::take(name) });
@@ -1054,10 +1054,10 @@ mod tests {
 
     #[test]
     fn parse_account_with_fx_gain() {
-        let src = "account Equity:FxGain\n    fx gain\n";
+        let src = "account Equity:FxGain\n    fx-realized gain\n";
         let got = parse(src).unwrap();
         assert!(matches!(&got[0].value,
-            Entry::RoleAccount { role, account } if role == "fx gain" && account == "Equity:FxGain"));
+            Entry::RoleAccount { role, account } if role == "fx-realized gain" && account == "Equity:FxGain"));
     }
 
     #[test]

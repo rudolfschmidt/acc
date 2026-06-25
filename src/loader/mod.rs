@@ -54,12 +54,14 @@ where
     Ok(Journal {
         transactions,
         prices,
-        fx_gain: resolved.fx_gain,
-        fx_loss: resolved.fx_loss,
+        fx_realized_gain: resolved.fx_realized_gain,
+        fx_realized_loss: resolved.fx_realized_loss,
         cta_gain: resolved.cta_gain,
         cta_loss: resolved.cta_loss,
         capital_gain: resolved.capital_gain,
         capital_loss: resolved.capital_loss,
+        fx_unrealized_gain: resolved.fx_unrealized_gain,
+        fx_unrealized_loss: resolved.fx_unrealized_loss,
         precisions,
         aliases: resolved.aliases,
         auto_rules: resolved.auto_rules,
@@ -184,11 +186,11 @@ mod tests {
 
     #[test]
     fn extracts_fx_accounts() {
-        let src = "account Equity:FxGain\n    fx gain\naccount Equity:FxLoss\n    fx loss\n";
+        let src = "account Equity:FxGain\n    fx-realized gain\naccount Equity:FxLoss\n    fx-realized loss\n";
         with_tmp("fx", src, |path| {
             let journal = load(&[path]).unwrap();
-            assert_eq!(journal.fx_gain.as_deref(), Some("Equity:FxGain"));
-            assert_eq!(journal.fx_loss.as_deref(), Some("Equity:FxLoss"));
+            assert_eq!(journal.fx_realized_gain.as_deref(), Some("Equity:FxGain"));
+            assert_eq!(journal.fx_realized_loss.as_deref(), Some("Equity:FxLoss"));
         });
     }
 

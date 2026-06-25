@@ -11,7 +11,7 @@
 //!
 //! 1. **expander**  — apply `= /pattern/` auto-rules; later phases then
 //!    see the fully expanded journal.
-//! 2. **realizer**  — per-transaction fx gain/loss: the trade-day
+//! 2. **realizer**  — per-transaction fx-realized gain/loss: the trade-day
 //!    execution spread, where each leg's market value diverges from the
 //!    others. Runs on every multi-commodity transaction (buy and sell).
 //! 3. **lotter**    — realized capital gains via FIFO lots: the holding-
@@ -39,7 +39,7 @@ use crate::loader::Journal;
 /// are skipped when it is `None`; the lotter always runs when capital
 /// accounts are declared (it realizes in the booked commodity either
 /// way).
-pub fn enrich(journal: &mut Journal, target: Option<&str>) {
+pub fn enrich(journal: &mut Journal, target: Option<&str>, unrealized: bool) {
     crate::expander::expand(&mut journal.transactions, &journal.auto_rules);
 
     // The realizer books the per-trade execution spread (fx) on every
@@ -48,7 +48,7 @@ pub fn enrich(journal: &mut Journal, target: Option<&str>) {
     // `{cost}` shifts the disposal leg by the market move, which its own
     // capital posting offsets, leaving the realizer's fx intact.
     if let (Some(t), Some(gain), Some(loss)) =
-        (target, journal.fx_gain.as_deref(), journal.fx_loss.as_deref())
+        (target, journal.fx_realized_gain.as_deref(), journal.fx_realized_loss.as_deref())
     {
         crate::realizer::realize(
             &mut journal.transactions,
@@ -86,6 +86,26 @@ pub fn enrich(journal: &mut Journal, target: Option<&str>) {
             &journal.prices,
             cta_gain,
             cta_loss,
+            precision,
+        );
+    }
+
+    // `--unrealized`: mark open foreign positions to the latest available
+    // rate, booking the unrealized FX to the `fx-unrealized` accounts.
+    // Opt-in and separate from the historical default, so the realized
+    // (default) view stays unchanged.
+    if let (Some(t), true, Some(rg), Some(rl)) = (
+        target,
+        unrealized,
+        journal.fx_unrealized_gain.as_deref(),
+        journal.fx_unrealized_loss.as_deref(),
+    ) {
+        let precision = journal.precisions.get(t).copied().unwrap_or(2);
+        crate::revaluator::revaluate(
+            &mut journal.transactions,
+            t,
+            &journal.prices,
+            &crate::revaluator::RevaluationAccounts { gain: rg, loss: rl },
             precision,
         );
     }

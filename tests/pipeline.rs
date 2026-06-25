@@ -80,11 +80,11 @@ fn sorts_transactions_by_date() {
 #[test]
 fn fx_accounts_extracted_into_journal() {
     let j = common::load(
-        "account Equity:FxGain\n    fx gain\n\
-         account Equity:FxLoss\n    fx loss\n",
+        "account Equity:FxGain\n    fx-realized gain\n\
+         account Equity:FxLoss\n    fx-realized loss\n",
     );
-    assert_eq!(j.fx_gain.as_deref(), Some("Equity:FxGain"));
-    assert_eq!(j.fx_loss.as_deref(), Some("Equity:FxLoss"));
+    assert_eq!(j.fx_realized_gain.as_deref(), Some("Equity:FxGain"));
+    assert_eq!(j.fx_realized_loss.as_deref(), Some("Equity:FxLoss"));
 }
 
 #[test]

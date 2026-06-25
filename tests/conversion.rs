@@ -104,7 +104,7 @@ fn rebalance_lot_posting_converts_via_cost_weight() {
 /// accumulate drift under per-posting historical conversion. The
 /// translator phase appends a paren-virtual posting on the declared
 /// `fx cta` account so the drift is named and reportable — the
-/// pattern matches how the realizer labels fx gain/loss on
+/// pattern matches how the realizer labels fx-realized gain/loss on
 /// multi-commodity transactions.
 #[test]
 fn cta_labels_transit_drift_on_declared_account() {
