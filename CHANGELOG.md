@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.2 — 2026-06-25
+
+### Thu 25 Jun 2026 - HTTPS backend: native-tls instead of rustls
+
+`acc update` fetches rates over HTTPS through `ureq`. The TLS backend is
+switched from `ureq`'s rustls feature to **`native-tls`** (the system
+OpenSSL on Linux/BSD, Secure Transport on macOS, SChannel on Windows).
+
+The reason is purely a build-portability one: rustls pulls in `ring`,
+whose bundled C/assembly fails to link in some clean build environments —
+notably an Arch clean-chroot (`pkgctl build`), where the `lld` linker
+leaves `ring_core_*` symbols undefined and the build aborts. `native-tls`
+sidesteps `ring` entirely, so the binary links cleanly there. No change
+to what `acc update` does; on Linux/BSD the build now needs a system
+OpenSSL (present on essentially every such box).
+
+(First shipped as 0.10.1; 0.10.2 is a version-only re-release with no
+source change.)
+
 ## 0.10.0 — 2026-06-25
 
 ### Thu 25 Jun 2026 - fx-realized vs unrealized, and `--unrealized` mark-to-market

@@ -111,7 +111,9 @@ cargo build --release
 ```
 
 Minimum Rust: **1.85** (edition 2024). Runs anywhere Rust builds
-(Linux, macOS, Windows, BSDs).
+(Linux, macOS, Windows, BSDs). On **Linux/BSD** the build needs a system
+**OpenSSL** (HTTPS for `acc update` goes through native-tls); macOS and
+Windows use the OS-native TLS stack, so no extra dependency there.
 
 **What gets written where:** acc never writes to your journal. The
 only thing that writes to disk is `acc update`, which writes rate
