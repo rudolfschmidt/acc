@@ -22,6 +22,10 @@
 //!    pass-through accounts. Lot-tracked assets enter at their market
 //!    value and leave at that same value as the `{}` cost basis, so they
 //!    net to zero under conversion — CTA sees no drift there.
+//! 5. **revaluator** — opt-in (`-X` with `--unrealized`) mark-to-market of
+//!    every open foreign balance to the latest available rate, booking the
+//!    unrealized FX to the `fx-unrealized` accounts. Off by default, so the
+//!    historical (realized) view is untouched.
 //!
 //! `rebalance`, `filter` and `sort` are deliberately *not* here. They are
 //! driven by CLI flags (pattern, date range, `-X` target, sort keys) and

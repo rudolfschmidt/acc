@@ -11,10 +11,10 @@ use super::transaction::Transaction;
 ///
 /// Block directives (`commodity`, `account`) carry their indented
 /// sub-directives inline: a `commodity` block folds its `alias` children
-/// into `Commodity.aliases`. `Account` is a scaffold that the indented
-/// `fx-realized gain`/`fx-realized loss` sub-directive replaces with the corresponding
-/// `FxGainAccount`/`FxLossAccount` entry. The parser accumulates these
-/// by mutating the last emitted entry when a new indented line arrives,
+/// into `Commodity.aliases`. An `account` block with an indented role
+/// sub-directive (`fx-realized gain`, `capital loss`, …) is upgraded to a
+/// `RoleAccount` carrying that role. The parser accumulates these by
+/// mutating the last emitted entry when a new indented line arrives,
 /// which lets it remain state-less between lines.
 ///
 /// Alias resolution and price-DB construction happen in the resolve
@@ -35,8 +35,8 @@ pub enum Entry {
     },
 
     /// `account NAME` without (or before) a sub-directive. Acts as a
-    /// scaffold that `handle_indented` upgrades to a `RoleAccount` when
-    /// a role sub-directive arrives. If no sub-directive follows, the
+    /// scaffold the parser upgrades to a `RoleAccount` when a role
+    /// sub-directive arrives. If no sub-directive follows, the
     /// entry stays and resolve drops it.
     Account(String),
 

@@ -42,7 +42,7 @@ pub struct Resolved {
     /// Both must be present for the lot/capital-gains phase to run.
     pub capital_gain: Option<String>,
     pub capital_loss: Option<String>,
-    /// Declared via `account NAME / fx-unrealized gain` / `revaluation
+    /// Declared via `account NAME / fx-unrealized gain` / `fx-unrealized
     /// loss`. Both must be present for the `--unrealized` revaluator to run.
     pub fx_unrealized_gain: Option<String>,
     pub fx_unrealized_loss: Option<String>,
@@ -121,12 +121,10 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                 }
                 transactions.push(Located { file, line, value: tx });
             }
-            Entry::AutoRule(mut rule) => {
-                // Apply commodity aliases to the injected postings'
-                // account names? No — aliases are commodity aliases,
-                // not account aliases. Accounts aren't renamed. Just
-                // collect the rule for the expander.
-                // But: an empty rule (no postings) is useless; reject.
+            Entry::AutoRule(rule) => {
+                // Commodity aliases are not applied to auto-rule account
+                // names — aliases rename commodities, not accounts. An
+                // empty rule (no postings) is useless; reject it.
                 if rule.postings.is_empty() {
                     return Err(ResolveError::new(
                         file.clone(),
@@ -150,12 +148,6 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                             total
                         ),
                     ));
-                }
-                // Strip any aliases that resolve in posting accounts —
-                // not relevant for auto-rules (account names are
-                // literal), just store as-is.
-                for _ in &mut rule.postings {
-                    // Placeholder: no per-posting alias work needed.
                 }
                 auto_rules.push(rule);
             }

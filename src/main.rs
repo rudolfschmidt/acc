@@ -8,8 +8,9 @@ use clap::{Args as ClapArgs, Parser, Subcommand};
     disable_version_flag = true
 )]
 struct Args {
-    /// Print version and exit. Lower-case `-v` — upper-case `-V` is
-    /// `--unrealized` (mirroring ledger's market-valuation flag).
+    /// Print version and exit. Lower-case `-v` — upper-case `-V` is taken
+    /// by `--unrealized` (reusing the `-V` letter ledger spends on market
+    /// valuation, here for acc's opt-in unrealized-FX revaluation).
     #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
     version: Option<bool>,
 
