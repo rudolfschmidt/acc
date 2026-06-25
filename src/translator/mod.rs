@@ -25,7 +25,7 @@
 //! would misrepresent the event. A separate transaction with its
 //! own date and description keeps the audit trail clean.
 //!
-//! CTA and the realizer (fx gain / fx loss) are complementary, not
+//! CTA and the realizer (fx-realized gain / fx-realized loss) are complementary, not
 //! mutually exclusive: the realizer books the trade-day deviation
 //! (implied vs market rate) on multi-commodity transactions, while CTA
 //! books the holding-period drift (market-rate movement between inflow
@@ -53,7 +53,7 @@ use crate::parser::transaction::{State, Transaction};
 /// Applies to every pass-through account, single- or multi-commodity:
 /// CTA books the holding-period drift (market-rate movement between
 /// inflow and outflow), which is independent of the realizer's
-/// trade-day fx gain/loss — the two never double-book the same amount.
+/// trade-day fx-realized gain/loss — the two never double-book the same amount.
 pub fn translate(
     txs: &mut Vec<Located<Transaction>>,
     target: &str,
@@ -90,7 +90,7 @@ fn identify_transit_groups(
     // to exactly zero per (account, commodity) over the journal — money
     // came in and went back out. Both single- and multi-commodity
     // accounts qualify: CTA books only the holding-period drift, which
-    // is a different quantity than the realizer's trade-day fx gain/loss
+    // is a different quantity than the realizer's trade-day fx-realized gain/loss
     // (proven 2026-06-21), so the two never double-book.
     let mut sums: HashMap<(String, String), Decimal> = HashMap::new();
     for lt in txs {

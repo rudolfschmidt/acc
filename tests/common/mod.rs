@@ -62,7 +62,16 @@ use acc::parser::transaction::Transaction;
 /// Returns the transformed transactions for target-currency assertions.
 pub fn run_x(src: &str, target: &str) -> Vec<Located<Transaction>> {
     let mut j = load(src);
-    acc::pipeline::enrich(&mut j, Some(target));
+    acc::pipeline::enrich(&mut j, Some(target), false);
+    acc::rebalancer::rebalance(&mut j.transactions, target, &j.prices);
+    j.transactions
+}
+
+/// Like [`run_x`] but with `--unrealized` on: open foreign positions are
+/// marked to the latest available rate (the revaluator runs).
+pub fn run_unrealized(src: &str, target: &str) -> Vec<Located<Transaction>> {
+    let mut j = load(src);
+    acc::pipeline::enrich(&mut j, Some(target), true);
     acc::rebalancer::rebalance(&mut j.transactions, target, &j.prices);
     j.transactions
 }
@@ -72,7 +81,7 @@ pub fn run_x(src: &str, target: &str) -> Vec<Located<Transaction>> {
 /// capital-gain assertions.
 pub fn run_native(src: &str) -> Vec<Located<Transaction>> {
     let mut j = load(src);
-    acc::pipeline::enrich(&mut j, None);
+    acc::pipeline::enrich(&mut j, None, false);
     j.transactions
 }
 

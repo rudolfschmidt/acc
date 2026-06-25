@@ -30,8 +30,8 @@ use acc::parser::transaction::Transaction;
 const ACCOUNTS: &str = "\
     account in:cap\n    capital gain\n\
     account ex:cap\n    capital loss\n\
-    account in:fx\n    fx gain\n\
-    account ex:fx\n    fx loss\n\
+    account in:fx\n    fx-realized gain\n\
+    account ex:fx\n    fx-realized loss\n\
     account in:cta\n    cta gain\n\
     account ex:cta\n    cta loss\n";
 
@@ -104,7 +104,7 @@ fn market_loss_routes_to_loss_account() {
 #[test]
 fn fx_booked_on_buy_and_sell() {
     // Market 30000 → 50000. Bought 1000 *below* market (paid 29000) and
-    // sold 1000 *above* market (got 51000): a 1000 fx gain on each trade
+    // sold 1000 *above* market (got 51000): a 1000 fx-realized gain on each trade
     // → 2000 fx total. The market move (20000) stays on capital — the
     // realizer and the lotter split the 22000 total cleanly.
     let src = format!(
@@ -153,7 +153,7 @@ fn disposal_account_zeroes_and_journal_balances() {
 #[test]
 fn realizer_runs_alongside_capital_tracking() {
     // Capital accounts are declared, yet the realizer still runs: a buy
-    // 2000 below market books a 2000 fx gain. The buy only opens a lot,
+    // 2000 below market books a 2000 fx-realized gain. The buy only opens a lot,
     // so no capital is realized yet — proving the realizer is no longer
     // skipped when capital tracking is active. No transfer → no CTA.
     let src = format!(

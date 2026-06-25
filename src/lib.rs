@@ -26,6 +26,7 @@ pub mod pipeline;
 pub mod realizer;
 pub mod rebalancer;
 pub mod resolver;
+pub mod revaluator;
 pub mod sorter;
 pub mod translator;
 

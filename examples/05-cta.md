@@ -7,7 +7,7 @@ Changes in Foreign Exchange Rates*) and **US-GAAP ASC 830**
 ## The problem
 
 Under per-posting historical conversion (`tx.date` rate, the
-default `-x` mode), a transit account that receives money in one
+default `-X` mode), a transit account that receives money in one
 currency and pays the same amount out later is **empty in native**
 but **non-zero in target** because rates moved between inflow and
 outflow.
@@ -55,10 +55,10 @@ $ acc -f journal.ledger bal
 ```
 
 `assets:checking` is gone from the balance (empty in €, hidden by
-default). Now with `-x USD`:
+default). Now with `-X USD`:
 
 ```
-$ acc -f journal.ledger bal -x USD
+$ acc -f journal.ledger bal -X USD
   $1800.00 assets
   $1800.00   checking         ← phantom drift, checking was empty
  $20700.00 expenses
@@ -110,7 +110,7 @@ phase doesn't run.
 ## Same journal with CTA declared
 
 ```
-$ acc -f journal.ledger bal -x USD
+$ acc -f journal.ledger bal -X USD
   $1800.00 equity
   $1800.00   cta
   $1800.00     loss
@@ -127,7 +127,7 @@ EUR during a weakening period cost the USD-reporting entity value.
 ## Register shows the injected adjustments
 
 ```
-$ acc -f journal.ledger reg -x USD
+$ acc -f journal.ledger reg -X USD
 2024-01-15 * salary A                assets:checking     $11000.00  $11000.00
                                      income:salary      $-11000.00          0
 2024-06-15 * invoice paid A          expenses:services   $10500.00  $10500.00
@@ -158,7 +158,7 @@ is named elsewhere.
 ## Reports on CTA
 
 ```
-$ acc -f journal.ledger bal equity:cta -x USD
+$ acc -f journal.ledger bal equity:cta -X USD
 $1800.00 equity
 $1800.00   cta
 $1800.00     loss
@@ -172,7 +172,7 @@ If you want to see only the flows you typed, without the injected
 adjustments:
 
 ```
-$ acc -f journal.ledger bal -x USD -R
+$ acc -f journal.ledger bal -X USD -R
   $1800.00 assets
   $1800.00   checking
  $20700.00 expenses
@@ -189,25 +189,30 @@ bracket-virtual translator labels). The `$1800` goes back to
 Use `-R` when you want to audit the "just the transactions I
 entered" view without automated bookkeeping overlaid.
 
-## Interaction with `--market`
+## Interaction with `-V` / `--unrealized`
 
-Under `--market DATE`, every posting converts at one fixed rate,
-so transit accounts net to zero automatically — there's no drift
-to book and the translator emits nothing:
+CTA and mark-to-market (`-V`) are **complementary and never
+overlap**. CTA books the *realized* drift on a transit once it has
+**closed** — native balance back to zero. `-V` does the other end: it
+skips zero-native accounts entirely (they are CTA's job) and marks
+accounts that still hold an **open** foreign balance to the latest
+rate.
+
+On this journal the transit has fully closed, so CTA nets it to zero
+— and adding `-V` changes nothing for it:
 
 ```
-$ acc -f journal.ledger bal -x USD --market 2025-06-15
- $20400.00 expenses
- $20400.00   services
-$-20400.00 income
-$-20400.00   salary
----------
-         0
+$ acc -f journal.ledger bal ^assets -X USD        # CTA active
+    0
+
+$ acc -f journal.ledger bal ^assets -X USD -V     # -V skips the closed transit
+    0
 ```
 
-CTA exists to fix a structural artifact of per-posting historical
-conversion. If you're already using a single rate, the artifact
-doesn't arise.
+A still-open foreign balance is the mirror image: untouched by CTA
+(it never closed), marked to market by `-V`. The two split the work
+cleanly — realized drift on closed transits to CTA, unrealized
+revaluation of open balances to `-V` — so nothing is double-counted.
 
 ## Sign convention
 

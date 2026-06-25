@@ -82,6 +82,9 @@ BTC0.70000000   btc
    $-17000.00   cash
     $-9000.00 income
     $-9000.00   gain
+-------------
+   $-26000.00
+BTC0.70000000
 ```
 
 `assets:btc` holds **0.7 BTC** — 0.2 left from the 30k lot plus
