@@ -99,6 +99,7 @@ pub fn filter(
     related: bool,
     whole_transactions: bool,
     sign: SignFilter,
+    display: Option<&str>,
 ) -> Journal {
     // Only `transactions` is transformed; every other field passes
     // through unchanged, so `..journal` carries them — including any
@@ -111,6 +112,7 @@ pub fn filter(
         related,
         whole_transactions,
         sign,
+        display,
     );
     Journal {
         transactions,
@@ -128,8 +130,10 @@ fn filter_transactions(
     related: bool,
     whole_transactions: bool,
     sign: SignFilter,
+    display: Option<&str>,
 ) -> Vec<Located<Transaction>> {
     let matcher = (!patterns.is_empty()).then(|| PatternMatcher::from_parts(patterns));
+    let display_matcher = display.map(PatternMatcher::new);
 
     let begin_d = begin.and_then(|s| crate::date::Date::parse(s).ok());
     let end_d = end.and_then(|s| crate::date::Date::parse(s).ok());
@@ -164,7 +168,13 @@ fn filter_transactions(
                 // - `related` (-r): keep the *siblings* of the matched
                 //   postings — drop the matched ones.
                 // - default (reg/bal): keep only the matched postings.
-                if !whole_transactions {
+                //
+                // Skipped entirely when `--display` is set: that flag
+                // defines its own projection on the *full* posting set
+                // (below), so the default prune-to-matched must not run
+                // first — otherwise there would be nothing left to
+                // project from.
+                if !whole_transactions && display_matcher.is_none() {
                     if related {
                         lt.value.postings.retain(|lp| {
                             !m.matches_full(&lp.value, &desc_lower, &code_lower)
@@ -175,6 +185,18 @@ fn filter_transactions(
                         });
                     }
                 }
+            }
+
+            // Display projection (`--display` / `-d`): keep only the
+            // postings whose account matches the pattern, from the full
+            // posting set of each selected transaction. The positional
+            // pattern selects *which transactions*; this picks *which of
+            // their postings* are shown — so `--related-all` is not
+            // needed to widen first. Account-only (`^acc`, `acc$`,
+            // `^acc$`, or substring); the running total then sums only
+            // the shown postings.
+            if let Some(d) = &display_matcher {
+                lt.value.postings.retain(|lp| d.matches(&lp.value.account));
             }
 
             // Secondary projection: the sign filter (`--pos` / `--neg`)
@@ -553,7 +575,7 @@ mod tests {
 
     fn run(patterns: &[&str], txs: Vec<Located<Transaction>>) -> Vec<Located<Transaction>> {
         let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
-        filter_transactions(txs, &pats, None, None, false, false, SignFilter::Any)
+        filter_transactions(txs, &pats, None, None, false, false, SignFilter::Any, None)
     }
 
     fn run_sign(
@@ -563,7 +585,27 @@ mod tests {
         txs: Vec<Located<Transaction>>,
     ) -> Vec<Located<Transaction>> {
         let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
-        filter_transactions(txs, &pats, None, None, false, whole_transactions, sign)
+        filter_transactions(txs, &pats, None, None, false, whole_transactions, sign, None)
+    }
+
+    fn run_display(
+        patterns: &[&str],
+        related: bool,
+        whole_transactions: bool,
+        display: &str,
+        txs: Vec<Located<Transaction>>,
+    ) -> Vec<Located<Transaction>> {
+        let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
+        filter_transactions(
+            txs,
+            &pats,
+            None,
+            None,
+            related,
+            whole_transactions,
+            SignFilter::Any,
+            Some(display),
+        )
     }
 
     fn account(lt: &Located<Transaction>, idx: usize) -> &str {
@@ -895,6 +937,7 @@ mod tests {
             false,
             false,
             SignFilter::Any,
+            None,
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value.date.to_string(), "2025-02-01");
@@ -1020,5 +1063,98 @@ mod tests {
         let out = run_sign(&["^assets:vendor"], true, SignFilter::NonNegative, txs);
         assert_eq!(out.len(), 1);
         assert_eq!(accounts(&out[0]), vec!["assets:vendor"]);
+    }
+
+    #[test]
+    fn display_projects_postings_without_related_all() {
+        // Select transactions touching the vendor account, then show only
+        // their expense postings — `--related-all` is not needed, the
+        // projection runs on the full posting set.
+        let txs = vec![tx(
+            "2025-01-05",
+            "Vendor",
+            vec![
+                posting("expenses:food", "EUR", 30),
+                posting("expenses:fee", "EUR", 5),
+                posting("assets:vendor", "EUR", -35),
+            ],
+        )];
+        let out = run_display(&["^assets:vendor"], false, false, "^ex", txs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(accounts(&out[0]), vec!["expenses:food", "expenses:fee"]);
+    }
+
+    #[test]
+    fn display_same_result_with_or_without_related_all() {
+        let mk = || {
+            vec![tx(
+                "2025-01-05",
+                "Vendor",
+                vec![
+                    posting("expenses:food", "EUR", 30),
+                    posting("assets:vendor", "EUR", -30),
+                ],
+            )]
+        };
+        let without = run_display(&["^assets:vendor"], false, false, "^ex", mk());
+        let with = run_display(&["^assets:vendor"], false, true, "^ex", mk());
+        assert_eq!(accounts(&without[0]), vec!["expenses:food"]);
+        assert_eq!(accounts(&without[0]), accounts(&with[0]));
+    }
+
+    #[test]
+    fn display_without_positional_pattern_keeps_matching_postings() {
+        let txs = vec![
+            tx(
+                "2025-01-05",
+                "a",
+                vec![
+                    posting("expenses:food", "EUR", 30),
+                    posting("assets:cash", "EUR", -30),
+                ],
+            ),
+            tx(
+                "2025-01-06",
+                "b",
+                vec![
+                    posting("income:job", "EUR", -50),
+                    posting("assets:cash", "EUR", 50),
+                ],
+            ),
+        ];
+        let out = run_display(&[], false, false, "^ex", txs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(accounts(&out[0]), vec!["expenses:food"]);
+    }
+
+    #[test]
+    fn display_drops_transaction_with_no_matching_posting() {
+        // Selected by the vendor account, but no expense posting — nothing
+        // to project, so the transaction is dropped rather than shown empty.
+        let txs = vec![tx(
+            "2025-01-05",
+            "Vendor",
+            vec![
+                posting("income:job", "EUR", -50),
+                posting("assets:vendor", "EUR", 50),
+            ],
+        )];
+        let out = run_display(&["^assets:vendor"], false, false, "^ex", txs);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn display_ends_with_anchor() {
+        let txs = vec![tx(
+            "2025-01-05",
+            "a",
+            vec![
+                posting("assets:bank:cash", "EUR", 10),
+                posting("assets:bank:savings", "EUR", -10),
+            ],
+        )];
+        let out = run_display(&[], false, false, "cash$", txs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(accounts(&out[0]), vec!["assets:bank:cash"]);
     }
 }

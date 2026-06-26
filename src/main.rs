@@ -92,6 +92,17 @@ struct ReportArgs {
     #[arg(long = "neg")]
     neg: bool,
 
+    /// Show only postings whose account matches PATTERN. A projection
+    /// applied after transaction selection, on the *full* posting set
+    /// of each matched transaction — the positional pattern picks which
+    /// transactions, this picks which of their postings — so
+    /// `--related-all` is not needed to widen first. Account-only:
+    /// `^acc` (starts-with), `acc$` (ends-with), `^acc$` (exact), or
+    /// `acc` (contains); case-insensitive. The running total sums only
+    /// the shown postings. Named after ledger's `-d`.
+    #[arg(short = 'd', long = "display", value_name = "PATTERN")]
+    display: Option<String>,
+
     /// Sort by field: date, amount, account, description. Prefix with - for reverse. (default: date)
     #[arg(short = 'S', long = "sort", default_value = "date")]
     sort: Vec<String>,
@@ -762,6 +773,7 @@ fn start() -> Result<(), acc::Error> {
     let pos = filter_args.map(|f| f.pos).unwrap_or(false);
     let neg = filter_args.map(|f| f.neg).unwrap_or(false);
     let sign = acc::filter::SignFilter::from_flags(pos, neg);
+    let display = filter_args.and_then(|f| f.display.as_deref());
     let mut journal = acc::filter::filter(
         journal,
         command.patterns(),
@@ -770,6 +782,7 @@ fn start() -> Result<(), acc::Error> {
         related,
         whole_transactions,
         sign,
+        display,
     );
 
     // Multiple `-p`: keep transactions whose date falls within any
