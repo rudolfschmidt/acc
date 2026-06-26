@@ -19,6 +19,7 @@ pub use located::Located;
 pub use posting::{Amount, Costs, LotCost, Posting};
 pub use transaction::{State, Transaction};
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Parse a journal source string into a flat stream of entries.
@@ -46,16 +47,33 @@ pub fn parse_with_file(
     // prevents repeated reallocation as the vec grows on price-heavy
     // inputs (which dominate the real-world workload).
     let mut entries = Vec::with_capacity(source.len() / 30);
+    // Intern commodity symbols while parsing. A real price-heavy journal
+    // repeats ~200 symbols across 800k+ `P` directives; allocating a fresh
+    // `Arc<str>` per directive (which the resolver then dedups and throws
+    // away) was the load-time bottleneck. Interning here collapses that to
+    // one allocation per distinct symbol.
+    let mut commodities: HashSet<Arc<str>> = HashSet::new();
     for (idx, text) in source.lines().enumerate() {
-        dispatch(text, idx + 1, &file, &mut entries)?;
+        dispatch(text, idx + 1, &file, &mut commodities, &mut entries)?;
     }
     Ok(entries)
+}
+
+/// Intern a commodity symbol: one shared `Arc<str>` per distinct string.
+fn intern(commodities: &mut HashSet<Arc<str>>, s: &str) -> Arc<str> {
+    if let Some(existing) = commodities.get(s) {
+        return existing.clone();
+    }
+    let arc: Arc<str> = Arc::from(s);
+    commodities.insert(arc.clone());
+    arc
 }
 
 fn dispatch(
     text: &str,
     line: usize,
     file: &Arc<str>,
+    commodities: &mut HashSet<Arc<str>>,
     entries: &mut Vec<Located<Entry>>,
 ) -> Result<(), ParseError> {
     match text.as_bytes() {
@@ -63,7 +81,7 @@ fn dispatch(
         // Indent per Ledger rule: tab OR two-plus spaces.
         [b'\t', ..] | [b' ', b' ', ..] => extend_block(text, line, file, entries),
         [b'0'..=b'9', ..] => parse_transaction(text, line, file, entries),
-        [b'P', b' ', ..] => parse_price(&text[2..], line, file, entries),
+        [b'P', b' ', ..] => parse_price(&text[2..], line, file, commodities, entries),
         [b';' | b'#', ..] => {
             entries.push(Located {
                 file: file.clone(),
@@ -150,6 +168,7 @@ fn parse_price(
     rest: &str,
     line: usize,
     file: &Arc<str>,
+    commodities: &mut HashSet<Arc<str>>,
     entries: &mut Vec<Located<Entry>>,
 ) -> Result<(), ParseError> {
     let mut tokens = rest.split_whitespace();
@@ -180,8 +199,8 @@ fn parse_price(
         line,
         value: Entry::Price(Price {
             date,
-            base: Arc::from(base),
-            quote: Arc::from(quote),
+            base: intern(commodities, base),
+            quote: intern(commodities, quote),
             rate,
         }),
     });

@@ -153,13 +153,19 @@ pub fn next_year_start(date: &str) -> Result<String, String> {
 }
 
 pub fn date_to_days(date: &str) -> Result<u32, String> {
-    let parts: Vec<&str> = date.split('-').collect();
-    if parts.len() != 3 {
+    // Split without collecting into a Vec — this runs ~once per price
+    // directive (the dominant real-world workload), so the per-call heap
+    // allocation a `Vec<&str>` costs is pure overhead at 800k+ prices.
+    let mut parts = date.split('-');
+    let (Some(ys), Some(ms), Some(ds)) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(format!("invalid date format: {}", date));
+    };
+    if parts.next().is_some() {
         return Err(format!("invalid date format: {}", date));
     }
-    let y: i64 = parts[0].parse().map_err(|_| format!("invalid year: {}", parts[0]))?;
-    let m: i64 = parts[1].parse().map_err(|_| format!("invalid month: {}", parts[1]))?;
-    let d: i64 = parts[2].parse().map_err(|_| format!("invalid day: {}", parts[2]))?;
+    let y: i64 = ys.parse().map_err(|_| format!("invalid year: {}", ys))?;
+    let m: i64 = ms.parse().map_err(|_| format!("invalid month: {}", ms))?;
+    let d: i64 = ds.parse().map_err(|_| format!("invalid day: {}", ds))?;
     // Reject out-of-range calendar fields. Without this a typo like
     // `2024-13-01` or `2024-02-30` would silently roll over into the
     // next month/year (via civil_to_days), mis-filing the transaction.
