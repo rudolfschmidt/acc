@@ -34,7 +34,7 @@ pub mod translator;
 pub(crate) mod i256;
 
 pub use error::Error;
-pub use loader::{load, Journal, LoadError};
+pub use loader::{load, load_selective, Journal, LoadError};
 
 /// Extension treated as a journal file when walking a directory.
 /// Only `.ledger` is picked up by the recursive walk, so non-journal

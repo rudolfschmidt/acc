@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.11.1 — 2026-06-26
+
+### Fri 26 Jun 2026 - selective price loading: parse only the pairs a report can use
+
+A `-X` report loads `$ACC_PRICES_DIR`, a price database that can run to
+hundreds of thousands of `P` directives. Profiling a load that felt slow
+showed the cost is almost entirely there, and almost entirely *allocation*:
+interning commodity symbols and building `Arc<str>` keys, with the kernel
+spending roughly a fifth of the time servicing page faults from the churn.
+The decimal and date parses barely register.
+
+Two changes, smallest first:
+
+- **Intern commodity symbols during the parse.** A `P` directive's
+  base/quote are now deduplicated against a `HashSet<Arc<str>>` as they're
+  read, collapsing the symbol allocations of a large DB down to the few
+  hundred distinct commodities that actually occur. ~14% off the load on
+  its own.
+
+- **Selective loading.** The journal is now parsed *first*, which tells us
+  exactly which commodities a report can touch — every commodity in a
+  posting (amount, cost, lot cost, assertion) plus the `-X` target. The
+  price files are then parsed with a filter that keeps a `P` directive only
+  when *both* its commodities are in that set; everything else is dropped
+  before the date/decimal parse ever runs.
+
+  This is correct because the price DB is a clean **`$`-hub star**: every
+  rate carries the dollar on one side (`USD <fiat>` for fiat, `<crypto>
+  USDT` for crypto, with `USDT` a 1:1 alias of `USD`), so every conversion
+  is the two hops `X → $ → target`. A pair with one un-needed side can
+  never lie on such a path, so dropping it changes no result. The
+  needed-set is expanded across all alias spellings (`$` / `USD` / `USDT`,
+  `€` / `EUR`) to a fixpoint, so the raw symbols in the files match however
+  they happen to be written.
+
+Measured against a 4.5k-file price DB, a report's load drops from ~0.29s to
+~0.04s — about 7×. Output is byte-identical to the eager path: verified
+against the full DB and pinned by tests that load a journal both ways and
+confirm the reachable pairs survive while unreferenced ones are dropped.
+
+A red herring along the way: rewriting a `Vec`-collecting `split` in the
+date parser as an iterator made no measurable difference — the date parse
+was never the cost. The blocker was allocation, and the real fix is to not
+parse the prices nobody asked for.
+
+The `$ACC_PRICES_DIR` layout is unchanged; nothing about how prices are
+kept on disk has to move.
+
 ## 0.11.0 — 2026-06-25
 
 ### Thu 25 Jun 2026 - commodity-neutral role names: slippage / holding / cta

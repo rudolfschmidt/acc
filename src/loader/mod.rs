@@ -17,7 +17,7 @@ pub mod journal;
 pub use error::LoadError;
 pub use journal::Journal;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -38,7 +38,38 @@ where
     P: AsRef<Path> + Sync,
 {
     let entries = read_and_parse(files)?;
+    finish_load(entries)
+}
 
+/// Load the journal, then load only the price-DB pairs the report can use.
+///
+/// `journal_files` are parsed first to learn the held commodities + the
+/// `-X` target; the `price_files` (the `ACC_PRICES_DIR` star, ~800k
+/// directives) are then parsed with a filter that keeps a `P` directive
+/// only when both its commodities can take part in a conversion the report
+/// needs. Every conversion routes through the `$` hub (`X → $ → target`),
+/// so a pair with one un-needed side is dead weight — dropping it skips the
+/// expensive per-price work for the bulk of the DB.
+pub fn load_selective<P>(
+    journal_files: &[P],
+    price_files: &[P],
+    target: Option<&str>,
+) -> Result<Journal, LoadError>
+where
+    P: AsRef<Path> + Sync,
+{
+    let journal_entries = read_and_parse(journal_files)?;
+    let needed = needed_commodities(&journal_entries, target);
+    let price_entries = read_and_parse_filtered(price_files, &needed)?;
+    // Prices first so journal declarations win on resolution — matches the
+    // eager order where the price-dir files precede the user files.
+    let mut entries = price_entries;
+    entries.extend(journal_entries);
+    finish_load(entries)
+}
+
+/// Resolve → book → index a parsed entry stream into a `Journal`.
+fn finish_load(entries: Vec<Located<Entry>>) -> Result<Journal, LoadError> {
     let resolved = resolver::resolve(entries)?;
     let transactions = booker::book(resolved.transactions)?;
     let prices = indexer::index(resolved.prices);
@@ -66,6 +97,93 @@ where
         aliases: resolved.aliases,
         auto_rules: resolved.auto_rules,
     })
+}
+
+/// Commodities a `-X` report can touch: every commodity that appears in a
+/// posting (amount, cost, lot cost, assertion) plus the target — each
+/// expanded to all its alias spellings, so `$` / `USD` / `USDT` all match
+/// the raw symbols the price files are written in.
+fn needed_commodities(
+    entries: &[Located<Entry>],
+    target: Option<&str>,
+) -> HashSet<String> {
+    use crate::parser::posting::Costs;
+    let mut needed: HashSet<String> = HashSet::new();
+    let mut alias_pairs: Vec<(String, String)> = Vec::new();
+    for located in entries {
+        match &located.value {
+            Entry::Transaction(tx) => {
+                for lp in &tx.postings {
+                    let p = &lp.value;
+                    if let Some(a) = &p.amount {
+                        needed.insert(a.commodity.clone());
+                    }
+                    if let Some(Costs::Total(a) | Costs::PerUnit(a)) = &p.costs {
+                        needed.insert(a.commodity.clone());
+                    }
+                    if let Some(lc) = &p.lot_cost {
+                        needed.insert(lc.amount.commodity.clone());
+                    }
+                    if let Some(a) = &p.balance_assertion {
+                        needed.insert(a.commodity.clone());
+                    }
+                }
+            }
+            Entry::Commodity { symbol, aliases, .. } => {
+                for a in aliases {
+                    alias_pairs.push((symbol.clone(), a.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(t) = target {
+        needed.insert(t.to_string());
+    }
+    // Pull in every alias form, to a fixpoint: a `$ alias USD alias USDT`
+    // chain links all three via `$`, so one pass might miss a hop.
+    loop {
+        let mut grew = false;
+        for (canonical, alias) in &alias_pairs {
+            if needed.contains(canonical) && needed.insert(alias.clone()) {
+                grew = true;
+            }
+            if needed.contains(alias) && needed.insert(canonical.clone()) {
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    needed
+}
+
+/// Parse price files in parallel, keeping only the `P` directives whose
+/// commodities are both in `needed`.
+fn read_and_parse_filtered<P>(
+    files: &[P],
+    needed: &HashSet<String>,
+) -> Result<Vec<Located<Entry>>, LoadError>
+where
+    P: AsRef<Path> + Sync,
+{
+    use rayon::prelude::*;
+
+    let per_file: Result<Vec<Vec<Located<Entry>>>, LoadError> = files
+        .par_iter()
+        .map(|file| {
+            let path = file.as_ref().display().to_string();
+            let source = std::fs::read_to_string(file.as_ref()).map_err(|e| LoadError::Io {
+                path: path.clone(),
+                source: e,
+            })?;
+            let file_arc: Arc<str> = Arc::from(path.as_str());
+            parser::parse_with_file_filtered(&source, file_arc, needed)
+                .map_err(|e| LoadError::Parse { path, source: e })
+        })
+        .collect();
+    Ok(per_file?.into_iter().flatten().collect())
 }
 
 /// Walk every posting and record, per commodity, the maximum
@@ -225,5 +343,56 @@ mod tests {
             LoadError::Io { .. } => {}
             other => panic!("expected Io error, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn selective_keeps_reachable_pairs_and_drops_noise() {
+        // A journal holding ABC bought with $; the price star carries the
+        // useful USD/EUR + ABC/USDT pairs plus a noise pair (XYZ/USDT) for a
+        // commodity the journal never touches. Eager keeps everything;
+        // selective must drop the noise but reach the same valuations.
+        let config = "commodity $\n    alias USD\n    alias USDT\ncommodity €\n    alias EUR\n";
+        let journal = "2024-01-10 * buy\n    assets:crypto  ABC2 @ $30000\n    assets:bank\n";
+        let prices = "P 2024-01-10 USD EUR 0.9\nP 2024-01-10 ABC USDT 30000\nP 2024-01-10 XYZ USDT 2000\n";
+
+        with_tmp("sel_cfg", config, |cfg| {
+            with_tmp("sel_jrn", journal, |jrn| {
+                with_tmp("sel_prc", prices, |prc| {
+                    let eager = load(&[cfg, prc, jrn]).unwrap();
+                    let sel = load_selective(&[cfg, jrn], &[prc], Some("€")).unwrap();
+
+                    // Both reach the held commodity's valuation chain. The
+                    // index stores resolved alias forms, so the `USD EUR`
+                    // price lives under `$`/`€`.
+                    assert!(eager.prices.find("ABC", "$", "2024-01-11").is_some());
+                    assert!(sel.prices.find("ABC", "$", "2024-01-11").is_some());
+                    assert!(sel.prices.find("$", "€", "2024-01-11").is_some());
+
+                    // The noise pair is present eagerly but filtered out
+                    // selectively — XYZ never appears in the journal.
+                    assert!(eager.prices.find("XYZ", "$", "2024-01-11").is_some());
+                    assert!(sel.prices.find("XYZ", "$", "2024-01-11").is_none());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn selective_expands_target_aliases() {
+        // The `-X` target is given as the canonical `€`, but the price file
+        // spells the pair `USD EUR`. Alias expansion of the target must pull
+        // `EUR` into the needed set so the pair survives the filter.
+        let config = "commodity $\n    alias USD\ncommodity €\n    alias EUR\n";
+        let journal = "2024-01-10 * spend\n    expenses:x  $10\n    assets:bank\n";
+        let prices = "P 2024-01-10 USD EUR 0.9\n";
+
+        with_tmp("ali_cfg", config, |cfg| {
+            with_tmp("ali_jrn", journal, |jrn| {
+                with_tmp("ali_prc", prices, |prc| {
+                    let sel = load_selective(&[cfg, jrn], &[prc], Some("€")).unwrap();
+                    assert!(sel.prices.find("$", "€", "2024-01-11").is_some());
+                });
+            });
+        });
     }
 }

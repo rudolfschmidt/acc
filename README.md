@@ -559,7 +559,7 @@ Output locations:
 
 | Variable                    | Used by           | Description |
 |-----------------------------|-------------------|-------------|
-| `ACC_PRICES_DIR`            | main pipeline, `update` | Directory of rate files. When `-X` is set, `.ledger` files under it are auto-loaded before your own `-f` paths. `acc update` writes here. |
+| `ACC_PRICES_DIR`            | main pipeline, `update` | Directory of rate files. When `-X` is set, the `.ledger` files under it are loaded before your own `-f` paths — selectively, keeping only the pairs the report's commodities can use. `acc update` writes here. |
 | `OPENEXCHANGERATES_API_KEY` | `update` (fiat)   | API key from [openexchangerates.org](https://openexchangerates.org). Required for fiat fetching. |
 
 ### Exit codes
@@ -1012,8 +1012,8 @@ remainder visible in the report.
 
 ### `$ACC_PRICES_DIR`
 
-When `-X` is set, every `.ledger` file under the directory the env
-var points to is loaded before your own `-f` paths:
+When `-X` is set, the `.ledger` files under the directory the env
+var points to supply the rates, loaded before your own `-f` paths:
 
 ```
 export ACC_PRICES_DIR=~/accounting/prices/
@@ -1021,6 +1021,18 @@ export ACC_PRICES_DIR=~/accounting/prices/
 
 You can put both acc-fetched (`acc update`) and hand-written `P`
 directives here. No-op when `-X` is absent.
+
+**Selective loading.** The price DB can grow to hundreds of thousands
+of `P` directives, but a report only ever needs the handful of pairs
+that connect the commodities it actually holds to the `-X` target. So
+acc parses your journal first, works out that set (expanded across
+commodity aliases, so `$` / `USD` / `USDT` all match), then keeps a
+`P` directive only when *both* its commodities are in it — every
+other rate is dropped before its date and amount are even parsed. A
+report's load stays flat as the DB grows; on a multi-thousand-file DB
+this is the difference between a fraction of a second and a noticeable
+pause. The directory layout is untouched — nothing about how you keep
+prices on disk has to change.
 
 ### `slippage gain` / `slippage loss` realisation
 
