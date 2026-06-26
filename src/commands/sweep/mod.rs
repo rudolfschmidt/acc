@@ -56,7 +56,15 @@ pub fn run(
 
     // Scope to postings on the pass-through account (real legs only).
     let pattern = [account.to_string()];
-    let scoped = crate::filter::filter(journal, &pattern, None, None, false, false);
+    let scoped = crate::filter::filter(
+        journal,
+        &pattern,
+        None,
+        None,
+        false,
+        false,
+        crate::filter::SignFilter::Any,
+    );
 
     let (out, count) =
         render_entries(&scoped.transactions, &title, segment, income, expense, &precisions);

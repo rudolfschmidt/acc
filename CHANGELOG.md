@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.11.2 — 2026-06-26
+
+### Fri 26 Jun 2026 - --pos / --neg: filter postings by amount sign
+
+Two flags that narrow a report to postings of one sign:
+
+- `--pos` keeps postings whose amount is `>= 0`
+- `--neg` keeps postings whose amount is `<= 0`
+
+A zero amount is neither positive nor negative, so it counts as both
+and shows under either flag. (`--pos` is `!is_negative()`, already true
+for zero; `--neg` adds an explicit `is_zero()`, since `is_negative()`
+is strictly `< 0`. The two overlap on zero by construction.)
+
+These are *secondary* filters: they run after transaction selection,
+narrowing which postings are displayed rather than which transactions
+match. So they compose with `--related-all` — show every posting of a
+matched transaction, then keep only the positive (or negative) ones —
+and a transaction whose postings are all filtered away is dropped.
+
+Sign is read from the native posting amount. Exchange rates are
+positive, so `-X` conversion preserves it: the filter means the same
+thing before and after valuation.
+
 ## 0.11.1 — 2026-06-26
 
 ### Fri 26 Jun 2026 - selective price loading: parse only the pairs a report can use
