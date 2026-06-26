@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.11.3 — 2026-06-26
+
+### Fri 26 Jun 2026 - --display / -d: project which postings of the matched transactions show
+
+`--display PATTERN` (`-d`) narrows a report to the postings whose
+account matches PATTERN, *after* transaction selection. The positional
+pattern picks which transactions; `--display` picks which of their
+postings are shown — selection and projection, decoupled.
+
+It runs on the full posting set of each selected transaction, so it
+overrides the default "prune to the matched postings" and you do not
+need `--related-all` to widen first:
+
+```
+acc reg ^assets:vendor -d ^ex
+```
+
+selects every transaction touching `assets:vendor` and shows only the
+`^ex` postings of those. (`--related-all` alongside it is redundant.)
+
+PATTERN is account-only, in acc's plain pattern grammar — `^acc`
+(starts-with), `acc$` (ends-with), `^acc$` (exact), or `acc`
+(substring), case-insensitive. No regex, no `@` / `#` / `com`, no
+value expressions — the full predicate language ledger's `-d` carries
+is deliberately left out.
+
+Named after ledger's `-d`, but the running total differs by design.
+ledger's `--display` is a pure *display* predicate: hidden postings
+still count toward the total (so a date-windowed register can carry a
+prior balance). acc instead removes the unshown postings, so the `reg`
+running total sums only what you see. That keeps it consistent with
+acc's date filters (`-b` / `-e` / `-p` drop out-of-range transactions
+rather than carrying a balance forward), and answers "what went to
+`^ex`" directly — the end total is the cumulative shown amount.
+
 ## 0.11.2 — 2026-06-26
 
 ### Fri 26 Jun 2026 - --pos / --neg: filter postings by amount sign
