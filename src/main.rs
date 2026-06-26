@@ -647,39 +647,40 @@ fn start() -> Result<(), acc::Error> {
     // `update` already returned above.
     let filter_args: Option<&ReportArgs> = command.filter();
 
-    let mut paths: Vec<std::path::PathBuf> = Vec::new();
-
-    // Load prices first when `-x` is set — the rebalancer and
-    // realizer both need P-directives already in the journal.
-    // `$ACC_PRICES_DIR` contains them.
+    // Price-DB files (`$ACC_PRICES_DIR`, only under `-X`) are kept separate
+    // from the user's journal files so they can be loaded *selectively*: the
+    // journal is parsed first to learn which commodities the report touches,
+    // and only the price pairs connecting them are then parsed. The DB is
+    // ~800k directives; a report needs a handful of pairs.
+    let mut price_paths: Vec<std::path::PathBuf> = Vec::new();
     if filter_args.map(|f| f.exchange.is_some()).unwrap_or(false)
-        && let Ok(dir) = std::env::var("ACC_PRICES_DIR") {
-            let path = std::path::Path::new(&dir);
-            if path.is_dir() {
-                collect_ledger_files(path, &mut paths);
-            }
+        && let Ok(dir) = std::env::var("ACC_PRICES_DIR")
+    {
+        let path = std::path::Path::new(&dir);
+        if path.is_dir() {
+            collect_ledger_files(path, &mut price_paths);
         }
+    }
 
-    // User-provided paths come after so their declarations win on
-    // any later single-pass resolution.
-    //
     // Explicit `-f FILE` is honoured regardless of extension: when the
     // user names a path, the loader will try to read it and surface a
     // proper error if it's missing, instead of silently skipping it.
     // The extension filter only applies when walking a directory tree,
     // where we need to skip backups / READMEs / unrelated files.
+    let mut journal_paths: Vec<std::path::PathBuf> = Vec::new();
     for input in &args.paths {
         let path = std::path::Path::new(input);
         if path.is_dir() {
-            collect_ledger_files(path, &mut paths);
+            collect_ledger_files(path, &mut journal_paths);
         } else {
-            paths.push(path.to_path_buf());
+            journal_paths.push(path.to_path_buf());
         }
     }
 
-    // print --raw: dump source bytes, skip the full pipeline.
+    // print --raw: dump source bytes (prices first, then user files), skip
+    // the full pipeline.
     if let Command::Print { raw: true, .. } = &command {
-        for path in &paths {
+        for path in price_paths.iter().chain(journal_paths.iter()) {
             let source = if path.to_str() == Some("-") {
                 use std::io::Read as _;
                 let mut s = String::new();
@@ -693,7 +694,16 @@ fn start() -> Result<(), acc::Error> {
         return Ok(());
     }
 
-    let mut journal = acc::load(&paths).map_err(|e| acc::Error::from(e.to_string()))?;
+    let mut journal = if price_paths.is_empty() {
+        acc::load(&journal_paths)
+    } else {
+        acc::load_selective(
+            &journal_paths,
+            &price_paths,
+            filter_args.and_then(|f| f.exchange.as_deref()),
+        )
+    }
+    .map_err(|e| acc::Error::from(e.to_string()))?;
 
     // Resolve the `-X` target through the journal's aliases so
     // `-X EUR` and `-X €` both collapse to the canonical symbol the

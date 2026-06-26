@@ -43,6 +43,28 @@ pub fn parse_with_file(
     source: &str,
     file: Arc<str>,
 ) -> Result<Vec<Located<Entry>>, ParseError> {
+    parse_impl(source, file, None)
+}
+
+/// Like [`parse_with_file`], but keeps a `P` directive only when BOTH its
+/// base and quote are in `needed`. Used for selective price loading: the
+/// journal's held commodities + the `-X` target (with their alias forms)
+/// drive `needed`, so the ~800k price DB is filtered at parse time and the
+/// expensive per-price work (date/decimal parse, interning, indexing) is
+/// skipped for every pair the report can't reach.
+pub fn parse_with_file_filtered(
+    source: &str,
+    file: Arc<str>,
+    needed: &HashSet<String>,
+) -> Result<Vec<Located<Entry>>, ParseError> {
+    parse_impl(source, file, Some(needed))
+}
+
+fn parse_impl(
+    source: &str,
+    file: Arc<str>,
+    prices_filter: Option<&HashSet<String>>,
+) -> Result<Vec<Located<Entry>>, ParseError> {
     // Heuristic: a typical ledger line is ~30 bytes. Reserving up front
     // prevents repeated reallocation as the vec grows on price-heavy
     // inputs (which dominate the real-world workload).
@@ -54,7 +76,7 @@ pub fn parse_with_file(
     // one allocation per distinct symbol.
     let mut commodities: HashSet<Arc<str>> = HashSet::new();
     for (idx, text) in source.lines().enumerate() {
-        dispatch(text, idx + 1, &file, &mut commodities, &mut entries)?;
+        dispatch(text, idx + 1, &file, &mut commodities, prices_filter, &mut entries)?;
     }
     Ok(entries)
 }
@@ -74,6 +96,7 @@ fn dispatch(
     line: usize,
     file: &Arc<str>,
     commodities: &mut HashSet<Arc<str>>,
+    prices_filter: Option<&HashSet<String>>,
     entries: &mut Vec<Located<Entry>>,
 ) -> Result<(), ParseError> {
     match text.as_bytes() {
@@ -81,7 +104,7 @@ fn dispatch(
         // Indent per Ledger rule: tab OR two-plus spaces.
         [b'\t', ..] | [b' ', b' ', ..] => extend_block(text, line, file, entries),
         [b'0'..=b'9', ..] => parse_transaction(text, line, file, entries),
-        [b'P', b' ', ..] => parse_price(&text[2..], line, file, commodities, entries),
+        [b'P', b' ', ..] => parse_price(&text[2..], line, file, commodities, prices_filter, entries),
         [b';' | b'#', ..] => {
             entries.push(Located {
                 file: file.clone(),
@@ -169,6 +192,7 @@ fn parse_price(
     line: usize,
     file: &Arc<str>,
     commodities: &mut HashSet<Arc<str>>,
+    prices_filter: Option<&HashSet<String>>,
     entries: &mut Vec<Located<Entry>>,
 ) -> Result<(), ParseError> {
     let mut tokens = rest.split_whitespace();
@@ -187,6 +211,16 @@ fn parse_price(
         .ok_or_else(|| ParseError::new(line, 1, "price directive missing rate"))?;
     if tokens.next().is_some() {
         return Err(ParseError::new(line, 1, "price directive has extra tokens"));
+    }
+
+    // Selective loading: a price is only useful if BOTH its commodities can
+    // appear in a conversion the report needs. Drop it before the expensive
+    // date/decimal parse otherwise. `needed` already carries every alias
+    // form, so the raw symbols here match directly.
+    if let Some(needed) = prices_filter
+        && !(needed.contains(base) && needed.contains(quote))
+    {
+        return Ok(());
     }
 
     let date = crate::date::Date::parse(date_str)
