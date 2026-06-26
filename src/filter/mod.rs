@@ -34,6 +34,50 @@ use crate::parser::located::Located;
 use crate::parser::posting::Posting;
 use crate::parser::transaction::Transaction;
 
+/// Posting-level sign filter, driven by `--pos` / `--neg`. Applied as a
+/// secondary projection *after* transaction selection: it narrows which
+/// postings are shown, by the sign of their amount. Zero counts as both
+/// non-negative and non-positive, so a zero posting survives either flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignFilter {
+    /// No sign constraint.
+    Any,
+    /// `--pos`: keep postings whose amount is `>= 0`.
+    NonNegative,
+    /// `--neg`: keep postings whose amount is `<= 0`.
+    NonPositive,
+}
+
+impl SignFilter {
+    /// Resolve the two CLI flags. Both set (or neither) means no
+    /// constraint — `>= 0` OR `<= 0` already covers every amount, so
+    /// asking for both is the same as asking for nothing.
+    pub fn from_flags(pos: bool, neg: bool) -> Self {
+        match (pos, neg) {
+            (true, false) => SignFilter::NonNegative,
+            (false, true) => SignFilter::NonPositive,
+            _ => SignFilter::Any,
+        }
+    }
+
+    /// Whether a posting passes the sign constraint. A posting without an
+    /// amount has no sign, so it is dropped when a constraint is active.
+    ///
+    /// `>= 0` is `!is_negative()` (already true for zero, since
+    /// `is_negative` is strictly `< 0`); `<= 0` needs the explicit
+    /// `is_zero()` because `is_negative()` excludes zero. The two
+    /// overlap on zero, which is exactly why it shows under both flags.
+    fn keeps(&self, p: &Posting) -> bool {
+        match self {
+            SignFilter::Any => true,
+            SignFilter::NonNegative => p.amount.as_ref().is_some_and(|a| !a.value.is_negative()),
+            SignFilter::NonPositive => {
+                p.amount.as_ref().is_some_and(|a| a.value.is_negative() || a.value.is_zero())
+            }
+        }
+    }
+}
+
 /// Filter phase. Applies `patterns` and an optional `begin` / `end`
 /// date range to the journal. Transactions outside the date range are
 /// dropped; surviving transactions keep only postings that match the
@@ -54,6 +98,7 @@ pub fn filter(
     end: Option<&str>,
     related: bool,
     whole_transactions: bool,
+    sign: SignFilter,
 ) -> Journal {
     // Only `transactions` is transformed; every other field passes
     // through unchanged, so `..journal` carries them — including any
@@ -65,6 +110,7 @@ pub fn filter(
         end,
         related,
         whole_transactions,
+        sign,
     );
     Journal {
         transactions,
@@ -81,6 +127,7 @@ fn filter_transactions(
     end: Option<&str>,
     related: bool,
     whole_transactions: bool,
+    sign: SignFilter,
 ) -> Vec<Located<Transaction>> {
     let matcher = (!patterns.is_empty()).then(|| PatternMatcher::from_parts(patterns));
 
@@ -127,10 +174,23 @@ fn filter_transactions(
                             m.matches_full(&lp.value, &desc_lower, &code_lower)
                         });
                     }
-                    if lt.value.postings.is_empty() {
-                        return None;
-                    }
                 }
+            }
+
+            // Secondary projection: the sign filter (`--pos` / `--neg`)
+            // narrows the postings that survived selection by their
+            // amount sign. It runs even under `whole_transactions`, so it
+            // composes with "show every posting, then keep only the
+            // positive/negative ones".
+            if sign != SignFilter::Any {
+                lt.value.postings.retain(|lp| sign.keeps(&lp.value));
+            }
+
+            // A transaction whose postings were all pruned away carries
+            // nothing to show. (A well-formed entry always starts with at
+            // least one posting, so this only fires after pruning.)
+            if lt.value.postings.is_empty() {
+                return None;
             }
             Some(lt)
         })
@@ -493,7 +553,17 @@ mod tests {
 
     fn run(patterns: &[&str], txs: Vec<Located<Transaction>>) -> Vec<Located<Transaction>> {
         let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
-        filter_transactions(txs, &pats, None, None, false, false)
+        filter_transactions(txs, &pats, None, None, false, false, SignFilter::Any)
+    }
+
+    fn run_sign(
+        patterns: &[&str],
+        whole_transactions: bool,
+        sign: SignFilter,
+        txs: Vec<Located<Transaction>>,
+    ) -> Vec<Located<Transaction>> {
+        let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
+        filter_transactions(txs, &pats, None, None, false, whole_transactions, sign)
     }
 
     fn account(lt: &Located<Transaction>, idx: usize) -> &str {
@@ -817,8 +887,15 @@ mod tests {
             ),
         ];
         let pats: Vec<String> = Vec::new();
-        let out =
-            filter_transactions(txs, &pats, Some("2025-01-15"), Some("2025-02-15"), false, false);
+        let out = filter_transactions(
+            txs,
+            &pats,
+            Some("2025-01-15"),
+            Some("2025-02-15"),
+            false,
+            false,
+            SignFilter::Any,
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value.date.to_string(), "2025-02-01");
     }
@@ -865,5 +942,83 @@ mod tests {
         let out = run(&["not", "not", "^ex"], txs);
         assert_eq!(out.len(), 1);
         assert_eq!(account(&out[0], 0), "expenses:coffee");
+    }
+
+    fn accounts(lt: &Located<Transaction>) -> Vec<&str> {
+        lt.value.postings.iter().map(|lp| lp.value.account.as_str()).collect()
+    }
+
+    #[test]
+    fn sign_pos_keeps_nonnegative_and_zero() {
+        let txs = vec![tx(
+            "2025-01-01",
+            "a",
+            vec![
+                posting("assets:in", "EUR", 5),
+                posting("assets:out", "EUR", -5),
+                posting("assets:zero", "EUR", 0),
+            ],
+        )];
+        let out = run_sign(&[], false, SignFilter::NonNegative, txs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(accounts(&out[0]), vec!["assets:in", "assets:zero"]);
+    }
+
+    #[test]
+    fn sign_neg_keeps_nonpositive_and_zero() {
+        let txs = vec![tx(
+            "2025-01-01",
+            "a",
+            vec![
+                posting("assets:in", "EUR", 5),
+                posting("assets:out", "EUR", -5),
+                posting("assets:zero", "EUR", 0),
+            ],
+        )];
+        let out = run_sign(&[], false, SignFilter::NonPositive, txs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(accounts(&out[0]), vec!["assets:out", "assets:zero"]);
+    }
+
+    #[test]
+    fn sign_filter_drops_emptied_transaction() {
+        // Every posting is positive; `--neg` leaves nothing, so the
+        // transaction is dropped rather than shown empty.
+        let txs = vec![tx(
+            "2025-01-01",
+            "a",
+            vec![posting("assets:a", "EUR", 5), posting("assets:b", "EUR", 5)],
+        )];
+        let out = run_sign(&[], false, SignFilter::NonPositive, txs);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn sign_filter_from_flags_resolves() {
+        assert_eq!(SignFilter::from_flags(true, false), SignFilter::NonNegative);
+        assert_eq!(SignFilter::from_flags(false, true), SignFilter::NonPositive);
+        assert_eq!(SignFilter::from_flags(false, false), SignFilter::Any);
+        // Both at once is the same as no constraint.
+        assert_eq!(SignFilter::from_flags(true, true), SignFilter::Any);
+    }
+
+    #[test]
+    fn sign_filter_composes_with_whole_transactions() {
+        // Pattern selects the transaction, `whole_transactions` keeps all
+        // its postings, then the sign filter narrows to the non-negative
+        // ones — the same secondary-projection mechanism `--related-all`
+        // composes with.
+        let txs = vec![tx(
+            "2025-01-01",
+            "a",
+            vec![
+                posting("assets:vendor", "EUR", 100),
+                posting("expenses:a", "EUR", -60),
+                posting("expenses:b", "EUR", -40),
+            ],
+        )];
+        let out = run_sign(&["^assets:vendor"], true, SignFilter::NonNegative, txs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(accounts(&out[0]), vec!["assets:vendor"]);
     }
 }

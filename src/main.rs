@@ -80,6 +80,18 @@ struct ReportArgs {
     #[arg(long = "related-all")]
     related_all: bool,
 
+    /// Show only postings whose amount is positive (`>= 0`). A
+    /// secondary filter applied after selection: it narrows which
+    /// postings are shown, by sign. A zero amount counts as both
+    /// positive and negative, so it shows under `--pos` and `--neg`.
+    #[arg(long = "pos")]
+    pos: bool,
+
+    /// Show only postings whose amount is negative (`<= 0`). The
+    /// negative counterpart of `--pos`; zero amounts show under both.
+    #[arg(long = "neg")]
+    neg: bool,
+
     /// Sort by field: date, amount, account, description. Prefix with - for reverse. (default: date)
     #[arg(short = 'S', long = "sort", default_value = "date")]
     sort: Vec<String>,
@@ -747,6 +759,9 @@ fn start() -> Result<(), acc::Error> {
     let related = filter_args.map(|f| f.related).unwrap_or(false);
     let related_all = filter_args.map(|f| f.related_all).unwrap_or(false);
     let whole_transactions = related_all || matches!(command, Command::Print { .. });
+    let pos = filter_args.map(|f| f.pos).unwrap_or(false);
+    let neg = filter_args.map(|f| f.neg).unwrap_or(false);
+    let sign = acc::filter::SignFilter::from_flags(pos, neg);
     let mut journal = acc::filter::filter(
         journal,
         command.patterns(),
@@ -754,6 +769,7 @@ fn start() -> Result<(), acc::Error> {
         end,
         related,
         whole_transactions,
+        sign,
     );
 
     // Multiple `-p`: keep transactions whose date falls within any
