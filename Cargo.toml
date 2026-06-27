@@ -1,6 +1,6 @@
 [package]
 name = "acc"
-version = "0.11.3"
+version = "0.11.4"
 authors = ["Rudolf Schmidt <info@rudolfschmidt.com>"]
 edition = "2024"
 license = "GPL-3.0-or-later"
@@ -15,6 +15,7 @@ include = [ "src/**/*.rs", "README.md", "CHANGELOG.md", "LICENSE", "Cargo.toml",
 clap = { version = "4", features = ["derive"] }
 colored = "2"
 crossterm = "0.28"
+native-tls = "0.2"
 ratatui = "0.29"
 rayon = "1"
 serde_json = { version = "1", features = ["arbitrary_precision"] }

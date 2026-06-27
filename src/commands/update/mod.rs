@@ -10,6 +10,27 @@ use crate::error::Error;
 use cli::{parse_pair, Pair};
 use fetch::{mexc_klines, FetchResult};
 
+/// A shared `ureq` agent wired with the native-tls TLS backend.
+///
+/// `ureq`'s `native-tls` feature does *not* configure the default agent —
+/// the connector has to be built explicitly — so a bare `ureq::get` has no
+/// TLS backend and HTTPS fails with "no TLS backend is configured". We
+/// build one agent (cheap to clone — it's `Arc` inside) and reuse it for
+/// every request.
+fn agent() -> ureq::Agent {
+    use std::sync::OnceLock;
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT
+        .get_or_init(|| {
+            let connector = native_tls::TlsConnector::new()
+                .expect("initialise native-tls connector");
+            ureq::AgentBuilder::new()
+                .tls_connector(std::sync::Arc::new(connector))
+                .build()
+        })
+        .clone()
+}
+
 /// Flags controlling which domains are updated.
 pub struct UpdateFlags {
     pub crypto: bool,

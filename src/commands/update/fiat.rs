@@ -99,7 +99,7 @@ fn fetch_and_write(app_id: &str, date: &str) -> Result<(), Error> {
 /// Base is always USD on free/paid tiers.
 fn fetch_day(app_id: &str, date: &str) -> Result<Vec<(String, String)>, Error> {
     let url = format!("{}/{}.json?app_id={}&base=USD", OXR_BASE, date, app_id);
-    let body = match ureq::get(&url).call() {
+    let body = match super::agent().get(&url).call() {
         Ok(resp) => resp.into_string()?,
         Err(ureq::Error::Status(code, resp)) => {
             let msg = resp.into_string().unwrap_or_default();
