@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.12.0 — 2026-06-27
+
+### Sat 27 Jun 2026 - import: turn a bank CSV export into ledger transactions
+
+New `acc import <csv> -c <profile>` command: convert a bank's CSV export
+into ledger transactions and append them to a cash-account file. Default
+is a dry-run; `--write` (`-w`) actually appends.
+
+**Per-bank profile.** Every bank's CSV differs, so each gets its own small
+profile holding only the bank-specific bits — nothing standard like the
+delimiter or encoding, which the importer just assumes:
+
+```
+field.date 0          # CSV column indices
+field.payee 2
+field.amount 7
+output.file …/checking.ledger
+output.account assets:bank
+output.commodity €
+commodities …/commodities.ledger   # reuse symbols + precision
+identity date amount payee          # what makes a row unique
+default => expenses:{payee}
+```
+
+`commodities` points at an existing commodity file so amounts format at the
+same precision as the rest of the journal — no redeclaring.
+
+**Categorization.** The long tail of vendors needs no rule: the counter
+account defaults to the payee slugified (lowercased, spaces → dashes).
+Rules override only where that's wrong. A rule is `<field> <value> =>
+<account>`, matching a column as a case-insensitive substring; combine
+conditions on one line with `;` (AND), use separate lines for OR.
+
+**Overlap-safe.** Bank exports overlap in time. Each transaction embeds its
+source row as a `; csv:` comment; a re-import compares incoming rows
+against those — as a multiset over the `identity` fields — and skips any
+already present. So the importer finds where the ledger ends per row, not
+by a date cutoff that could silently drop a missed row inside the window.
+Re-running is idempotent, and existing entries are never rewritten (the
+write is append-only).
+
+**Output.** A dry-run renders the additions as a diff: a few context lines
+around the insertion point, the new lines on a green band with `+` and
+line numbers, under a hollow `○ Preview(file)` header that makes plain
+nothing was written. `--write` appends and shows the same diff under a
+green `● Update(file)`.
+
 ## 0.11.4 — 2026-06-27
 
 ### Sat 27 Jun 2026 - fix: wire the native-tls connector so `acc update` can reach HTTPS
