@@ -558,6 +558,50 @@ Output locations:
 | Crypto | `$ACC_PRICES_DIR/crypto/MEXC_{BASE}_{QUOTE}.ledger`         |
 | Fiat   | `$ACC_PRICES_DIR/fiat/{YYYY-MM-DD}.ledger`                  |
 
+### `acc import`
+
+```
+acc import <CSV> -c <PROFILE> [--write]
+```
+
+Convert a bank's CSV export into ledger transactions via a per-bank
+profile and append them to a cash-account file. Standalone — it does
+not read the journal (only the target file, for de-duplication).
+
+| Flag                  | Default | Description |
+|-----------------------|---------|-------------|
+| `<CSV>`               | —       | The bank CSV export to import (positional, required). |
+| `-c`, `--conf FILE`   | —       | The per-bank import profile (required). |
+| `-w`, `--write`       | off     | Append the new transactions to the target file. Without it a dry-run prints the additions as a diff and writes nothing. |
+
+The profile (`<bank>.conf`) maps the CSV columns and shapes the output;
+only the bank-specific bits are configured — standard CSV defaults
+(delimiter, UTF-8, ISO dates, dot decimals) are assumed:
+
+```
+field.date 0           # CSV column indices
+field.payee 2
+field.amount 7
+output.file path/to/checking.ledger
+output.account assets:bank
+output.commodity €
+commodities path/to/commodities.ledger   # reuse symbols + precision
+identity date amount payee                # what makes a row unique
+default => expenses:{payee}               # fallback counter account
+payee SUPERMARKET => expenses:groceries   # override rule
+```
+
+The counter account defaults to the payee slugified (lowercased, spaces
+→ dashes); rules override only where that's wrong. A rule is `<field>
+<value> => <account>`, matching a column as a case-insensitive
+substring; combine conditions on one line with `;` (AND), separate
+lines for OR.
+
+Re-importing an overlapping export is safe: each transaction embeds its
+source row as a `; csv:` comment, and incoming rows already present
+(matched on the `identity` fields) are skipped. The write is
+append-only — existing entries are never rewritten.
+
 ### Environment variables
 
 | Variable                    | Used by           | Description |

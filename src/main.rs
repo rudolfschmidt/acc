@@ -332,6 +332,20 @@ enum Command {
         #[arg(long)]
         fiat: bool,
     },
+    /// Import a bank CSV export into a `@cash` ledger via a per-bank
+    /// profile. Default is a dry-run (prints the additions as a diff);
+    /// `--write` appends them. Standalone — does not read the journal.
+    Import {
+        /// The bank CSV export to import.
+        csv: String,
+        /// The bank import profile (e.g. `bank.conf`).
+        #[arg(short = 'c', long = "conf", value_name = "FILE")]
+        conf: String,
+        /// Append the new transactions to the ledger. Without it, the
+        /// command only prints what it would add (dry-run).
+        #[arg(short = 'w', long = "write")]
+        write: bool,
+    },
 }
 
 impl Command {
@@ -352,6 +366,7 @@ impl Command {
             | Self::Check
             | Self::Format { .. }
             | Self::Diff { .. }
+            | Self::Import { .. }
             | Self::Sweep { .. } => &[],
         }
     }
@@ -372,6 +387,7 @@ impl Command {
             | Self::Check
             | Self::Format { .. }
             | Self::Diff { .. }
+            | Self::Import { .. }
             | Self::Sweep { .. } => None,
         }
     }
@@ -553,6 +569,12 @@ fn try_standalone(
                 *skip,
                 flags,
             ))
+        }
+
+        // Import converts a bank CSV into ledger transactions. It reads the
+        // target @cash file (for dedup) but never the journal as a whole.
+        Command::Import { csv, conf, write } => {
+            Some(acc::commands::import::run(csv, conf, *write))
         }
 
         // Sweep loads and books the journal, scopes it to the pass-through

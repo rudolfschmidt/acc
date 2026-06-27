@@ -9,6 +9,7 @@ pub mod codes;
 pub mod commodities;
 pub mod diff;
 pub mod format;
+pub mod import;
 pub mod navigate;
 pub mod print;
 pub mod register;
