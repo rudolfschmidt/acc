@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.11.4 — 2026-06-27
+
+### Sat 27 Jun 2026 - fix: wire the native-tls connector so `acc update` can reach HTTPS
+
+0.10.1 switched `ureq`'s TLS backend to native-tls (to drop `ring` and
+link cleanly in a clean-chroot), but `ureq`'s native-tls feature does
+*not* configure the default agent — the connector has to be built
+explicitly. A bare `ureq::get` therefore had no TLS backend, and every
+`acc update` request failed with `Unknown Scheme: … no TLS backend is
+configured`.
+
+Fixed by building a shared `ureq::Agent` with an explicit
+`native_tls::TlsConnector` (added as a direct dependency) and routing both
+the MEXC (crypto) and openexchangerates (fiat) requests through it. The
+agent is built once and reused. This keeps the build-portability win of
+native-tls — no `ring` — while actually making HTTPS work: the same
+connector wiring an earlier revert-to-rustls had sidestepped rather than
+fixed, now done properly.
+
+Verified end-to-end against MEXC (one BTC/USDT day fetched and written).
+
 ## 0.11.3 — 2026-06-26
 
 ### Fri 26 Jun 2026 - --display / -d: project which postings of the matched transactions show

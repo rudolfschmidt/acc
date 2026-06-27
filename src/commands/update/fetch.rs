@@ -66,7 +66,7 @@ enum FetchError {
 }
 
 fn mexc_klines_raw(url: &str) -> Result<String, FetchError> {
-    match ureq::get(url).call() {
+    match super::agent().get(url).call() {
         Ok(resp) => resp
             .into_string()
             .map_err(|e| FetchError::Other(e.to_string())),
