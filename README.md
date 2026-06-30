@@ -393,6 +393,8 @@ transactions still format.
 | Flag          | Default | Description |
 |---------------|---------|-------------|
 | `--sort`      | off     | Stable date-sort the transactions. Off by default: source order is preserved exactly, so formatting only ever touches whitespace and never reorders your entries. With `--sort`, same-day events keep their original relative position. |
+| `--infer`     | off     | On a two-posting transaction whose postings share a commodity, drop the second posting's amount and let it auto-balance — it's just the negation of the first, so writing it is busywork. (Ledger calls the amount-less leg the *null posting* and "infers" its amount; hence the name.) |
+| `--fill`      | off     | The inverse of `--infer`: on a transaction with *more* than two postings sharing a commodity and exactly one amount omitted, compute that amount (the negated sum of the rest) and write it out — the balancing leg is no longer obvious there. Together the two canonicalise a journal: trivial balances elided, non-trivial ones spelled out. Both leave multi-currency legs, costs, lots, assertions and virtual postings untouched. |
 | `PATHS...`    | —       | Files or directories. Files named explicitly are formatted whatever their extension; directories are walked recursively for journal files (only `.ledger`). Pass `-` to read from stdin and write to stdout (for editor pipes); no other path flag is valid in that mode. |
 
 A comment block (e.g. a commented-out transaction) is surrounded by a
@@ -461,7 +463,7 @@ Close the open balance of a pass-through (clearing) account by
 generating offsetting entries. Conceptually `reg ACCOUNT`: sweep pairs
 equal-and-opposite amounts on the account across the whole account (per
 commodity, over all dates), and for every posting that stays open it
-writes one offsetting entry — at that posting's date — that brings the
+emits one offsetting entry — at that posting's date — that brings the
 account back to zero. A debit remainder (`> 0`) books to
 `EXPENSE:SEGMENT`, a credit remainder (`< 0`) to `INCOME:SEGMENT`. Each
 entry is marked cleared (`*`) and titled with the account's last segment.
@@ -473,16 +475,17 @@ entry is marked cleared (`*`) and titled with the account's last segment.
 | `INCOME`   | Account used when the remainder is a credit (`< 0`). |
 | `EXPENSE`  | Account used when the remainder is a debit (`> 0`). |
 
-All four arguments are required. Output is appended to
-`<segment-tail>.ledger` in the current directory (`<segment-tail>` is
-the account's last segment) and then aligned and date-sorted via
-`acc format`.
+All four arguments are required. The offsetting entries are printed to
+**stdout**, already aligned and date-sorted (formatted in memory); the
+status line goes to stderr. Where they land is up to the caller —
+redirect or append, e.g. `acc sweep … >> cash.ledger`.
 
 **Idempotent and file-agnostic.** Because the generated offsets are
 part of the loaded journal, each posting cancels against its offset on
 the account, so re-running only closes newly-opened postings — never
-duplicates. It does not matter which file an offset lives in, so
-renaming or moving the generated file is safe. A genuine round-trip —
+duplicates. It does not matter which file an offset lives in, so it is
+safe to append the output wherever you like (and move it later). A
+genuine round-trip —
 an invoice one day, its payment weeks later — cancels the same way and
 is left alone; only real open balances are swept. Pairing happens
 within the same date first, then across dates, so an offset removed for
@@ -491,8 +494,8 @@ elsewhere are still settled.
 
 ```
 # Close everything sitting on assets:clearing into income / expenses,
-# under the `misc` segment.
-acc -f journal.ledger sweep '^assets:clearing$' misc income expenses
+# under the `misc` segment, appending the result to a file.
+acc -f journal.ledger sweep '^assets:clearing$' misc income expenses >> clearing.ledger
 ```
 
 ### `acc navigate` (aliases `nav`, `ui`)
@@ -561,7 +564,7 @@ Output locations:
 ### `acc import`
 
 ```
-acc import <CSV> -c <PROFILE> [--write]
+acc import <CSV> -c <PROFILE> [--execute]
 ```
 
 Convert a bank's CSV export into ledger transactions via a per-bank
@@ -572,7 +575,7 @@ not read the journal (only the target file, for de-duplication).
 |-----------------------|---------|-------------|
 | `<CSV>`               | —       | The bank CSV export to import (positional, required). |
 | `-c`, `--conf FILE`   | —       | The per-bank import profile (required). |
-| `-w`, `--write`       | off     | Append the new transactions to the target file. Without it a dry-run prints the additions as a diff and writes nothing. |
+| `-e`, `--execute`     | off     | Execute the import — append the new transactions to the target file. Without it a dry-run prints the additions as a diff and writes nothing. |
 
 The profile (`<bank>.conf`) maps the CSV columns and shapes the output;
 only the bank-specific bits are configured — standard CSV defaults
@@ -597,10 +600,32 @@ The counter account defaults to the payee slugified (lowercased, spaces
 substring; combine conditions on one line with `;` (AND), separate
 lines for OR.
 
+**Internal transfers.** A movement between two of *your own* accounts can
+be booked to a directional in-transit account instead of a payee, so the
+two legs — one from each account's export — net to zero once both are
+imported; a non-zero balance then means money is still in flight. Declare
+this account's own in-transit identity and map each partner IBAN to the
+other account's name:
+
+```
+transfer.field iban                     # which field holds the partner IBAN
+transfer.self  assets:transit:checking  # this account: prefix + own name
+transfer XX00…  savings                 # partner IBAN => other account's name
+```
+
+The counter account is built as `<prefix>:<sender>:<receiver>`, ordered
+by the amount's sign — so both profiles that touch the pair produce the
+*same* string and net (the direction comes from the money flow, never
+typed). A profile that declares `transfer` rows must also set
+`transfer.field` and `transfer.self`, or the import aborts.
+
 Re-importing an overlapping export is safe: each transaction embeds its
 source row as a `; csv:` comment, and incoming rows already present
 (matched on the `identity` fields) are skipped. The write is
-append-only — existing entries are never rewritten.
+append-only — existing entries are never rewritten. Appended transactions
+are aligned by the same in-memory formatter as `acc format`, so they match
+every other file; a thousands-separator comma in an amount (`1,190.00`) is
+stripped first, since acc's decimal parser rejects it.
 
 ### Environment variables
 
