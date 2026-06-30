@@ -238,6 +238,17 @@ enum Command {
         /// is preserved unless this flag is given.
         #[arg(long = "sort")]
         sort: bool,
+        /// On a two-posting transaction whose postings share a commodity,
+        /// leave the second posting's amount to be inferred — drop it so it
+        /// auto-balances instead of writing it by hand. Off by default.
+        #[arg(long = "infer")]
+        infer: bool,
+        /// The inverse of `--infer`: on a transaction with more than two
+        /// postings that share a commodity and have exactly one amount
+        /// omitted, fill that amount in (the negated sum of the rest), so the
+        /// balancing leg is written out explicitly. Off by default.
+        #[arg(long = "fill")]
+        fill: bool,
         /// Files or directories to format. Directories are walked
         /// recursively for journal files (`.ledger` only). Files named
         /// explicitly are formatted regardless of extension. `-` reads
@@ -276,7 +287,7 @@ enum Command {
     ///
     /// Sweep pairs equal-and-opposite amounts on ACCOUNT across the whole
     /// account (per commodity, over all dates) — like reading `reg
-    /// ACCOUNT` — and writes one offsetting entry per still-open posting,
+    /// ACCOUNT` — and emits one offsetting entry per still-open posting,
     /// at that posting's date, to bring the account back to zero. A debit
     /// posting (> 0) books to EXPENSE:SEGMENT, a credit posting (< 0) to
     /// INCOME:SEGMENT. Each entry takes the account's last segment as its
@@ -286,8 +297,11 @@ enum Command {
     /// exists anywhere in the loaded journal cancels and is skipped, so
     /// re-running only closes newly-opened postings — no markers, no
     /// file-name tracking. A round-trip settled later (invoice then
-    /// payment) cancels too. All four arguments are required. Output is
-    /// appended to `<title>.ledger` and aligned via `acc format`.
+    /// payment) cancels too. All four arguments are required.
+    ///
+    /// The entries are printed to stdout, already aligned and date-sorted;
+    /// where they go is the caller's job, e.g. `acc sweep … >> FILE`.
+    /// The status line is written to stderr.
     #[command(arg_required_else_help = true)]
     Sweep {
         /// Pass-through account to close (filter pattern, e.g. `^a:b:c$`).
@@ -334,16 +348,16 @@ enum Command {
     },
     /// Import a bank CSV export into a `@cash` ledger via a per-bank
     /// profile. Default is a dry-run (prints the additions as a diff);
-    /// `--write` appends them. Standalone — does not read the journal.
+    /// `--execute` appends them. Standalone — does not read the journal.
     Import {
         /// The bank CSV export to import.
         csv: String,
         /// The bank import profile (e.g. `bank.conf`).
         #[arg(short = 'c', long = "conf", value_name = "FILE")]
         conf: String,
-        /// Append the new transactions to the ledger. Without it, the
-        /// command only prints what it would add (dry-run).
-        #[arg(short = 'w', long = "write")]
+        /// Execute the import — append the new transactions to the ledger.
+        /// Without it, the command only prints what it would add (dry-run).
+        #[arg(short = 'e', long = "execute")]
         write: bool,
     },
 }
@@ -511,7 +525,9 @@ fn try_standalone(
     match command {
         // Format does its own validation (parse → resolve → book) before
         // writing, all-or-nothing.
-        Command::Format { sort, paths } => Some(acc::commands::format::run(paths, *sort)),
+        Command::Format { sort, infer, fill, paths } => {
+            Some(acc::commands::format::run(paths, *sort, *infer, *fill))
+        }
 
         // Diff is a source-level file/tree comparison. Its path-count rule
         // is conditional on `--snapshot` and not expressible via clap

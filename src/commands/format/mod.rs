@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use colored::Colorize;
 
 use super::util::{push_spaces, render_account};
+use crate::decimal::Decimal;
 use crate::error::Error;
 use crate::parser::{
     self,
@@ -49,13 +50,13 @@ const INDENT: &str = "\t";
 /// differing account-name lengths.
 const GAP: usize = 8;
 
-pub fn run(paths: &[String], sort: bool) -> Result<(), Error> {
+pub fn run(paths: &[String], sort: bool, infer: bool, fill: bool) -> Result<(), Error> {
     // stdin/stdout mode: `-` reads the journal from stdin and writes
     // the formatted output to stdout without touching the filesystem.
     // Used by vim's `:%!acc format -` pipe so buffer-editing stays
     // reversible under undo.
     if paths.iter().any(|p| p == "-") {
-        return run_stdin_stdout(sort);
+        return run_stdin_stdout(sort, infer, fill);
     }
 
     let files = collect_files(paths);
@@ -73,7 +74,7 @@ pub fn run(paths: &[String], sort: bool) -> Result<(), Error> {
 
     let total = files.len();
     for path in &files {
-        format_in_place(path, sort)?;
+        format_in_place(path, sort, infer, fill)?;
         println!("{} {}", "✓".green(), path.display());
     }
     let label = if total == 1 { "file" } else { "files" };
@@ -88,19 +89,30 @@ pub fn run(paths: &[String], sort: bool) -> Result<(), Error> {
 /// atomically — without printing anything. The caller is responsible for
 /// validation (this skips the `load` check that `run` does up front).
 /// Used by `sweep` to align its generated file silently.
-pub fn format_in_place(path: &Path, sort: bool) -> Result<(), Error> {
+pub fn format_in_place(path: &Path, sort: bool, infer: bool, fill: bool) -> Result<(), Error> {
     let source = fs::read_to_string(path)
         .map_err(|e| Error::from(format!("read {}: {}", path.display(), e)))?;
     let entries = parser::parse(&source)
         .map_err(|e| Error::from(format!("parse {}: {}", path.display(), e)))?;
-    let formatted = render(&entries, &source, sort);
+    let formatted = render(&entries, &source, sort, infer, fill);
     write_atomic(path, &formatted)
         .map_err(|e| Error::from(format!("write {}: {}", path.display(), e)))
 }
 
+/// Format a journal source string in memory — parse + render (align, and
+/// optionally date-sort) — returning the canonical text. No filesystem
+/// I/O. Used by `sweep` to emit already-aligned entries on stdout.
+pub fn format_source(source: &str, sort: bool) -> Result<String, Error> {
+    let entries =
+        parser::parse(source).map_err(|e| Error::from(format!("parse: {}", e)))?;
+    // sweep / import never infer or fill — they render exactly what they
+    // generated.
+    Ok(render(&entries, source, sort, false, false))
+}
+
 /// Stdin → stdout pipe mode. Parse what comes in on stdin as a
 /// journal, emit the aligned render on stdout. No filesystem I/O.
-fn run_stdin_stdout(sort: bool) -> Result<(), Error> {
+fn run_stdin_stdout(sort: bool, infer: bool, fill: bool) -> Result<(), Error> {
     use std::io::{Read, Write};
     let mut source = String::new();
     io::stdin()
@@ -118,7 +130,7 @@ fn run_stdin_stdout(sort: bool) -> Result<(), Error> {
 
     let entries = parser::parse(&source)
         .map_err(|e| Error::from(format!("parse stdin: {}", e)))?;
-    let formatted = render(&entries, &source, sort);
+    let formatted = render(&entries, &source, sort, infer, fill);
     io::stdout()
         .write_all(formatted.as_bytes())
         .map_err(|e| Error::from(format!("write stdout: {}", e)))?;
@@ -178,7 +190,7 @@ fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-fn render(entries: &[Located<Entry>], source: &str, sort: bool) -> String {
+fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fill: bool) -> String {
     let source_lines: Vec<&str> = source.lines().collect();
     let (account_width, amount_width) = column_widths(entries, &source_lines);
     // Transactions keep their source order by default. With `sort`,
@@ -224,6 +236,8 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool) -> String {
                     account_width,
                     amount_width,
                     &source_lines,
+                    infer,
+                    fill,
                     &mut out,
                 );
             }
@@ -291,11 +305,90 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool) -> String {
     out
 }
 
+/// Whether `--infer` may drop the last amount of this transaction:
+/// exactly two real postings with explicit amounts in the same commodity,
+/// the last bearing no cost / lot / assertion that would make its amount
+/// significant. The dropped amount then auto-balances against the first.
+fn infers_last(tx: &Transaction) -> bool {
+    let [a, b] = &tx.postings[..] else {
+        return false;
+    };
+    let (a, b) = (&a.value, &b.value);
+    match (&a.amount, &b.amount) {
+        (Some(av), Some(bv)) => {
+            av.commodity == bv.commodity
+                && !a.is_virtual
+                && !b.is_virtual
+                && b.costs.is_none()
+                && b.lot_cost.is_none()
+                && b.lot_date.is_none()
+                && b.balance_assertion.is_none()
+        }
+        _ => false,
+    }
+}
+
+/// `--fill`: the inverse of `--infer`. When a transaction has more than two
+/// postings, exactly one of them lacks an amount, and every other posting
+/// is real (non-virtual) in the same commodity with no cost, the missing
+/// amount is the negated sum of the rest — compute it so it can be written
+/// out explicitly. Returns (index of the empty posting, rendered amount).
+fn fills(tx: &Transaction) -> Option<(usize, String)> {
+    if tx.postings.len() <= 2 {
+        return None;
+    }
+    if tx.postings.iter().any(|lp| lp.value.is_virtual) {
+        return None;
+    }
+    let mut empty: Option<usize> = None;
+    let mut commodity: Option<&str> = None;
+    let mut sum = Decimal::zero();
+    let mut decimals = 0usize;
+    for (i, lp) in tx.postings.iter().enumerate() {
+        let p = &lp.value;
+        match &p.amount {
+            None => {
+                if empty.is_some() {
+                    return None; // two empty postings — ambiguous
+                }
+                empty = Some(i);
+            }
+            Some(a) => {
+                if p.costs.is_some() || p.lot_cost.is_some() {
+                    return None; // a cost changes the balance maths
+                }
+                match commodity {
+                    None => commodity = Some(a.commodity.as_str()),
+                    Some(c) if c == a.commodity.as_str() => {}
+                    _ => return None, // mixed commodities
+                }
+                sum += a.value;
+                decimals = decimals.max(a.decimals);
+            }
+        }
+    }
+    let idx = empty?;
+    let commodity = commodity?;
+    Some((idx, render_amount(commodity, &-sum, decimals)))
+}
+
+/// Render `commodity` + `value` at `decimals`, dropping a `-0` sign.
+fn render_amount(commodity: &str, value: &Decimal, decimals: usize) -> String {
+    let body = value.format_decimal(decimals);
+    let body = match body.strip_prefix('-') {
+        Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => rest.to_string(),
+        _ => body,
+    };
+    format!("{}{}", commodity, body)
+}
+
 fn render_transaction(
     tx: &Transaction,
     account_width: usize,
     amount_width: usize,
     source_lines: &[&str],
+    infer: bool,
+    fill: bool,
     out: &mut String,
 ) {
     out.push_str(&tx.date.to_string());
@@ -316,9 +409,26 @@ fn render_transaction(
         out.push_str(INDENT);
         out.push_str(&format!("; {}\n", c.value.text));
     }
-    for lp in &tx.postings {
+    let infer_last = infer && infers_last(tx);
+    let filled = if fill { fills(tx) } else { None };
+    let last = tx.postings.len().saturating_sub(1);
+    for (i, lp) in tx.postings.iter().enumerate() {
         let src = source_lines.get(lp.line.saturating_sub(1)).copied();
-        render_posting(&lp.value, lp.line, account_width, amount_width, src, out);
+        let infer_amount = infer_last && i == last;
+        let fill_amount = filled
+            .as_ref()
+            .filter(|(idx, _)| *idx == i)
+            .map(|(_, s)| s.as_str());
+        render_posting(
+            &lp.value,
+            lp.line,
+            account_width,
+            amount_width,
+            src,
+            infer_amount,
+            fill_amount,
+            out,
+        );
     }
 }
 
@@ -337,6 +447,8 @@ fn render_posting(
     account_width: usize,
     amount_width: usize,
     source_line: Option<&str>,
+    infer_amount: bool,
+    fill: Option<&str>,
     out: &mut String,
 ) {
     let account = render_account(p);
@@ -344,7 +456,29 @@ fn render_posting(
         .map(extract_posting_parts)
         .unwrap_or_default();
 
-    if parts.amount_str.is_empty() && parts.tail.is_empty() {
+    if infer_amount {
+        // `--infer`: drop the redundant balancing amount, keeping
+        // the account and any inline comment (the tail carries no cost /
+        // assertion here — `infers_last` excluded those) so it auto-balances.
+        out.push_str(INDENT);
+        out.push_str(&account);
+        out.push_str(&parts.tail);
+        out.push('\n');
+    } else if let Some(amount) = fill {
+        // `--fill`: write the computed balancing amount on the otherwise
+        // empty posting, aligned like any other. The source line carries no
+        // amount, only an optional assertion / comment — kept as the tail.
+        let account_pad = account_width.saturating_sub(account.chars().count());
+        let amount_pad = amount_width.saturating_sub(amount.chars().count());
+        out.push_str(INDENT);
+        out.push_str(&account);
+        push_spaces(out, account_pad);
+        push_spaces(out, GAP);
+        push_spaces(out, amount_pad);
+        out.push_str(amount);
+        out.push_str(&parts.tail);
+        out.push('\n');
+    } else if parts.amount_str.is_empty() && parts.tail.is_empty() {
         // Omitted-amount posting with no tail: just the account.
         out.push_str(INDENT);
         out.push_str(&account);

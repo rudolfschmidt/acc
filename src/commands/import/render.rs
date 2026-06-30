@@ -30,18 +30,18 @@ const C_ACCOUNT: (u8, u8, u8) = (177, 185, 249); // #b1b9f9 lavender-blue
 const C_POS: (u8, u8, u8) = (166, 227, 161); // #a6e3a1 green (positive)
 const C_NEG: (u8, u8, u8) = (255, 107, 107); // #ff6b6b red (negative)
 
-pub fn diff_preview(existing: &str, new_blocks: &[String], file: &Path, skipped: usize, written: bool) {
+pub fn diff_preview(existing: &str, added: &str, count: usize, file: &Path, skipped: usize, written: bool) {
     let existing_lines: Vec<&str> = existing.lines().collect();
     let total = existing_lines.len();
 
-    // The additions mirror exactly what `--write` appended: a blank
-    // separator line, then transaction blocks separated by blank lines.
-    let new_text = format!("\n{}", new_blocks.join("\n\n"));
+    // The additions mirror exactly what `--execute` appended: a leading
+    // blank separator line, then the already-aligned transaction blocks.
+    let new_text = format!("\n{}", added.trim_end());
     let new_lines: Vec<&str> = new_text.lines().collect();
 
     // Header tells the mode apart: a green ● "Update" when it was written,
     // a hollow ○ "Preview … dry-run" when nothing has been touched.
-    let n = new_blocks.len().to_string().bold();
+    let n = count.to_string().bold();
     if written {
         println!("{} {}", "●".green(), format!("Update({})", display_path(file)).bold());
         println!("  {} added {} transactions · {} already present", "⎿".dimmed(), n, skipped);
@@ -52,7 +52,7 @@ pub fn diff_preview(existing: &str, new_blocks: &[String], file: &Path, skipped:
             "⎿".dimmed(),
             n,
             skipped,
-            "--write".bold(),
+            "--execute".bold(),
         );
     }
 

@@ -10,20 +10,17 @@
 //! This is inherently idempotent and file-agnostic: once a posting's
 //! offset exists anywhere in the loaded journal, the two cancel and drop
 //! out — no markers, no file-name parsing, just the balance. A
-//! time-shifted counter movement (an invoice settled weeks later)
-//! cancels the same way, so genuine round-trips are left alone. Renaming
-//! or moving the generated file changes nothing, as long as it stays part
-//! of the loaded journal.
+//! time-shifted counter movement (an invoice settled weeks later) cancels
+//! the same way, so genuine round-trips are left alone.
 //!
-//! Reuses existing phases: `load` parses/normalises and books, `filter`
-//! scopes to the account, `format_amount` renders amounts, and
-//! `format_in_place` aligns *and date-sorts* the result, so newly
-//! appended transactions land in chronological order.
+//! The offsetting entries are printed to **stdout**, already aligned and
+//! date-sorted (via `format::format_source` in memory). Where they go —
+//! file name, append — is the caller's job, e.g.
+//! `acc sweep <account> >> <file>`. Reuses existing phases: `load`
+//! parses/normalises and books, `filter` scopes to the account,
+//! `format_amount` renders amounts.
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
 
 use colored::Colorize;
 
@@ -45,13 +42,13 @@ pub fn run(
     // the journal, so clone them out first.
     let precisions = journal.precisions.clone();
 
-    // Title and output file derive from the account's last segment, with
-    // any pattern anchors (`^` / `$`) stripped.
+    // The transaction title is the account's last segment, with any
+    // pattern anchors (`^` / `$`) stripped.
     let title = account
+        .trim_matches(|c| c == '^' || c == '$')
         .rsplit(':')
         .next()
         .unwrap_or(account)
-        .trim_matches(|c| c == '^' || c == '$')
         .to_string();
 
     // Scope to postings on the pass-through account (real legs only).
@@ -70,21 +67,20 @@ pub fn run(
     let (out, count) =
         render_entries(&scoped.transactions, &title, segment, income, expense, &precisions);
 
+    // Status goes to stderr so stdout carries only the ledger entries.
     if count == 0 {
-        println!("{} nothing to sweep", "!".yellow());
+        eprintln!("{} nothing to sweep", "!".yellow());
         return Ok(());
     }
 
-    let path = PathBuf::from(format!("{}.ledger", title));
-    append(&path, &out).map_err(|e| Error::from(format!("write {}: {}", path.display(), e)))?;
-
-    // Align the generated file silently and date-sort it (format prints
-    // nothing here), then report once formatting has succeeded. Sorting
-    // slots newly appended transactions into chronological order.
-    crate::commands::format::format_in_place(&path, true)?;
+    // Print the offsetting entries, already aligned and date-sorted in
+    // memory, so they can be appended as-is — the caller only decides the
+    // file name, e.g.  acc sweep <account> >> <file>
+    let formatted = crate::commands::format::format_source(&out, true)?;
+    print!("{}", formatted);
 
     let label = if count == 1 { "transaction" } else { "transactions" };
-    println!("{} swept {} {} in {}", "✓".green(), count, label, path.display());
+    eprintln!("{} swept {} {}", "✓".green(), count, label);
     Ok(())
 }
 
@@ -216,12 +212,6 @@ fn cancel(postings: Vec<(String, Decimal)>) -> Vec<(String, Decimal)> {
     rest
 }
 
-/// Append `content` to `path`, creating it if absent. Never truncates,
-/// so existing entries are preserved and only the new lines are added.
-fn append(path: &Path, content: &str) -> std::io::Result<()> {
-    let mut f = fs::OpenOptions::new().create(true).append(true).open(path)?;
-    f.write_all(content.as_bytes())
-}
 
 #[cfg(test)]
 mod tests {
@@ -360,6 +350,7 @@ mod tests {
         assert_eq!(count, 1);
         assert!(out.contains("clearing\tUSD-30.00"), "{out}");
     }
+
 
     // When one date's offset is removed while same-amount postings on
     // other dates are still offset, the reopened posting is pulled at ITS

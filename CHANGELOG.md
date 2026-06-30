@@ -1,12 +1,95 @@
 # Changelog
 
+## 0.13.0 — 2026-06-30
+
+### Tue 30 Jun 2026 - format: `--infer` and `--fill`, the redundant-amount pair
+
+Two opt-in `acc format` flags for the *balancing* amount — the posting leg
+whose value is just whatever makes a transaction sum to zero.
+
+`--infer` drops it. On a two-posting transaction whose postings share a
+commodity, the second amount is always the negation of the first, so
+writing it is busywork:
+
+```
+    assets:bank    €100.00          assets:bank    €100.00
+    expenses:food  €-100.00   →     expenses:food
+```
+
+The name is ledger's own: an omitted amount is "inferred" to balance, and
+its parser calls the amount-less leg the *null posting*.
+
+`--fill` is the inverse. On a transaction with *more* than two postings,
+where the balancing leg is no longer obvious (it's the negated sum of
+several), it computes that amount and writes it out:
+
+```
+    assets:bank  €90.00             assets:bank  €90.00
+    expenses:a   €-40.00      →      expenses:a   €-40.00
+    expenses:b                       expenses:b   €-50.00
+```
+
+Run together they canonicalise a journal — trivial balances elided,
+non-trivial ones spelled out. Both are off by default and deliberately
+conservative: they act only on same-commodity transactions with exactly
+one missing (or redundant) amount, and never touch multi-currency legs,
+costs, lots, assertions or virtual postings.
+
+### Tue 30 Jun 2026 - import: align like `acc format`, strip thousands separators, book internal transfers
+
+Three changes to `acc import`.
+
+**Aligned output.** Imported transactions now run through the same
+in-memory formatter as `acc format`, instead of a fixed wide column the
+importer used to pad to itself. They line up with every other file
+(amounts at the content-driven column), and re-running `acc format` over
+the result is a no-op — one code path, one look.
+
+**Thousands separators.** Some banks group integers (`1,190.00`). acc's
+decimal parser rejects a comma, so the importer strips it before
+formatting (`-1,190.00` → `-1190.00`); the dot stays the only separator.
+
+**Internal transfers.** A new `transfer` directive books a movement
+between two of your *own* accounts to a directional in-transit account, so
+the two legs — one from each account's export — net to zero once both are
+imported, and a lingering non-zero balance means money is still in flight:
+
+```
+transfer.field iban                     # CSV field holding the partner IBAN
+transfer.self  assets:transit:checking  # this account: prefix + own name
+transfer XX00…  savings                 # partner IBAN => other account
+```
+
+The account is built `<prefix>:<sender>:<receiver>`, ordered by the
+amount's sign, so both profiles that touch the pair emit the *same* string
+and net — the direction is computed from the money flow, never typed.
+Settling there took a couple of wrong turns first: a single shared
+in-transit account lets unrelated half-imported transfers cancel to a
+false zero, and putting the direction in the name needs a canonical order
+that two profiles must agree on by hand — ordering by the live sign avoids
+both.
+
+### Tue 30 Jun 2026 - sweep: print to stdout instead of writing a file
+
+`acc sweep` no longer writes a file or invents a name. It prints the
+offsetting entries — already aligned and date-sorted — to stdout, with the
+status line on stderr, so the caller decides where they land:
+
+```
+acc sweep '^assets:clearing$' misc income expenses >> clearing.ledger
+```
+
+The file-naming policy (which was very specific to one setup) moves out of
+acc and into the caller's shell. Pairing, idempotency and file-agnosticism
+are unchanged.
+
 ## 0.12.0 — 2026-06-27
 
 ### Sat 27 Jun 2026 - import: turn a bank CSV export into ledger transactions
 
 New `acc import <csv> -c <profile>` command: convert a bank's CSV export
 into ledger transactions and append them to a cash-account file. Default
-is a dry-run; `--write` (`-w`) actually appends.
+is a dry-run; `--execute` (`-e`) appends.
 
 **Per-bank profile.** Every bank's CSV differs, so each gets its own small
 profile holding only the bank-specific bits — nothing standard like the
@@ -44,7 +127,7 @@ write is append-only).
 **Output.** A dry-run renders the additions as a diff: a few context lines
 around the insertion point, the new lines on a green band with `+` and
 line numbers, under a hollow `○ Preview(file)` header that makes plain
-nothing was written. `--write` appends and shows the same diff under a
+nothing was written. `--execute` appends and shows the same diff under a
 green `● Update(file)`.
 
 ## 0.11.4 — 2026-06-27

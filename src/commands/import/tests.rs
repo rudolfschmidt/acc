@@ -7,6 +7,63 @@ fn fmt_amount_pads_to_precision() {
     assert_eq!(fmt_amount("0.25", 2), "0.25");
     assert_eq!(fmt_amount("2407.5", 2), "2407.50");
     assert_eq!(fmt_amount("100", 0), "100");
+    // Thousands separators (some banks group integers) are stripped — acc's
+    // decimal parser rejects them, so they must never reach the ledger.
+    assert_eq!(fmt_amount("1,190.00", 2), "1190.00");
+    assert_eq!(fmt_amount("-1,190.00", 2), "-1190.00");
+    assert_eq!(fmt_amount("1,234,567.8", 2), "1234567.80");
+}
+
+#[test]
+fn directional_account_orders_by_money_flow() {
+    // Outgoing from checking and incoming to savings both describe the same
+    // checking→savings flow, so they build the identical account and net to 0.
+    assert_eq!(
+        directional_account("assets:transit", "checking", "savings", true),
+        "assets:transit:checking:savings"
+    );
+    assert_eq!(
+        directional_account("assets:transit", "savings", "checking", false),
+        "assets:transit:checking:savings"
+    );
+    // The reverse flow savings→checking builds the reversed account.
+    assert_eq!(
+        directional_account("assets:transit", "savings", "checking", true),
+        "assets:transit:savings:checking"
+    );
+}
+
+#[test]
+fn to_iso_converts_dmy_and_passes_iso() {
+    assert_eq!(to_iso("28-06-2026", Some("DD-MM-YYYY")), "2026-06-28");
+    assert_eq!(to_iso("1-2-2026", Some("DD-MM-YYYY")), "2026-02-01"); // zero-padded
+    assert_eq!(to_iso("2026-06-28", None), "2026-06-28"); // already ISO, passthrough
+    assert_eq!(to_iso("garbage", Some("DD-MM-YYYY")), "garbage"); // shape mismatch left as-is
+}
+
+#[test]
+fn field_val_takes_first_non_empty_column() {
+    let dir = std::env::temp_dir().join(format!("acc-import-multi-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let com = write(&dir, "com.ledger", "commodity €\n    precision 2\n");
+    let conf = write(
+        &dir,
+        "bank.conf",
+        &format!(
+            "field.date 0\nfield.amount 1\nfield.payee 3 2\n\
+             commodities {}\noutput.file /tmp/x.ledger\noutput.title t\n\
+             output.account a:b\noutput.commodity €\nidentity date\ndefault => exp:{{payee}}\n",
+            com.display()
+        ),
+    );
+    let p = Profile::load(conf.to_str().unwrap()).unwrap();
+    // field.payee 3 2 → column 3 first, then column 2.
+    let mk = |c2: &str, c3: &str| -> Vec<String> {
+        vec!["2025-01-01", "-1", c2, c3].into_iter().map(String::from).collect()
+    };
+    assert_eq!(p.field_val(&mk("foo", ""), "payee"), "foo"); // col 3 empty → col 2
+    assert_eq!(p.field_val(&mk("foo", "bar"), "payee"), "bar"); // col 3 wins
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -19,20 +76,6 @@ fn parse_csv_handles_quoted_commas() {
     let rows = parse_csv("a,\"x, y\",c\n1,2,3\n");
     assert_eq!(rows[0], vec!["a", "x, y", "c"]);
     assert_eq!(rows[1], vec!["1", "2", "3"]);
-}
-
-#[test]
-fn negate_flips_sign() {
-    assert_eq!(negate("-101599.0"), "101599.0");
-    assert_eq!(negate("126.28"), "-126.28");
-}
-
-#[test]
-fn pad_amount_right_aligns_at_align() {
-    let line = pad_amount("assets:bank", "€-47.00");
-    assert_eq!(line.chars().count(), ALIGN);
-    assert!(line.starts_with("assets:bank"));
-    assert!(line.ends_with("€-47.00"));
 }
 
 fn write(dir: &std::path::Path, name: &str, content: &str) -> std::path::PathBuf {
