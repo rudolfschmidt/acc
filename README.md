@@ -136,7 +136,7 @@ lot tracking) are picked up where they solve real problems.
 Implementation and semantic choices are acc's own.
 
 **Supported today:** `balance`, `register`, `print`, `accounts`,
-`commodities`, `codes`, `check`, interactive `navigate`, `update`
+`commodities`, `codes`, `lint`, interactive `navigate`, `update`
 (rate fetching), `format` (in-place journal formatter with
 source-preserving amount pass-through), `diff` (source-level
 ledger-aware file / tree comparison); transactions with states,
@@ -363,13 +363,14 @@ List every transaction code observed.
 |--------------|-------------|
 | `PATTERN...` | Positional pattern filters. |
 
-### `acc check`
+### `acc lint`
 
 ```
-acc [GLOBAL OPTIONS] check
+acc [GLOBAL OPTIONS] lint
 ```
 
-Run all built-in consistency checks and report.
+Lint the journal: run all built-in consistency checks and report any
+issues as warnings.
 
 No flags. Current checks: `commodity-casing` (multi-char commodity
 symbols must be all-uppercase; single-char symbols like `$` `€` `£`
@@ -672,7 +673,7 @@ $ acc -f journal.ledger reg
 ```
 
 Everything else — `print`, `accounts`, `commodities`, `codes`,
-`check`, filter patterns, `-X` currency conversion,
+`lint`, filter patterns, `-X` currency conversion,
 slippage gain/loss, CTA, lot annotations, balance assertions — is
 covered in topic-specific walkthroughs with journal inline and
 verbatim output:

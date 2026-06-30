@@ -4,12 +4,12 @@
 pub mod account;
 pub mod accounts;
 pub mod balance;
-pub mod checker;
 pub mod codes;
 pub mod commodities;
 pub mod diff;
 pub mod format;
 pub mod import;
+pub mod lint;
 pub mod navigate;
 pub mod print;
 pub mod register;

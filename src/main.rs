@@ -214,8 +214,8 @@ enum Command {
         /// Filter by account name pattern
         pattern: Vec<String>,
     },
-    /// Run consistency checks over the journal
-    Check,
+    /// Lint the journal — flag convention and consistency issues as warnings
+    Lint,
     /// Reformat a ledger journal: account column left-aligned,
     /// amount column right-aligned.
     ///
@@ -377,7 +377,7 @@ impl Command {
             | Self::Commodities { pattern, .. }
             | Self::Navigate { pattern, .. } => pattern.as_slice(),
             Self::Update { .. }
-            | Self::Check
+            | Self::Lint
             | Self::Format { .. }
             | Self::Diff { .. }
             | Self::Import { .. }
@@ -398,7 +398,7 @@ impl Command {
             | Self::Commodities { filter, .. }
             | Self::Navigate { filter, .. } => Some(filter),
             Self::Update { .. }
-            | Self::Check
+            | Self::Lint
             | Self::Format { .. }
             | Self::Diff { .. }
             | Self::Import { .. }
@@ -704,7 +704,7 @@ fn start() -> Result<(), acc::Error> {
     }
 
     // Filter / convert flags for report-style commands. `None` for
-    // `check` (runs a minimal load → validate path). `format` and
+    // `lint` (runs a minimal load → validate path). `format` and
     // `update` already returned above.
     let filter_args: Option<&ReportArgs> = command.filter();
 
@@ -907,7 +907,7 @@ fn start() -> Result<(), acc::Error> {
                 eprintln!("navigate: {}", e);
             }
         }
-        Command::Check => acc::commands::checker::run(&journal),
+        Command::Lint => acc::commands::lint::run(&journal),
         _ => eprintln!("internal error: unexpected command reached match arm"),
     }
     Ok(())

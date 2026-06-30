@@ -194,7 +194,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
 /// and for a `$` reference whose role no `account` directive declares. The
 /// latter is deliberately lenient: `acc format` (and any single-file run)
 /// must round-trip a `$role:slot` reference without the central config
-/// that declares the role. `acc check` warns on any `$…` account that
+/// that declares the role. `acc lint` warns on any `$…` account that
 /// survives unresolved, so a genuine typo still surfaces.
 fn resolve_role_account(account: &str, roles: &HashMap<String, String>) -> Option<String> {
     let token = account.strip_prefix('$')?;
@@ -401,7 +401,7 @@ mod tests {
     fn unresolved_role_reference_passes_through() {
         // A `$ref` to a role no `account` declares (here `unknown gain`, and a
         // typo) is left verbatim, not an error — so `acc format` can
-        // round-trip a single file without the central config. `acc check`
+        // round-trip a single file without the central config. `acc lint`
         // is what flags the leftover `$…` account.
         let src = "account income:cap\n    capital gain\n\
                    2024-06-15 * x\n    a  -2 EUR\n    $unknown:gain  1 EUR\n    $captial:gain  1 EUR\n";
