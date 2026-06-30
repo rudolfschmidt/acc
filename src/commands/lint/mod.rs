@@ -1,5 +1,5 @@
-//! `validate` command — run a suite of checks over the journal and
-//! report which ran, what they scanned, and any issues found.
+//! `lint` command — run a suite of checks over the journal and report
+//! which ran, what they scanned, and any issues found as warnings.
 
 use colored::Colorize;
 

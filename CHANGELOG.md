@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0 — 2026-06-30
+
+### Tue 30 Jun 2026 - rename the `check` command to `lint`
+
+`acc check` is now `acc lint`. The command runs a suite of journal checks
+and reports *deviations as warnings*, not pass/fail correctness — which is
+exactly what a linter does, so the name now says it. The checks themselves
+are unchanged; hard structural correctness (balancing, assertions) stays
+enforced by the load pipeline (parse → resolve → book), separately.
+
 ## 0.13.0 — 2026-06-30
 
 ### Tue 30 Jun 2026 - format: `--infer` and `--fill`, the redundant-amount pair
