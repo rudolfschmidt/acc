@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use colored::Colorize;
 
-use super::common::{group_postings_by_account, print_commodity_amount};
+use super::common::{group_postings_by_account, label_suffix, print_commodity_amount};
 use crate::commands::util::format_amount;
 use crate::decimal::Decimal;
 use crate::loader::Journal;
@@ -13,6 +13,7 @@ use crate::loader::Journal;
 pub(super) fn print(journal: &Journal, show_empty: bool) {
     let postings = group_postings_by_account(journal);
     let precisions = &journal.precisions;
+    let labels = &journal.labels;
 
     // Journal-wide grand total per commodity.
     let total: BTreeMap<String, Decimal> = postings
@@ -51,7 +52,7 @@ pub(super) fn print(journal: &Journal, show_empty: bool) {
             // `-E`; otherwise skip it.
             if show_empty {
                 print!("{:>w$} ", 0, w = width);
-                println!("{}", account.blue());
+                println!("{}{}", account.blue(), label_suffix(account, labels));
             }
             continue;
         }
@@ -61,7 +62,7 @@ pub(super) fn print(journal: &Journal, show_empty: bool) {
                 println!();
             }
         }
-        println!("{}", account.blue());
+        println!("{}{}", account.blue(), label_suffix(account, labels));
     }
 
     // Separator + grand total.

@@ -61,10 +61,19 @@ pub struct Resolved {
     /// are injected into the same transaction, scaled by the
     /// triggering amount.
     pub auto_rules: Vec<crate::parser::entry::AutoRule>,
+    /// `account NAME / label <text>` declarations: full account name →
+    /// display label. Purely cosmetic — shown by `bal`, never filtered or
+    /// computed on.
+    pub labels: HashMap<String, String>,
 }
 
 pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
-    let (aliases, roles, precisions) = collect_declarations(&entries)?;
+    let Declarations {
+        aliases,
+        roles,
+        precisions,
+        labels,
+    } = collect_declarations(&entries)?;
 
     // The pipeline phases consume specific roles by name; this is the one
     // place those semantic keys live. Everything else — parsing, conflict
@@ -180,6 +189,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         precisions,
         aliases,
         auto_rules,
+        labels,
     })
 }
 
@@ -234,22 +244,26 @@ fn resolve_arc(
 /// First pass: walk entries, build the alias table, index every role
 /// account by its directive text, and collect precision overrides.
 /// Errors on a conflicting re-declaration (same role, different account).
-fn collect_declarations(
-    entries: &[Located<Entry>],
-) -> Result<
-    (
-        HashMap<String, String>,
-        HashMap<String, String>,
-        HashMap<String, usize>,
-    ),
-    ResolveError,
-> {
+/// Declarations gathered in a first pass over the entry stream, before
+/// the transactions are resolved: commodity aliases, the role → account
+/// index, per-commodity precisions, and cosmetic account labels.
+struct Declarations {
+    aliases: HashMap<String, String>,
+    roles: HashMap<String, String>,
+    precisions: HashMap<String, usize>,
+    labels: HashMap<String, String>,
+}
+
+fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, ResolveError> {
     let mut aliases: HashMap<String, String> = HashMap::new();
     // Role directives indexed by their verbatim text (`capital gain`,
     // `cta loss`, …) → declared account. One generic map in place of the
     // former per-role fields: a new role needs no change here.
     let mut roles: HashMap<String, Declaration> = HashMap::new();
     let mut precisions: HashMap<String, usize> = HashMap::new();
+    // `account NAME / label <text>` → account → display label. Cosmetic
+    // only (shown by `bal`); kept out of the role index below.
+    let mut labels: HashMap<String, String> = HashMap::new();
 
     for e in entries {
         match &e.value {
@@ -273,6 +287,12 @@ fn collect_declarations(
                 }
             }
             Entry::RoleAccount { role, account } => {
+                // A `label <text>` sub-directive is a display label, not a
+                // role: record account → text and skip the role index.
+                if let Some(text) = role.strip_prefix("label ") {
+                    labels.insert(account.clone(), text.trim().to_string());
+                    continue;
+                }
                 if let Some(prev) = roles.get(role)
                     && prev.name != *account {
                         return Err(ResolveError::new(
@@ -290,11 +310,12 @@ fn collect_declarations(
         }
     }
 
-    Ok((
+    Ok(Declarations {
         aliases,
-        roles.into_iter().map(|(role, d)| (role, d.name)).collect(),
+        roles: roles.into_iter().map(|(role, d)| (role, d.name)).collect(),
         precisions,
-    ))
+        labels,
+    })
 }
 
 /// A single-fact declaration that lives only long enough to catch a

@@ -145,7 +145,7 @@ annotations, `{COST}` lot annotations, virtual postings, balance
 assertions and assignments; directives `commodity` (with `alias`,
 `precision`), `account` (with `slippage gain` / `slippage
 loss` / `holding gain` / `holding loss` / `cta gain`
-/ `cta loss` / `capital gain` / `capital loss`), `P`, and
+/ `cta loss` / `capital gain` / `capital loss` / `label`), `P`, and
 ledger-style **automated transactions**
 (line-leading `= /pattern/` rules that inject scaled postings
 into matching transactions); filter DSL across account /
@@ -273,7 +273,8 @@ Running `acc` with no subcommand prints help.
 acc [GLOBAL OPTIONS] balance [OPTIONS] [PATTERN]...
 ```
 
-Account balances, grouped hierarchically by default.
+Account balances, grouped hierarchically by default. Accounts declared
+with a [`label`](#account) show it dimmed after the name (`1000 (foo)`).
 
 | Flag               | Default | Description |
 |--------------------|---------|-------------|
@@ -1617,6 +1618,20 @@ Eight sub-directives, in four pairs:
 Each sub-directive must be unique across the journal — declaring
 two different accounts with `cta gain` is an error. Both halves of
 a pair must be declared for their feature to activate.
+
+A ninth, unrelated sub-directive attaches a cosmetic label:
+
+```
+account 1000
+    label foo
+```
+
+`label <text>` gives *that* account a display label. `acc bal` prints
+it dimmed after the account name — `1000 (foo)` in tree mode,
+`assets:1000 (foo)` in flat mode — so numbered chart-of-accounts codes
+keep sorting nicely while still reading as words. It is display-only: no
+inheritance to sub-accounts, and nothing filters or computes on the
+label (only `bal` shows it).
 
 ### `P` — price
 

@@ -46,4 +46,8 @@ pub struct Journal {
     /// into their matching transactions by the expander phase between
     /// booker and filter.
     pub auto_rules: Vec<crate::parser::entry::AutoRule>,
+    /// `account NAME / label <text>` declarations: full account name →
+    /// display label. Cosmetic only — `bal` shows it beside the account,
+    /// nothing filters or computes on it.
+    pub labels: HashMap<String, String>,
 }
