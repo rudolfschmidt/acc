@@ -11,6 +11,13 @@
 //! the transaction stays balanced after expansion. Auto-rule
 //! postings don't re-trigger expansion (no recursive matching on
 //! injected postings).
+//!
+//! An injected posting's account may contain `$account`, replaced
+//! with the *triggering* posting's account (ledger's `[$account]`:
+//! refer to the matched account itself). So one rule can flush each
+//! of `assets:cash-eur`, `assets:cash-usd`, … back to its own
+//! specific account. The substitution is textual, so `$account`
+//! works as the whole account or embedded (`Budget:$account`).
 
 use crate::parser::entry::AutoRule;
 use crate::parser::located::Located;
@@ -40,7 +47,8 @@ pub fn expand(transactions: &mut [Located<Transaction>], auto_rules: &[AutoRule]
                 for auto_posting in &rule.postings {
                     let scaled_value = trigger_amount.value.mul_rounded(auto_posting.multiplier);
                     let new_posting = Posting {
-                        account: auto_posting.account.clone(),
+                        // `$account` refers to the matched posting's account.
+                        account: auto_posting.account.replace("$account", &trigger_account),
                         amount: Some(Amount {
                             commodity: trigger_amount.commodity.clone(),
                             value: scaled_value,
@@ -163,6 +171,30 @@ mod tests {
             net.amount.as_ref().unwrap().value,
             crate::decimal::Decimal::from(-810)
         );
+    }
+
+    #[test]
+    fn account_variable_refers_to_the_matched_account() {
+        // `$account` is replaced with the *specific* matched account, so one
+        // rule flushes each per-currency cash account to its own leg.
+        let src = "\
+            = /^assets:cash/\n\
+            \t[$account]  -1\n\
+            \t[expenses:cash]  1\n\
+            \n\
+            2024-06-15 * spend\n\
+            \tassets:cash-eur   $5\n\
+            \texpenses:food     $-5\n";
+        let (mut transactions, rules) = setup(src);
+        expand(&mut transactions, &rules);
+        let tx = &transactions[0].value;
+        assert_eq!(tx.postings.len(), 4);
+        // Injected flush carries the matched account, not the literal
+        // `$account`, and stays a balanced-virtual `[…]` posting.
+        let flush = &tx.postings[2].value;
+        assert_eq!(flush.account, "assets:cash-eur");
+        assert!(flush.is_virtual);
+        assert_eq!(tx.postings[3].value.account, "expenses:cash");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "acc"
-version = "0.14.1"
+version = "0.14.2"
 authors = ["Rudolf Schmidt <info@rudolfschmidt.com>"]
 edition = "2024"
 license = "GPL-3.0-or-later"
