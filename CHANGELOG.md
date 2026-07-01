@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.14.1 — 2026-07-01
+
+### Wed 01 Jul 2026 - lint: `--base` folder ↔ category check
+
+`acc lint --base DIR` adds an opt-in `dir-category` check: every
+transaction whose file lives in a direct sub-directory of DIR must have a
+posting whose account *ends with* that directory's name turned into
+account segments (`food-groceries` → `…:food:groceries`). Only the
+account's tail — the category — has to match, so it stays prefix-agnostic
+(no `income:`/`expenses:` convention baked into acc); `@…` directories and
+files directly in DIR are exempt.
+
+The sub-directory is resolved *relative to DIR*, so the same file is
+recognised however it was loaded — `-f .` from inside the folder, `-f
+subdir` from the root, or the whole tree. The reported path stays the one
+you loaded (`-f .` → `./file`), consistently with the other checks, so DIR
+is used only to find the category, never to rewrite the display. Off by
+default — a wrapper can hand acc its ledger root as DIR to switch it on.
+
 ## 0.14.0 — 2026-06-30
 
 ### Tue 30 Jun 2026 - rename the `check` command to `lint`

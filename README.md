@@ -366,15 +366,22 @@ List every transaction code observed.
 ### `acc lint`
 
 ```
-acc [GLOBAL OPTIONS] lint
+acc [GLOBAL OPTIONS] lint [--base DIR]
 ```
 
 Lint the journal: run all built-in consistency checks and report any
-issues as warnings.
+issues as warnings (never a hard failure).
 
-No flags. Current checks: `commodity-casing` (multi-char commodity
-symbols must be all-uppercase; single-char symbols like `$` `€` `£`
-are exempt).
+| Flag        | Default | Description |
+|-------------|---------|-------------|
+| `--base DIR`| off     | Also run the `dir-category` check: every transaction whose file lives in a direct sub-directory of `DIR` must have a posting whose account *ends with* that directory's name turned into segments (`food-groceries` → `…:food:groceries`) — so only the account's tail (the category) has to match, prefix-agnostic. `@…` directories and files directly in `DIR` are exempt. The sub-directory is found relative to `DIR`, so it works however the files were loaded (`-f .` from inside the folder, `-f subdir`, or the whole tree). |
+
+Checks: `commodity-casing` (multi-char commodity symbols must be
+all-uppercase; single-char symbols like `$` `€` `£` are exempt),
+`leaf-accounts` (postings must target leaf accounts, never a parent that
+has sub-accounts), `role-references` (every `$role:slot` reference must
+resolve to a declared account), and — only with `--base` — `dir-category`
+(a file's category must match its folder).
 
 ### `acc format`
 

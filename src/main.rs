@@ -215,7 +215,16 @@ enum Command {
         pattern: Vec<String>,
     },
     /// Lint the journal — flag convention and consistency issues as warnings
-    Lint,
+    Lint {
+        /// Ledger root. When given, also check that each transaction whose
+        /// file lives in a direct sub-directory of BASE categorises into
+        /// that directory: some posting's account must end with the folder
+        /// name turned into segments (`food-groceries` →
+        /// `…:food:groceries`). `@…` directories and files directly in BASE
+        /// are exempt.
+        #[arg(long = "base", value_name = "DIR")]
+        base: Option<String>,
+    },
     /// Reformat a ledger journal: account column left-aligned,
     /// amount column right-aligned.
     ///
@@ -377,7 +386,7 @@ impl Command {
             | Self::Commodities { pattern, .. }
             | Self::Navigate { pattern, .. } => pattern.as_slice(),
             Self::Update { .. }
-            | Self::Lint
+            | Self::Lint { .. }
             | Self::Format { .. }
             | Self::Diff { .. }
             | Self::Import { .. }
@@ -398,7 +407,7 @@ impl Command {
             | Self::Commodities { filter, .. }
             | Self::Navigate { filter, .. } => Some(filter),
             Self::Update { .. }
-            | Self::Lint
+            | Self::Lint { .. }
             | Self::Format { .. }
             | Self::Diff { .. }
             | Self::Import { .. }
@@ -907,7 +916,7 @@ fn start() -> Result<(), acc::Error> {
                 eprintln!("navigate: {}", e);
             }
         }
-        Command::Lint => acc::commands::lint::run(&journal),
+        Command::Lint { base } => acc::commands::lint::run(&journal, base.as_deref()),
         _ => eprintln!("internal error: unexpected command reached match arm"),
     }
     Ok(())
