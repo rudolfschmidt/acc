@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.14.4 — 2026-07-01
+
+### Wed 01 Jul 2026 - `$segment` — a one-segment wildcard for patterns and labels
+
+Auto-rule patterns and account labels gain a single placeholder,
+`$segment`, standing for exactly one account segment (`[^:]+` — a
+non-empty run without `:`). It anchors a match to a segment *position*
+instead of matching at any depth.
+
+In an automated transaction:
+
+```
+= /^$segment:cash-/
+    [$account]             -1
+    [expenses:cash]         1
+```
+
+matches `personal:cash-eur` and `business:cash-usd` — any single leading
+segment then `:cash-` — but not `a:b:cash-eur` (two segments) or
+`cash-eur` (none). Combined with `$account` (0.14.2) it flushes each
+matched account to its own leg regardless of the leading segment, so one
+rule covers every profile instead of one rule per profile.
+
+The same placeholder works in a `label` account directive:
+
+```
+account $segment:1000
+    label foo
+```
+
+labels `personal:1000`, `business:1000`, … — any single leading segment
+then `:1000`. It is anchored to the whole account name, so
+`personal:1000:sub` is not labelled; an exact `label` wins over a pattern
+on conflict.
+
+`$segment` is acc's own placeholder, deliberately *not* a step toward a
+regex engine: the only metacharacters in an auto-pattern remain the `^` /
+`$` anchors and the literal `$segment` token — no ranges, classes or
+quantifiers. Chosen over a bare `*` (which invites regex creep) and over
+a POSIX-class look like `[[:segment:]]` (which over-promises a full
+regex); `$segment` reuses the `$`-placeholder vocabulary acc already
+speaks with `$account` and `$role:slot`.
+
+Implementation reuses one matcher for both sites: a new
+`AutoPattern::Segmented` variant plus a regex-free, backtrack-free
+left-to-right scan (`matches_segments`); the resolver splits `$segment`
+labels into a pattern list that `Journal::label_for` consults after the
+exact-name map misses.
+
 ## 0.14.3 — 2026-07-01
 
 ### Wed 01 Jul 2026 - `account … / label <text>` — cosmetic labels in `bal`

@@ -177,6 +177,16 @@ fn parse_auto_pattern(
         (false, false) => inner,
     };
     use crate::parser::entry::AutoPattern;
+    // `$segment` placeholder(s): split into literal chunks and match
+    // segment-wise. Not regex — the only token is the literal `$segment`.
+    if core.contains("$segment") {
+        let parts = core.split("$segment").map(str::to_string).collect();
+        return Ok(AutoPattern::Segmented {
+            parts,
+            anchored_start,
+            anchored_end,
+        });
+    }
     Ok(match (anchored_start, anchored_end) {
         (true, true) => AutoPattern::Exact(core.to_string()),
         (true, false) => AutoPattern::Prefix(core.to_string()),
@@ -848,6 +858,29 @@ mod tests {
     #[test]
     fn parse_price_missing_rate_errors() {
         assert!(parse("P 2024-06-15 USD EUR\n").is_err());
+    }
+
+    // --- Auto-rule patterns ---
+
+    #[test]
+    fn parse_auto_rule_segment_placeholder() {
+        use crate::parser::entry::AutoPattern;
+        let got = parse("= /^$segment:bar:baz/\n    [foo]  1\n").unwrap();
+        match &got[0].value {
+            Entry::AutoRule(rule) => match &rule.pattern {
+                AutoPattern::Segmented {
+                    parts,
+                    anchored_start,
+                    anchored_end,
+                } => {
+                    assert_eq!(parts, &["".to_string(), ":bar:baz".to_string()]);
+                    assert!(*anchored_start);
+                    assert!(!*anchored_end);
+                }
+                other => panic!("expected Segmented, got {:?}", other),
+            },
+            other => panic!("expected AutoRule, got {:?}", other),
+        }
     }
 
     // --- Comments ---

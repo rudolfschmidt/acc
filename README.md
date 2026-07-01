@@ -148,7 +148,8 @@ loss` / `holding gain` / `holding loss` / `cta gain`
 / `cta loss` / `capital gain` / `capital loss` / `label`), `P`, and
 ledger-style **automated transactions**
 (line-leading `= /pattern/` rules that inject scaled postings
-into matching transactions); filter DSL across account /
+into matching transactions, with `$account` / `$segment`
+placeholders); filter DSL across account /
 description / code / commodity plus `-r` sibling-posting view;
 per-posting currency conversion at `tx.date`; multi-hop price
 lookups; **FIFO realised capital gains** (`capital gain` /
@@ -848,6 +849,27 @@ injects `[assets:cash-eur] $-5` and `[assets:cash-usd] $-3` — each to its
 own specific account — with `expenses:cash` collecting the total. The
 substitution is textual, so `$account` works as the whole account or
 embedded (`budget:$account`).
+
+**`$segment` — match any one account segment.** A `$segment` in the
+pattern stands for exactly one segment (a run without `:`, i.e. `[^:]+`).
+It anchors a rule to a segment *position* rather than matching at any
+depth:
+
+```
+= /^$segment:cash-/
+	[$account]             -1
+	[expenses:cash]         1
+```
+
+This matches `personal:cash-eur` and `business:cash-usd` — any single
+leading segment followed by `:cash-` — but not `a:b:cash-eur` (two
+segments before `:cash-`) or `cash-eur` (none). `$segment` is acc's own
+placeholder, not ledger's: acc auto-patterns are *not* a regex engine —
+the only metacharacters are the `^` / `$` anchors and the literal
+`$segment` token (no ranges, classes or quantifiers). It may appear more
+than once and in any position (`:cash:$segment:eur`); each occurrence
+consumes exactly one segment. Pair it with `$account` to flush every
+matched account to its own leg regardless of its leading segment.
 
 ### Error output
 
@@ -1632,6 +1654,19 @@ it dimmed after the account name — `1000 (foo)` in tree mode,
 keep sorting nicely while still reading as words. It is display-only: no
 inheritance to sub-accounts, and nothing filters or computes on the
 label (only `bal` shows it).
+
+The account name may itself carry a [`$segment`](#automated-transactions--pattern)
+wildcard, labelling every account that matches:
+
+```
+account $segment:1000
+    label foo
+```
+
+labels `personal:1000`, `business:1000`, … — any single leading segment
+followed by `:1000`. The pattern is anchored to the whole name, so
+`personal:1000:sub` is *not* labelled; on an exact-name conflict the
+exact `label` wins.
 
 ### `P` — price
 

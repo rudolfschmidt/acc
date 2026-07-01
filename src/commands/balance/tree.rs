@@ -22,7 +22,7 @@ use crate::loader::Journal;
 struct Ctx<'a> {
     width: usize,
     precisions: &'a HashMap<String, usize>,
-    labels: &'a HashMap<String, String>,
+    journal: &'a Journal,
     show_empty: bool,
 }
 
@@ -31,7 +31,7 @@ pub(super) fn print(journal: &Journal, show_empty: bool) {
     let ctx = Ctx {
         width: calculate_width(&root, &journal.precisions),
         precisions: &journal.precisions,
-        labels: &journal.labels,
+        journal,
         show_empty,
     };
 
@@ -74,7 +74,7 @@ fn print_account(ctx: &Ctx, indent: &str, path: &str, account: &Account) {
         // children individually offset).
         if ctx.show_empty {
             print!("{:>w$} ", 0, w = ctx.width);
-            println!("{}{}{}", indent, account.name.blue(), label_suffix(path, ctx.labels));
+            println!("{}{}{}", indent, account.name.blue(), label_suffix(path, ctx.journal));
             format!("{}  ", indent)
         } else {
             indent.to_string()
@@ -86,7 +86,7 @@ fn print_account(ctx: &Ctx, indent: &str, path: &str, account: &Account) {
                 println!();
             }
         }
-        println!("{}{}{}", indent, account.name.blue(), label_suffix(path, ctx.labels));
+        println!("{}{}{}", indent, account.name.blue(), label_suffix(path, ctx.journal));
         format!("{}  ", indent)
     };
 
