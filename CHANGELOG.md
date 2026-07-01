@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.14.3 — 2026-07-01
+
+### Wed 01 Jul 2026 - `account … / label <text>` — cosmetic labels in `bal`
+
+Numbered chart-of-accounts codes (`1000`, `2000`, …) sort nicely but
+read badly. A new `label` sub-directive attaches a human-readable hint:
+
+```
+account 1000
+    label foo
+```
+
+`acc bal` now prints it dimmed after the account name — `1000 (foo)` in
+tree mode, `assets:1000 (foo)` in flat mode, and on the zero line under
+`-E` too. It is display-only: no inheritance to sub-accounts, and
+nothing filters or computes on the label. Only `bal` renders it.
+
+It rides on the existing `account NAME` + indented sub-directive syntax
+(the same shape as `cta gain`, `capital gain`, …), so the parser is
+untouched; the resolver special-cases a `label …` sub-directive into an
+`account → text` map on the journal, which the two `bal` renderers read.
+
+Internal cleanup alongside: the resolver's declaration-gathering pass
+now returns a `Declarations` struct instead of a four-`HashMap` tuple,
+and the tree renderer bundles its invariant rendering state (width,
+precisions, labels, `-E`) into a single context struct threaded through
+the recursion instead of seven positional arguments.
+
 ## 0.14.2 — 2026-07-01
 
 ### Wed 01 Jul 2026 - expander: `$account` in automated transactions

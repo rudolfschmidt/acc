@@ -6,24 +6,38 @@
 //! controls whether branches with a zero display-rounded total are
 //! rendered.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use colored::Colorize;
 
-use super::common::print_commodity_amount;
+use super::common::{label_suffix, print_commodity_amount};
 use crate::commands::account::Account;
 use crate::commands::util::format_amount;
 use crate::decimal::Decimal;
 use crate::loader::Journal;
 
+/// Invariant rendering context threaded through the recursion, so
+/// `print_account` only carries the per-node arguments (indent, path,
+/// account) alongside it.
+struct Ctx<'a> {
+    width: usize,
+    precisions: &'a HashMap<String, usize>,
+    labels: &'a HashMap<String, String>,
+    show_empty: bool,
+}
+
 pub(super) fn print(journal: &Journal, show_empty: bool) {
-    let precisions = &journal.precisions;
     let root = Account::from_transactions(&journal.transactions);
-    let width = calculate_width(&root, precisions);
+    let ctx = Ctx {
+        width: calculate_width(&root, &journal.precisions),
+        precisions: &journal.precisions,
+        labels: &journal.labels,
+        show_empty,
+    };
 
     for child in root.children.values() {
-        if show_empty || child.has_balance(precisions) {
-            print_account("", child, width, precisions, show_empty);
+        if show_empty || child.has_balance(ctx.precisions) {
+            print_account(&ctx, "", &child.name, child);
         }
     }
 
@@ -31,27 +45,24 @@ pub(super) fn print(journal: &Journal, show_empty: bool) {
         return;
     }
 
-    println!("{}", "-".repeat(width));
+    println!("{}", "-".repeat(ctx.width));
     let total = root.total();
     if total.values().all(|v| v.is_zero()) {
-        println!("{:>w$} ", 0, w = width);
+        println!("{:>w$} ", 0, w = ctx.width);
     } else {
         for (commodity, value) in &total {
             if !value.is_zero() {
-                print_commodity_amount(commodity, *value, width, precisions);
+                print_commodity_amount(commodity, *value, ctx.width, ctx.precisions);
                 println!();
             }
         }
     }
 }
 
-fn print_account(
-    indent: &str,
-    account: &Account,
-    width: usize,
-    precisions: &std::collections::HashMap<String, usize>,
-    show_empty: bool,
-) {
+/// `path` is the full account name at this node (segments joined by
+/// `:`), used to look up its label; `indent` is the leading whitespace
+/// for this depth. `account.name` is only the last segment.
+fn print_account(ctx: &Ctx, indent: &str, path: &str, account: &Account) {
     let total = account.total();
     let non_zero: Vec<_> = total.iter().filter(|(_, v)| !v.is_zero()).collect();
 
@@ -61,37 +72,35 @@ fn print_account(
         // the name hidden and let any non-zero descendants render at
         // the parent's indent (a branch can net to zero while its
         // children individually offset).
-        if show_empty {
-            print!("{:>w$} ", 0, w = width);
-            println!("{}{}", indent, account.name.blue());
+        if ctx.show_empty {
+            print!("{:>w$} ", 0, w = ctx.width);
+            println!("{}{}{}", indent, account.name.blue(), label_suffix(path, ctx.labels));
             format!("{}  ", indent)
         } else {
             indent.to_string()
         }
     } else {
         for (i, (commodity, value)) in non_zero.iter().enumerate() {
-            print_commodity_amount(commodity, **value, width, precisions);
+            print_commodity_amount(commodity, **value, ctx.width, ctx.precisions);
             if i < non_zero.len() - 1 {
                 println!();
             }
         }
-        println!("{}{}", indent, account.name.blue());
+        println!("{}{}{}", indent, account.name.blue(), label_suffix(path, ctx.labels));
         format!("{}  ", indent)
     };
 
     // Always descend — a branch can net to zero while its children
     // individually have non-zero commodities that offset.
     for child in account.children.values() {
-        if show_empty || child.has_balance(precisions) {
-            print_account(&child_indent, child, width, precisions, show_empty);
+        if ctx.show_empty || child.has_balance(ctx.precisions) {
+            let child_path = format!("{}:{}", path, child.name);
+            print_account(ctx, &child_indent, &child_path, child);
         }
     }
 }
 
-fn calculate_width(
-    root: &Account,
-    precisions: &std::collections::HashMap<String, usize>,
-) -> usize {
+fn calculate_width(root: &Account, precisions: &HashMap<String, usize>) -> usize {
     let mut max_width = 0;
     let mut visit = |acc: &Account| {
         for (commodity, value) in acc.total() {

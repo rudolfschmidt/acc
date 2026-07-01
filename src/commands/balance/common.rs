@@ -46,3 +46,16 @@ pub(super) fn print_commodity_amount(
         print!("{:>w$} ", formatted, w = width);
     }
 }
+
+/// The ` (label)` suffix for an account, dimmed — empty when the full
+/// account path carries no `label` declaration. Display only, shown by
+/// both balance renderers next to the account name.
+pub(super) fn label_suffix(
+    account: &str,
+    labels: &std::collections::HashMap<String, String>,
+) -> String {
+    match labels.get(account) {
+        Some(label) => format!(" ({})", label).dimmed().to_string(),
+        None => String::new(),
+    }
+}
