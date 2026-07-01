@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.14.2 — 2026-07-01
+
+### Wed 01 Jul 2026 - expander: `$account` in automated transactions
+
+An injected posting's account may now contain `$account`, replaced with
+the account of the posting that triggered the rule — ledger's `[$account]`.
+So one `= /pattern/` rule flushes each of several matched accounts to its
+*own* leg instead of a hard-coded parent: `= /^assets:cash-/` with
+`[$account] -1` / `[expenses:cash] 1` books `[assets:cash-eur] -X`,
+`[assets:cash-usd] -Y`, … each to its specific account, with
+`expenses:cash` collecting the total.
+
+The substitution is textual, so `$account` works as the whole account or
+embedded (`budget:$account`), matching ledger. It doesn't collide with
+acc's `$role:slot` references: auto-rule accounts never pass through role
+resolution, so `$account` reaches the expander verbatim and is replaced
+there.
+
 ## 0.14.1 — 2026-07-01
 
 ### Wed 01 Jul 2026 - lint: `--base` folder ↔ category check

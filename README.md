@@ -830,6 +830,24 @@ balanced. A VAT-split variant:
 Matching `income:gross $1000` injects `-$1000` flush,
 `+$810` net, `+$190` vat.
 
+**`$account` — refer to the matched account.** Inside an injected
+posting, `$account` is replaced with the account of the posting that
+triggered the rule (ledger's `[$account]`). So one rule flushes each of
+several accounts to its *own* leg instead of a hard-coded parent — e.g.
+per-currency cash:
+
+```
+= /^assets:cash-/
+	[$account]             -1
+	[expenses:cash]         1
+```
+
+A transaction touching `assets:cash-eur $5` and `assets:cash-usd $3`
+injects `[assets:cash-eur] $-5` and `[assets:cash-usd] $-3` — each to its
+own specific account — with `expenses:cash` collecting the total. The
+substitution is textual, so `$account` works as the whole account or
+embedded (`budget:$account`).
+
 ### Error output
 
 Parse, resolve, and booker errors render in ledger-cli style with a
