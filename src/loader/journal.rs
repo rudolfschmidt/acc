@@ -50,4 +50,22 @@ pub struct Journal {
     /// display label. Cosmetic only — `bal` shows it beside the account,
     /// nothing filters or computes on it.
     pub labels: HashMap<String, String>,
+    /// Label declarations whose account carried a `$segment` wildcard, e.g.
+    /// `account $segment:11 / label cash`. Matched against full account
+    /// names by [`Self::label_for`] when the exact `labels` map misses.
+    pub label_patterns: Vec<(crate::parser::entry::AutoPattern, String)>,
+}
+
+impl Journal {
+    /// The display label for `account`: an exact `labels` entry if present,
+    /// otherwise the first matching `$segment` pattern, else `None`.
+    pub fn label_for(&self, account: &str) -> Option<&str> {
+        if let Some(label) = self.labels.get(account) {
+            return Some(label);
+        }
+        self.label_patterns
+            .iter()
+            .find(|(pattern, _)| pattern.matches(account))
+            .map(|(_, label)| label.as_str())
+    }
 }

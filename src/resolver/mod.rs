@@ -65,6 +65,10 @@ pub struct Resolved {
     /// display label. Purely cosmetic — shown by `bal`, never filtered or
     /// computed on.
     pub labels: HashMap<String, String>,
+    /// `account $segment:… / label <text>` declarations: a `$segment`
+    /// wildcard pattern (anchored to the full account name) → display
+    /// label, matched at render time when the exact `labels` map misses.
+    pub label_patterns: Vec<(crate::parser::entry::AutoPattern, String)>,
 }
 
 pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
@@ -73,6 +77,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         roles,
         precisions,
         labels,
+        label_patterns,
     } = collect_declarations(&entries)?;
 
     // The pipeline phases consume specific roles by name; this is the one
@@ -190,6 +195,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         aliases,
         auto_rules,
         labels,
+        label_patterns,
     })
 }
 
@@ -252,6 +258,7 @@ struct Declarations {
     roles: HashMap<String, String>,
     precisions: HashMap<String, usize>,
     labels: HashMap<String, String>,
+    label_patterns: Vec<(crate::parser::entry::AutoPattern, String)>,
 }
 
 fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, ResolveError> {
@@ -264,6 +271,9 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
     // `account NAME / label <text>` → account → display label. Cosmetic
     // only (shown by `bal`); kept out of the role index below.
     let mut labels: HashMap<String, String> = HashMap::new();
+    // Label declarations whose account carries a `$segment` wildcard;
+    // matched against full account names at render time.
+    let mut label_patterns: Vec<(crate::parser::entry::AutoPattern, String)> = Vec::new();
 
     for e in entries {
         match &e.value {
@@ -288,9 +298,24 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
             }
             Entry::RoleAccount { role, account } => {
                 // A `label <text>` sub-directive is a display label, not a
-                // role: record account → text and skip the role index.
+                // role: record account → text and skip the role index. A
+                // `$segment` in the account name makes it a wildcard pattern
+                // (anchored to the whole name), stored separately.
                 if let Some(text) = role.strip_prefix("label ") {
-                    labels.insert(account.clone(), text.trim().to_string());
+                    let text = text.trim().to_string();
+                    if account.contains("$segment") {
+                        let parts = account.split("$segment").map(str::to_string).collect();
+                        label_patterns.push((
+                            crate::parser::entry::AutoPattern::Segmented {
+                                parts,
+                                anchored_start: true,
+                                anchored_end: true,
+                            },
+                            text,
+                        ));
+                    } else {
+                        labels.insert(account.clone(), text);
+                    }
                     continue;
                 }
                 if let Some(prev) = roles.get(role)
@@ -315,6 +340,7 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
         roles: roles.into_iter().map(|(role, d)| (role, d.name)).collect(),
         precisions,
         labels,
+        label_patterns,
     })
 }
 
@@ -379,6 +405,23 @@ mod tests {
         let out = resolve(parsed(src)).unwrap();
         assert_eq!(out.slippage_gain.as_deref(), Some("Equity:SlippageGain"));
         assert_eq!(out.slippage_loss.as_deref(), Some("Equity:SlippageLoss"));
+    }
+
+    #[test]
+    fn splits_exact_and_segment_labels() {
+        use crate::parser::entry::AutoPattern;
+        let src = "account assets:cash\n    label liquid\n\
+                   account $segment:baz\n    label tag\n";
+        let out = resolve(parsed(src)).unwrap();
+        // Plain name → exact map.
+        assert_eq!(out.labels.get("assets:cash").map(String::as_str), Some("liquid"));
+        // `$segment` name → pattern list, anchored to the whole account.
+        assert_eq!(out.label_patterns.len(), 1);
+        let (pattern, text) = &out.label_patterns[0];
+        assert_eq!(text, "tag");
+        assert!(matches!(pattern, AutoPattern::Segmented { .. }));
+        assert!(pattern.matches("foo:baz"));
+        assert!(!pattern.matches("foo:baz:sub"));
     }
 
     #[test]

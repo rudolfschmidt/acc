@@ -97,6 +97,7 @@ fn finish_load(entries: Vec<Located<Entry>>) -> Result<Journal, LoadError> {
         aliases: resolved.aliases,
         auto_rules: resolved.auto_rules,
         labels: resolved.labels,
+        label_patterns: resolved.label_patterns,
     })
 }
 

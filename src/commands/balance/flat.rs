@@ -13,7 +13,6 @@ use crate::loader::Journal;
 pub(super) fn print(journal: &Journal, show_empty: bool) {
     let postings = group_postings_by_account(journal);
     let precisions = &journal.precisions;
-    let labels = &journal.labels;
 
     // Journal-wide grand total per commodity.
     let total: BTreeMap<String, Decimal> = postings
@@ -52,7 +51,7 @@ pub(super) fn print(journal: &Journal, show_empty: bool) {
             // `-E`; otherwise skip it.
             if show_empty {
                 print!("{:>w$} ", 0, w = width);
-                println!("{}{}", account.blue(), label_suffix(account, labels));
+                println!("{}{}", account.blue(), label_suffix(account, journal));
             }
             continue;
         }
@@ -62,7 +61,7 @@ pub(super) fn print(journal: &Journal, show_empty: bool) {
                 println!();
             }
         }
-        println!("{}{}", account.blue(), label_suffix(account, labels));
+        println!("{}{}", account.blue(), label_suffix(account, journal));
     }
 
     // Separator + grand total.

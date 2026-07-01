@@ -47,14 +47,11 @@ pub(super) fn print_commodity_amount(
     }
 }
 
-/// The ` (label)` suffix for an account, dimmed — empty when the full
-/// account path carries no `label` declaration. Display only, shown by
-/// both balance renderers next to the account name.
-pub(super) fn label_suffix(
-    account: &str,
-    labels: &std::collections::HashMap<String, String>,
-) -> String {
-    match labels.get(account) {
+/// The ` (label)` suffix for an account, dimmed — empty when the account
+/// carries no `label` declaration (exact or `$segment` pattern). Display
+/// only, shown by both balance renderers next to the account name.
+pub(super) fn label_suffix(account: &str, journal: &Journal) -> String {
+    match journal.label_for(account) {
         Some(label) => format!(" ({})", label).dimmed().to_string(),
         None => String::new(),
     }
