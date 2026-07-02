@@ -67,18 +67,14 @@ fn print_account(ctx: &Ctx, indent: &str, path: &str, account: &Account) {
     let non_zero: Vec<_> = total.iter().filter(|(_, v)| !v.is_zero()).collect();
 
     let child_indent = if non_zero.is_empty() {
-        // Account whose total nets to zero. Under `-E`, render a `0`
-        // line + name so the empty account is visible; otherwise keep
-        // the name hidden and let any non-zero descendants render at
-        // the parent's indent (a branch can net to zero while its
-        // children individually offset).
-        if ctx.show_empty {
-            print!("{:>w$} ", 0, w = ctx.width);
-            println!("{}{}{}", indent, account.name.blue(), label_suffix(path, ctx.journal));
-            format!("{}  ", indent)
-        } else {
-            indent.to_string()
-        }
+        // Total nets to zero. We only descend into a node when `-E` is set
+        // or a descendant is non-zero, so there is always something to
+        // render beneath it: print a `0` header (the subtree genuinely nets
+        // to zero) so the non-zero children stay nested under this node and
+        // any label shows — rather than orphaning them at the parent indent.
+        print!("{:>w$} ", 0, w = ctx.width);
+        println!("{}{}{}", indent, account.name.blue(), label_suffix(path, ctx.journal));
+        format!("{}  ", indent)
     } else {
         for (i, (commodity, value)) in non_zero.iter().enumerate() {
             print_commodity_amount(commodity, **value, ctx.width, ctx.precisions);

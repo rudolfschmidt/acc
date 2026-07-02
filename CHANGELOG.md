@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.14.5 — 2026-07-02
+
+### Thu 02 Jul 2026 - bal tree: show a zero-netting parent that has non-zero children
+
+A parent account whose subtree nets to zero but whose children are
+individually non-zero (they offset each other) was hidden without `-E` —
+and worse, its non-zero children were re-parented to the grandparent's
+indent, dropping the grouping node (and any label on it) and
+misrepresenting the hierarchy. So `assets:12` grouping `wise` (+18.95),
+`wise-eur` (−19.91) and `wise-usd` (+0.96) vanished, and the three
+children appeared as if directly under `assets`.
+
+The tree renderer only descends into a node when `-E` is set or the node
+has a non-zero descendant, so in that branch there is *always* something
+to show beneath it. It now prints the node as a `0` header (its subtree
+genuinely nets to zero) and keeps the children nested under it, instead
+of orphaning them. Zero-netting *leaves* (no non-zero descendant) stay
+hidden without `-E`, exactly as before — no extra zero rows.
+
 ## 0.14.4 — 2026-07-01
 
 ### Wed 01 Jul 2026 - `$segment` — a one-segment wildcard for patterns and labels
