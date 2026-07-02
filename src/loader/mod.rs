@@ -44,7 +44,7 @@ where
 /// Load the journal, then load only the price-DB pairs the report can use.
 ///
 /// `journal_files` are parsed first to learn the held commodities + the
-/// `-X` target; the `price_files` (the `ACC_PRICES_DIR` star, ~800k
+/// `-X` target; the `price_files` (the `ACC_PRICES` star, ~800k
 /// directives) are then parsed with a filter that keeps a `P` directive
 /// only when both its commodities can take part in a conversion the report
 /// needs. Every conversion routes through the `$` hub (`X → $ → target`),

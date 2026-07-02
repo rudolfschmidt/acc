@@ -7,8 +7,18 @@
 
 use std::collections::HashMap;
 
+use colored::Colorize;
+
 use crate::decimal::Decimal;
 use crate::parser::posting::Posting;
+
+/// Paint a display label (from `account NAME / label …`) for report
+/// output. Centralised so the label colour lives in exactly one place —
+/// `bal` appends it after the account name, `reg` inlines it after the
+/// labelled segment, both through here.
+pub(crate) fn paint_label(text: &str) -> String {
+    text.bright_blue().to_string()
+}
 
 /// Account column content, matching ledger's print/reg output (verified
 /// against ledger 3.4.1): a real posting prints its bare `account`, a

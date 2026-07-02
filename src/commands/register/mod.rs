@@ -19,7 +19,7 @@ use std::io::{self, BufWriter, Write};
 
 use colored::Colorize;
 
-use super::util::{format_amount, render_account, shows_nonzero, write_spaces};
+use super::util::{format_amount, paint_label, render_account, shows_nonzero, write_spaces};
 use crate::decimal::Decimal;
 use crate::loader::{Journal, LabelView};
 use crate::parser::transaction::{State, Transaction};
@@ -84,7 +84,7 @@ struct Row {
 
 struct Entry {
     /// Pre-styled account path: segments blue, plus any register label
-    /// dimmed inline after the segment it belongs to (`ukdac:12 (foo):wise`).
+    /// coloured inline after the segment it belongs to (`ukdac:12 (foo):wise`).
     account: String,
     /// Visible width of `account` (excludes ANSI colour codes), for
     /// column alignment.
@@ -143,7 +143,7 @@ fn build_rows(journal: &Journal) -> Vec<Row> {
 }
 
 /// Style an account path for the register: each segment coloured blue,
-/// with a register label rendered dimmed inline after the segment it
+/// with a register label ([`paint_label`]) inline after the segment it
 /// attaches to — e.g. `ukdac:12 (brokerage):wise`. The label is looked
 /// up on each `:`-joined prefix (`label-register`, else the shared
 /// `label` fallback). Returns the styled string (with ANSI colour codes)
@@ -162,9 +162,9 @@ fn render_account_labeled(account: &str, journal: &Journal) -> (String, usize) {
         styled.push_str(&segment.blue().to_string());
         width += segment.chars().count();
         if let Some(label) = journal.label_for(&prefix, LabelView::Register) {
-            let addition = format!(" ({})", label);
+            let addition = format!("({})", label);
             width += addition.chars().count();
-            styled.push_str(&addition.dimmed().to_string());
+            styled.push_str(&paint_label(&addition));
         }
     }
     (styled, width)
@@ -241,7 +241,7 @@ fn print_line<W: Write>(
     widths: &Widths,
 ) -> io::Result<()> {
     print_left(out, title, title.chars().count(), widths.title + GAP)?;
-    // `account` is already styled (blue segments + dimmed labels); pad by
+    // `account` is already styled (blue segments + coloured labels); pad by
     // its precomputed visible width.
     print_left(out, account, account_width, widths.account + GAP)?;
     print_right(out, amount, amount_negative, widths.amount)?;

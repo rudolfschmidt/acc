@@ -13,6 +13,7 @@ pub mod lint;
 pub mod navigate;
 pub mod print;
 pub mod register;
+pub mod rename;
 pub mod sweep;
 pub mod update;
 

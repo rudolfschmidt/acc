@@ -322,12 +322,28 @@ enum Command {
         /// Expense account — used when the remainder is a debit (> 0).
         expense: String,
     },
+    /// Rename an account across the `-f` files / directories by prefix —
+    /// `rename foo:5 foo:4` renames `foo:5`, `foo:50`, `foo:5:…` (OLD need
+    /// not be a whole segment); anchored at the start, so `bar:foo:5` is
+    /// untouched. Only posting accounts are rewritten (not `account`
+    /// directives or auto-rule patterns). Preview by default (writes
+    /// nothing); `-e` applies it in place.
+    #[command(arg_required_else_help = true)]
+    Rename {
+        /// The account (prefix) to rename.
+        old: String,
+        /// The account (prefix) to rename it to.
+        new: String,
+        /// Apply the rename in place. Without it, only a preview prints.
+        #[arg(short = 'e', long = "execute")]
+        execute: bool,
+    },
     /// Update exchange rate data (MEXC for crypto, openexchangerates for fiat).
     /// Standalone — does not read the journal.
     Update {
         /// Trading pair in BASE/QUOTE format, e.g. BTC/USDT. Repeat
         /// `--pair` to update multiple pairs. If omitted, all existing
-        /// crypto files under $ACC_PRICES_DIR/crypto/ are updated.
+        /// crypto files under $ACC_PRICES/crypto/ are updated.
         #[arg(long = "pair")]
         pairs: Vec<String>,
         /// Overwrite data from this date onwards (YYYY-MM-DD)
@@ -390,6 +406,7 @@ impl Command {
             | Self::Format { .. }
             | Self::Diff { .. }
             | Self::Import { .. }
+            | Self::Rename { .. }
             | Self::Sweep { .. } => &[],
         }
     }
@@ -411,6 +428,7 @@ impl Command {
             | Self::Format { .. }
             | Self::Diff { .. }
             | Self::Import { .. }
+            | Self::Rename { .. }
             | Self::Sweep { .. } => None,
         }
     }
@@ -626,6 +644,27 @@ fn try_standalone(
             )
         }
 
+        // Rename rewrites account names across the `-f` files. It does its
+        // own per-file parse + surgical edit (never the report pipeline).
+        // Config files carry no postings, so passing them along with `-f`
+        // is harmless — only posting accounts are ever touched.
+        Command::Rename { old, new, execute } => {
+            if paths.is_empty() {
+                eprintln!("Error: No files specified. Use -f PATH.");
+                std::process::exit(1);
+            }
+            let mut rename_paths: Vec<std::path::PathBuf> = Vec::new();
+            for input in paths {
+                let path = std::path::Path::new(input);
+                if path.is_dir() {
+                    collect_ledger_files(path, &mut rename_paths);
+                } else {
+                    rename_paths.push(path.to_path_buf());
+                }
+            }
+            Some(acc::commands::rename::run(&rename_paths, old, new, *execute))
+        }
+
         _ => None,
     }
 }
@@ -717,14 +756,14 @@ fn start() -> Result<(), acc::Error> {
     // `update` already returned above.
     let filter_args: Option<&ReportArgs> = command.filter();
 
-    // Price-DB files (`$ACC_PRICES_DIR`, only under `-X`) are kept separate
+    // Price-DB files (`$ACC_PRICES`, only under `-X`) are kept separate
     // from the user's journal files so they can be loaded *selectively*: the
     // journal is parsed first to learn which commodities the report touches,
     // and only the price pairs connecting them are then parsed. The DB is
     // ~800k directives; a report needs a handful of pairs.
     let mut price_paths: Vec<std::path::PathBuf> = Vec::new();
     if filter_args.map(|f| f.exchange.is_some()).unwrap_or(false)
-        && let Ok(dir) = std::env::var("ACC_PRICES_DIR")
+        && let Ok(dir) = std::env::var("ACC_PRICES")
     {
         let path = std::path::Path::new(&dir);
         if path.is_dir() {
