@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.15.0 — 2026-07-02
+
+### Thu 02 Jul 2026 - per-view account labels: `label-balance` / `label-register`
+
+Account labels (0.14.3) are now per-view. Bare `label` stays the shared
+fallback, and two new sub-directives override it for one view:
+
+```
+account 1000
+    label          foo          ; both views, unless overridden
+    label-register cash inflow   ; register only
+```
+
+Each view renders the label in its own place, always keeping the number:
+
+- `acc bal` **appends** it after the name (`1000 (foo)`), so the code
+  still drives the tree's sort order.
+- `acc reg` inlines it after the labelled segment inside the account path
+  (`assets:1000 (cash inflow):sub`) — the number stays, the meaning sits
+  where it belongs. (An earlier idea to *replace* the code in the
+  register was dropped: the number is worth keeping there too.)
+
+Lookup precedence within a view: the view-specific set wins over the
+shared `label`; within a set an exact full name wins over a `$segment`
+wildcard. `$segment` works for all three keywords.
+
+Naming: kept `label-balance` / `label-register` (concept-first, matching
+`slippage gain` / `capital loss`, and keeping the bare `label` in the
+family) over `balance-label` or an `alias-` form — `alias` already means
+a commodity alias here and, in ledger, an input-resolvable account
+rename, which this display-only label is not.
+
+Behaviour change (hence the minor version): a bare `label` now also shows
+in the register as the fallback, where before labels were balance-only.
+
+Under the hood: the exact-name map and `$segment` pattern list are
+bundled into a `LabelSet`, held once per view (base / balance / register)
+with a single `Journal::label_for(account, view)` lookup. The parser now
+allows an `account` to carry more than one indented sub-directive (each
+becomes its own role/label entry) — required to declare `label` and
+`label-register` on the same account.
+
 ## 0.14.5 — 2026-07-02
 
 ### Thu 02 Jul 2026 - bal tree: show a zero-netting parent that has non-zero children

@@ -28,6 +28,29 @@ pub mod error;
 
 pub use error::ResolveError;
 
+/// A set of account labels: exact full-name entries plus `$segment`
+/// wildcard patterns. One of these per view (plus a shared base); the
+/// exact map is consulted first, then the patterns.
+#[derive(Debug, Clone, Default)]
+pub struct LabelSet {
+    pub exact: HashMap<String, String>,
+    pub patterns: Vec<(crate::parser::entry::AutoPattern, String)>,
+}
+
+impl LabelSet {
+    /// The label for `account` in this set: exact match first, then the
+    /// first matching `$segment` pattern.
+    pub fn get(&self, account: &str) -> Option<&str> {
+        if let Some(label) = self.exact.get(account) {
+            return Some(label);
+        }
+        self.patterns
+            .iter()
+            .find(|(pattern, _)| pattern.matches(account))
+            .map(|(_, label)| label.as_str())
+    }
+}
+
 /// Output of normalization. Transactions and prices are in date order;
 /// declarations are extracted into their own fields.
 #[derive(Debug, Clone)]
@@ -61,14 +84,13 @@ pub struct Resolved {
     /// are injected into the same transaction, scaled by the
     /// triggering amount.
     pub auto_rules: Vec<crate::parser::entry::AutoRule>,
-    /// `account NAME / label <text>` declarations: full account name →
-    /// display label. Purely cosmetic — shown by `bal`, never filtered or
-    /// computed on.
-    pub labels: HashMap<String, String>,
-    /// `account $segment:… / label <text>` declarations: a `$segment`
-    /// wildcard pattern (anchored to the full account name) → display
-    /// label, matched at render time when the exact `labels` map misses.
-    pub label_patterns: Vec<(crate::parser::entry::AutoPattern, String)>,
+    /// `account NAME / label <text>` declarations — cosmetic display
+    /// labels. `labels` is the shared fallback (bare `label`); the two
+    /// view-specific sets (`label-balance` / `label-register`) override
+    /// it per view. Each set holds exact names and `$segment` patterns.
+    pub labels: LabelSet,
+    pub labels_balance: LabelSet,
+    pub labels_register: LabelSet,
 }
 
 pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
@@ -77,7 +99,8 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         roles,
         precisions,
         labels,
-        label_patterns,
+        labels_balance,
+        labels_register,
     } = collect_declarations(&entries)?;
 
     // The pipeline phases consume specific roles by name; this is the one
@@ -195,7 +218,8 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         aliases,
         auto_rules,
         labels,
-        label_patterns,
+        labels_balance,
+        labels_register,
     })
 }
 
@@ -257,8 +281,9 @@ struct Declarations {
     aliases: HashMap<String, String>,
     roles: HashMap<String, String>,
     precisions: HashMap<String, usize>,
-    labels: HashMap<String, String>,
-    label_patterns: Vec<(crate::parser::entry::AutoPattern, String)>,
+    labels: LabelSet,
+    labels_balance: LabelSet,
+    labels_register: LabelSet,
 }
 
 fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, ResolveError> {
@@ -268,12 +293,11 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
     // former per-role fields: a new role needs no change here.
     let mut roles: HashMap<String, Declaration> = HashMap::new();
     let mut precisions: HashMap<String, usize> = HashMap::new();
-    // `account NAME / label <text>` → account → display label. Cosmetic
-    // only (shown by `bal`); kept out of the role index below.
-    let mut labels: HashMap<String, String> = HashMap::new();
-    // Label declarations whose account carries a `$segment` wildcard;
-    // matched against full account names at render time.
-    let mut label_patterns: Vec<(crate::parser::entry::AutoPattern, String)> = Vec::new();
+    // `label` / `label-balance` / `label-register` display labels.
+    // `labels` is the shared fallback; the view-specific sets override it.
+    let mut labels = LabelSet::default();
+    let mut labels_balance = LabelSet::default();
+    let mut labels_register = LabelSet::default();
 
     for e in entries {
         match &e.value {
@@ -297,15 +321,23 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
                 }
             }
             Entry::RoleAccount { role, account } => {
-                // A `label <text>` sub-directive is a display label, not a
-                // role: record account → text and skip the role index. A
-                // `$segment` in the account name makes it a wildcard pattern
-                // (anchored to the whole name), stored separately.
-                if let Some(text) = role.strip_prefix("label ") {
+                // Display-label sub-directives, not roles: bare `label`
+                // (shared fallback) or the view-specific `label-balance` /
+                // `label-register`, which override it per view. A `$segment`
+                // in the account name makes it a wildcard (anchored to the
+                // whole name); otherwise it is an exact full-name entry.
+                let target = if let Some(t) = role.strip_prefix("label-balance ") {
+                    Some((&mut labels_balance, t))
+                } else if let Some(t) = role.strip_prefix("label-register ") {
+                    Some((&mut labels_register, t))
+                } else {
+                    role.strip_prefix("label ").map(|t| (&mut labels, t))
+                };
+                if let Some((set, text)) = target {
                     let text = text.trim().to_string();
                     if account.contains("$segment") {
                         let parts = account.split("$segment").map(str::to_string).collect();
-                        label_patterns.push((
+                        set.patterns.push((
                             crate::parser::entry::AutoPattern::Segmented {
                                 parts,
                                 anchored_start: true,
@@ -314,7 +346,7 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
                             text,
                         ));
                     } else {
-                        labels.insert(account.clone(), text);
+                        set.exact.insert(account.clone(), text);
                     }
                     continue;
                 }
@@ -340,7 +372,8 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
         roles: roles.into_iter().map(|(role, d)| (role, d.name)).collect(),
         precisions,
         labels,
-        label_patterns,
+        labels_balance,
+        labels_register,
     })
 }
 
@@ -409,19 +442,29 @@ mod tests {
 
     #[test]
     fn splits_exact_and_segment_labels() {
-        use crate::parser::entry::AutoPattern;
         let src = "account assets:cash\n    label liquid\n\
                    account $segment:baz\n    label tag\n";
         let out = resolve(parsed(src)).unwrap();
-        // Plain name → exact map.
-        assert_eq!(out.labels.get("assets:cash").map(String::as_str), Some("liquid"));
-        // `$segment` name → pattern list, anchored to the whole account.
-        assert_eq!(out.label_patterns.len(), 1);
-        let (pattern, text) = &out.label_patterns[0];
-        assert_eq!(text, "tag");
-        assert!(matches!(pattern, AutoPattern::Segmented { .. }));
-        assert!(pattern.matches("foo:baz"));
-        assert!(!pattern.matches("foo:baz:sub"));
+        // Exact name and `$segment` pattern both resolve via the base set;
+        // the pattern is anchored to the whole account name.
+        assert_eq!(out.labels.get("assets:cash"), Some("liquid"));
+        assert_eq!(out.labels.get("foo:baz"), Some("tag"));
+        assert_eq!(out.labels.get("foo:baz:sub"), None);
+    }
+
+    #[test]
+    fn view_labels_and_multiple_sub_directives() {
+        let src = "account a:1\n    label base\n    label-register reg-only\n\
+                   account a:2\n    label-balance bal-only\n";
+        let out = resolve(parsed(src)).unwrap();
+        // a:1 declares two sub-directives: a shared fallback and a
+        // register-specific override; no balance-specific label.
+        assert_eq!(out.labels.get("a:1"), Some("base"));
+        assert_eq!(out.labels_register.get("a:1"), Some("reg-only"));
+        assert_eq!(out.labels_balance.get("a:1"), None);
+        // a:2 is balance-only, no shared fallback.
+        assert_eq!(out.labels_balance.get("a:2"), Some("bal-only"));
+        assert_eq!(out.labels.get("a:2"), None);
     }
 
     #[test]

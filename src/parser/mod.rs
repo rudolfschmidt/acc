@@ -406,8 +406,11 @@ fn extend_block(
     };
 
     // In the `Account` case we need to swap the variant entirely; collect
-    // the replacement here and apply it after the match ends.
+    // the replacement here and apply it after the match ends. A further
+    // sub-directive under an already-upgraded account is collected in
+    // `push_new` and appended as a sibling entry instead.
     let mut upgrade: Option<Entry> = None;
+    let mut push_new: Option<Entry> = None;
 
     match &mut last.value {
         Entry::Transaction(tx) => {
@@ -447,16 +450,16 @@ fn extend_block(
             // under `account`. The words verbatim (e.g. `capital gain`)
             // become the role key; the resolver and `$role:slot`
             // references match on it, so no role names are baked in here.
-            let role = body.split_whitespace().collect::<Vec<_>>().join(" ");
-            if role.split(' ').count() < 2 {
-                return Err(ParseError::new(
-                    line,
-                    1,
-                    "expected a role sub-directive of two or more words, \
-                     e.g. `slippage gain`, `cta loss`, or `capital gain`",
-                ));
-            }
+            let role = parse_role_directive(body, line)?;
             upgrade = Some(Entry::RoleAccount { role, account: std::mem::take(name) });
+        }
+        Entry::RoleAccount { account, .. } => {
+            // A further sub-directive under the same `account` (e.g. a
+            // shared `label` plus a view-specific `label-register`): emit
+            // another RoleAccount that shares the account name. The first
+            // sub-directive already upgraded `Account` → `RoleAccount`.
+            let role = parse_role_directive(body, line)?;
+            push_new = Some(Entry::RoleAccount { role, account: account.clone() });
         }
         Entry::AutoRule(rule) => {
             let auto_posting = parse_auto_posting(body, line)?;
@@ -468,7 +471,26 @@ fn extend_block(
     if let Some(new_value) = upgrade {
         last.value = new_value;
     }
+    if let Some(entry) = push_new {
+        entries.push(Located { file: file.clone(), line, value: entry });
+    }
     Ok(())
+}
+
+/// Parse an indented `account` sub-directive into its role key: the
+/// whitespace-normalised words (e.g. `capital gain`, `label-register X`).
+/// At least two words are required.
+fn parse_role_directive(body: &str, line: usize) -> Result<String, ParseError> {
+    let role = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if role.split(' ').count() < 2 {
+        return Err(ParseError::new(
+            line,
+            1,
+            "expected a role sub-directive of two or more words, \
+             e.g. `slippage gain`, `cta loss`, or `capital gain`",
+        ));
+    }
+    Ok(role)
 }
 
 /// Parse one auto-rule posting line: `[account]  MULTIPLIER` (or the
@@ -1158,6 +1180,25 @@ mod tests {
     fn parse_account_role_needs_two_words() {
         let src = "account Equity:Foo\n    capital\n";
         assert!(parse(src).is_err());
+    }
+
+    #[test]
+    fn parse_account_with_multiple_sub_directives() {
+        // An account may carry more than one sub-directive; each becomes
+        // its own RoleAccount sharing the account name.
+        let src = "account foo:1\n    label base\n    label-register reg\n";
+        let got = parse(src).unwrap();
+        let roles: Vec<_> = got
+            .iter()
+            .filter_map(|e| match &e.value {
+                Entry::RoleAccount { role, account } => Some((role.as_str(), account.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            roles,
+            vec![("label base", "foo:1"), ("label-register reg", "foo:1")]
+        );
     }
 
     #[test]

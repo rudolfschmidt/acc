@@ -46,26 +46,33 @@ pub struct Journal {
     /// into their matching transactions by the expander phase between
     /// booker and filter.
     pub auto_rules: Vec<crate::parser::entry::AutoRule>,
-    /// `account NAME / label <text>` declarations: full account name →
-    /// display label. Cosmetic only — `bal` shows it beside the account,
-    /// nothing filters or computes on it.
-    pub labels: HashMap<String, String>,
-    /// Label declarations whose account carried a `$segment` wildcard, e.g.
-    /// `account $segment:11 / label cash`. Matched against full account
-    /// names by [`Self::label_for`] when the exact `labels` map misses.
-    pub label_patterns: Vec<(crate::parser::entry::AutoPattern, String)>,
+    /// Cosmetic display labels from `account NAME / label …` directives.
+    /// `labels` is the shared fallback (bare `label`); the two view-specific
+    /// sets (`label-balance` / `label-register`) override it per view. Each
+    /// set holds exact full names and `$segment` wildcard patterns. Shown by
+    /// `bal` / `reg`, never filtered or computed on. See [`Self::label_for`].
+    pub labels: crate::resolver::LabelSet,
+    pub labels_balance: crate::resolver::LabelSet,
+    pub labels_register: crate::resolver::LabelSet,
+}
+
+/// Which view is asking for a label — selects the view-specific set that
+/// overrides the shared `labels` fallback.
+#[derive(Debug, Clone, Copy)]
+pub enum LabelView {
+    Balance,
+    Register,
 }
 
 impl Journal {
-    /// The display label for `account`: an exact `labels` entry if present,
-    /// otherwise the first matching `$segment` pattern, else `None`.
-    pub fn label_for(&self, account: &str) -> Option<&str> {
-        if let Some(label) = self.labels.get(account) {
-            return Some(label);
-        }
-        self.label_patterns
-            .iter()
-            .find(|(pattern, _)| pattern.matches(account))
-            .map(|(_, label)| label.as_str())
+    /// The display label for `account` in `view`: the view-specific set
+    /// wins (exact name, then `$segment` pattern), else the shared `labels`
+    /// fallback, else `None`.
+    pub fn label_for(&self, account: &str, view: LabelView) -> Option<&str> {
+        let specific = match view {
+            LabelView::Balance => &self.labels_balance,
+            LabelView::Register => &self.labels_register,
+        };
+        specific.get(account).or_else(|| self.labels.get(account))
     }
 }

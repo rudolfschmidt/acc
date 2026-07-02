@@ -21,7 +21,7 @@ use colored::Colorize;
 
 use super::util::{format_amount, render_account, shows_nonzero, write_spaces};
 use crate::decimal::Decimal;
-use crate::loader::Journal;
+use crate::loader::{Journal, LabelView};
 use crate::parser::transaction::{State, Transaction};
 
 const GAP: usize = 2;
@@ -45,6 +45,7 @@ pub fn run(journal: &Journal) {
                     &mut out,
                     title,
                     &entry.account,
+                    entry.account_width,
                     &entry.amount,
                     entry.amount_negative,
                     "0",
@@ -59,6 +60,7 @@ pub fn run(journal: &Journal) {
                             &mut out,
                             title,
                             &entry.account,
+                            entry.account_width,
                             &entry.amount,
                             entry.amount_negative,
                             &total_str,
@@ -81,7 +83,12 @@ struct Row {
 }
 
 struct Entry {
+    /// Pre-styled account path: segments blue, plus any register label
+    /// dimmed inline after the segment it belongs to (`ukdac:12 (foo):wise`).
     account: String,
+    /// Visible width of `account` (excludes ANSI colour codes), for
+    /// column alignment.
+    account_width: usize,
     amount: String,
     amount_negative: bool,
     total: BTreeMap<String, Decimal>,
@@ -109,6 +116,7 @@ fn build_rows(journal: &Journal) -> Vec<Row> {
             let p = &lp.value;
             let Some(amount) = &p.amount else { continue };
             let name = render_account(p);
+            let (account, account_width) = render_account_labeled(&name, journal);
 
             running
                 .entry(amount.commodity.clone())
@@ -118,7 +126,8 @@ fn build_rows(journal: &Journal) -> Vec<Row> {
             let amount_str = format_amount(&amount.commodity, &amount.value, &journal.precisions);
 
             entries.push(Entry {
-                account: name,
+                account,
+                account_width,
                 amount: amount_str,
                 amount_negative: amount.value.is_negative(),
                 total: running.clone(),
@@ -131,6 +140,34 @@ fn build_rows(journal: &Journal) -> Vec<Row> {
     }
 
     rows
+}
+
+/// Style an account path for the register: each segment coloured blue,
+/// with a register label rendered dimmed inline after the segment it
+/// attaches to — e.g. `ukdac:12 (brokerage):wise`. The label is looked
+/// up on each `:`-joined prefix (`label-register`, else the shared
+/// `label` fallback). Returns the styled string (with ANSI colour codes)
+/// and its visible width (without them), so columns still align.
+fn render_account_labeled(account: &str, journal: &Journal) -> (String, usize) {
+    let mut styled = String::new();
+    let mut width = 0;
+    let mut prefix = String::new();
+    for (i, segment) in account.split(':').enumerate() {
+        if i > 0 {
+            styled.push_str(&":".blue().to_string());
+            width += 1;
+            prefix.push(':');
+        }
+        prefix.push_str(segment);
+        styled.push_str(&segment.blue().to_string());
+        width += segment.chars().count();
+        if let Some(label) = journal.label_for(&prefix, LabelView::Register) {
+            let addition = format!(" ({})", label);
+            width += addition.chars().count();
+            styled.push_str(&addition.dimmed().to_string());
+        }
+    }
+    (styled, width)
 }
 
 fn compute_widths(
@@ -148,7 +185,7 @@ fn compute_widths(
     for row in rows {
         widths.title = widths.title.max(row.title.chars().count());
         for entry in &row.entries {
-            widths.account = widths.account.max(entry.account.chars().count());
+            widths.account = widths.account.max(entry.account_width);
             widths.amount = widths.amount.max(entry.amount.chars().count());
             // Only commodities that would actually print (non-display-zero)
             // count toward the total column's width.
@@ -196,6 +233,7 @@ fn print_line<W: Write>(
     out: &mut W,
     title: &str,
     account: &str,
+    account_width: usize,
     amount: &str,
     amount_negative: bool,
     total: &str,
@@ -203,12 +241,9 @@ fn print_line<W: Write>(
     widths: &Widths,
 ) -> io::Result<()> {
     print_left(out, title, title.chars().count(), widths.title + GAP)?;
-    print_left(
-        out,
-        &account.blue().to_string(),
-        account.chars().count(),
-        widths.account + GAP,
-    )?;
+    // `account` is already styled (blue segments + dimmed labels); pad by
+    // its precomputed visible width.
+    print_left(out, account, account_width, widths.account + GAP)?;
     print_right(out, amount, amount_negative, widths.amount)?;
     write_spaces(out, GAP)?;
     print_right(out, total, total_negative, widths.total)?;
