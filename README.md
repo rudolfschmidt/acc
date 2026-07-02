@@ -293,6 +293,8 @@ acc [GLOBAL OPTIONS] register [PATTERN]...
 ```
 
 Transaction-by-transaction register with per-commodity running total.
+Accounts declared with a [`label`](#account) (or `label-register`) show
+it dimmed inline after the labelled segment (`assets:1000 (foo):sub`).
 
 | Arg            | Description |
 |----------------|-------------|
@@ -1641,22 +1643,44 @@ Each sub-directive must be unique across the journal — declaring
 two different accounts with `cta gain` is an error. Both halves of
 a pair must be declared for their feature to activate.
 
-A ninth, unrelated sub-directive attaches a cosmetic label:
+A further family of sub-directives attaches cosmetic labels:
 
 ```
 account 1000
     label foo
 ```
 
-`label <text>` gives *that* account a display label. `acc bal` prints
-it dimmed after the account name — `1000 (foo)` in tree mode,
-`assets:1000 (foo)` in flat mode — so numbered chart-of-accounts codes
-keep sorting nicely while still reading as words. It is display-only: no
-inheritance to sub-accounts, and nothing filters or computes on the
-label (only `bal` shows it).
+`label <text>` gives *that* account a dimmed display label, so numbered
+chart-of-accounts codes keep sorting nicely while still reading as words.
+Each view renders it in its own place, always keeping the number:
+
+- `acc bal` **appends** it after the name — `1000 (foo)` in tree mode,
+  `assets:1000 (foo)` in flat mode — so the number still drives the
+  tree's sort order.
+- `acc reg` inlines it after the labelled segment inside the account
+  path — `assets:1000 (foo):sub`.
+
+It is display-only: no inheritance to sub-accounts, and nothing filters
+or computes on it.
+
+**Per view.** Bare `label` is the shared fallback for both views;
+`label-balance` and `label-register` set a *view-specific* label that
+overrides the fallback for that view — so a coded account can read one
+way in the balance sheet and another in the register:
+
+```
+account 1000
+    label          foo          ; both views, unless overridden
+    label-register cash inflow   ; register only
+```
+
+`bal` shows `1000 (foo)`, `reg` shows `…:1000 (cash inflow):…`. Use only
+`label-balance` / `label-register` (no bare `label`) to label one view
+and leave the other bare.
 
 The account name may itself carry a [`$segment`](#automated-transactions--pattern)
-wildcard, labelling every account that matches:
+wildcard — for any of the three keywords — labelling every account that
+matches:
 
 ```
 account $segment:1000
@@ -1665,8 +1689,9 @@ account $segment:1000
 
 labels `personal:1000`, `business:1000`, … — any single leading segment
 followed by `:1000`. The pattern is anchored to the whole name, so
-`personal:1000:sub` is *not* labelled; on an exact-name conflict the
-exact `label` wins.
+`personal:1000:sub` is *not* labelled. Precedence within a view: the
+view-specific label wins over the shared `label`, and an exact-name entry
+wins over a `$segment` pattern.
 
 ### `P` — price
 

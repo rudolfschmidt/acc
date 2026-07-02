@@ -15,7 +15,7 @@ pub mod error;
 pub mod journal;
 
 pub use error::LoadError;
-pub use journal::Journal;
+pub use journal::{Journal, LabelView};
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -97,7 +97,8 @@ fn finish_load(entries: Vec<Located<Entry>>) -> Result<Journal, LoadError> {
         aliases: resolved.aliases,
         auto_rules: resolved.auto_rules,
         labels: resolved.labels,
-        label_patterns: resolved.label_patterns,
+        labels_balance: resolved.labels_balance,
+        labels_register: resolved.labels_register,
     })
 }
 

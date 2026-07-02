@@ -6,7 +6,7 @@ use colored::Colorize;
 
 use crate::commands::util::format_amount;
 use crate::decimal::Decimal;
-use crate::loader::Journal;
+use crate::loader::{Journal, LabelView};
 
 /// Aggregate every posting amount into a `account → commodity → sum`
 /// nested map. The input is already filter-scoped, so every posting
@@ -47,11 +47,12 @@ pub(super) fn print_commodity_amount(
     }
 }
 
-/// The ` (label)` suffix for an account, dimmed — empty when the account
-/// carries no `label` declaration (exact or `$segment` pattern). Display
-/// only, shown by both balance renderers next to the account name.
+/// The ` (label)` suffix for an account in the balance view, dimmed —
+/// empty when the account carries no balance label (`label-balance`, or
+/// the shared `label` fallback; exact or `$segment` pattern). Display
+/// only, appended by both balance renderers next to the account name.
 pub(super) fn label_suffix(account: &str, journal: &Journal) -> String {
-    match journal.label_for(account) {
+    match journal.label_for(account, LabelView::Balance) {
         Some(label) => format!(" ({})", label).dimmed().to_string(),
         None => String::new(),
     }
