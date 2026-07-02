@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.16.0 — 2026-07-02
+
+### Thu 02 Jul 2026 - `acc rename`, `ACC_PRICES`, and a lint output overhaul
+
+**`acc rename OLD NEW` — rename an account by prefix across the journal.**
+The first *writing* report-side command. Every posting account that
+*starts with* `OLD` has that prefix rewritten to `NEW`, so `rename foo:5
+foo:4` renumbers `foo:5`, `foo:50`, `foo:5:cash`, … in one pass — `OLD`
+need not be a whole segment. The match is anchored to the start
+(`bar:foo:5` is untouched) and is *structural*: each file is parsed, so
+only real posting accounts change — `account` directives, auto-rule
+patterns, comments and descriptions are never rewritten, and there are no
+substring accidents. Only the matched account token changes; the rest of
+each file stays byte-for-byte identical (no reformatting). Preview by
+default (`file:line  old → new`, writes nothing); `-e` / `--execute`
+applies it via an atomic temp-file swap. Files that fail to parse are
+reported and skipped, never edited.
+
+**`ACC_PRICES_DIR` → `ACC_PRICES`.** The price-directory environment
+variable was shortened. Breaking: update your environment / wrapper.
+Behaviour is otherwise unchanged — still loaded only under `-X`.
+
+**Lint output overhaul.** Messages now follow linter idiom:
+- `commodity-casing`: `expected 'USD' but found 'usd'`
+- `dir-category`: `expected 'expenses:food:groceries' but found 'expenses:parent'`
+  (ESLint/Stylelint `expected … found …`)
+- `leaf-accounts`: `'expenses:parent' is not a leaf account — 'expenses:parent:leaf' exists`
+- `role-references`: `'$role:x' resolves to no declared account`
+
+The `dir-category` check was also **fixed**: it only inspects the *last*
+posting (the income/expense leg that carries the category) instead of any
+posting, and it names the account it would need. Paths are shortened to
+`~`, colours are unified (bright-blue path, blue line number, yellow
+account/commodity tokens), the check list is column-aligned, and issue
+groups are separated by a blank line.
+
+**Label colour.** `bal`/`reg` account labels are now bright-blue via a
+single shared `paint_label` helper (was terminal-dependent `dimmed`
+grey); the register drops the space between a numeric account and its
+inline label.
+
 ## 0.15.0 — 2026-07-02
 
 ### Thu 02 Jul 2026 - per-view account labels: `label-balance` / `label-register`

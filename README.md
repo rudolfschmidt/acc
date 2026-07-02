@@ -117,7 +117,7 @@ Windows use the OS-native TLS stack, so no extra dependency there.
 
 **What gets written where:** acc never writes to your journal. The
 only thing that writes to disk is `acc update`, which writes rate
-files under `$ACC_PRICES_DIR`. Network I/O happens only in `acc
+files under `$ACC_PRICES`. Network I/O happens only in `acc
 update` (to MEXC and openexchangerates.org).
 
 ---
@@ -510,6 +510,42 @@ elsewhere are still settled.
 acc -f journal.ledger sweep '^assets:clearing$' misc income expenses >> clearing.ledger
 ```
 
+### `acc rename`
+
+```
+acc [GLOBAL OPTIONS] rename <OLD> <NEW> [-e]
+```
+
+Rename an account across the loaded `-f` files by **prefix**: every
+posting account that *starts with* `OLD` has that prefix rewritten to
+`NEW`. `OLD` need not be a whole segment, so `rename foo:5 foo:4`
+renumbers `foo:5`, `foo:50`, `foo:5:cash`, … in one go. The match is
+anchored to the start, so `bar:foo:5` is left alone.
+
+| Argument           | Description |
+|--------------------|-------------|
+| `OLD`              | Account prefix to rename. |
+| `NEW`              | Replacement prefix. |
+| `-e`, `--execute`  | Apply the rename in place. Without it, only a preview is printed. |
+
+**Safe and surgical.** Each file is parsed, so only real *posting*
+accounts are touched — `account` directives, auto-rule patterns,
+comments and descriptions are never rewritten, and the match is
+structural (no substring accidents). Only the account token on a matched
+line changes; the rest of every file stays byte-for-byte identical. A
+file that fails to parse is reported and skipped, never edited; writes
+are atomic (temp file + rename).
+
+**Preview by default.** `acc rename OLD NEW` prints every `file:line`
+that would change (`old → new`) and writes nothing; add `-e` to apply.
+
+```
+# Preview renumbering the 5-block to the 4-block across the journal.
+acc -f journal.ledger rename foo:5 foo:4
+# Apply it.
+acc -f journal.ledger rename foo:5 foo:4 -e
+```
+
 ### `acc navigate` (aliases `nav`, `ui`)
 
 ```
@@ -544,12 +580,12 @@ Key bindings:
 acc update [OPTIONS]
 ```
 
-Fetch exchange rates into `$ACC_PRICES_DIR`. Standalone — does not
+Fetch exchange rates into `$ACC_PRICES`. Standalone — does not
 read the journal.
 
 | Flag                  | Default | Description |
 |-----------------------|---------|-------------|
-| `--pair BASE/QUOTE`   | —       | Trading pair to update. Repeat `--pair` for multiple pairs. If omitted, every existing crypto file under `$ACC_PRICES_DIR/crypto/` is continued from the day after its last cached entry. |
+| `--pair BASE/QUOTE`   | —       | Trading pair to update. Repeat `--pair` for multiple pairs. If omitted, every existing crypto file under `$ACC_PRICES/crypto/` is continued from the day after its last cached entry. |
 | `--since DATE`        | —       | Overwrite data from `DATE` onwards (`YYYY-MM-DD`). Conflicts with `--date`. |
 | `--date DATE`         | —       | Fetch only this one date. Overrides `--since`. |
 | `--daily`             | on      | Daily cadence (default). |
@@ -570,8 +606,8 @@ Output locations:
 
 | Scope  | Path                                                        |
 |--------|-------------------------------------------------------------|
-| Crypto | `$ACC_PRICES_DIR/crypto/MEXC_{BASE}_{QUOTE}.ledger`         |
-| Fiat   | `$ACC_PRICES_DIR/fiat/{YYYY-MM-DD}.ledger`                  |
+| Crypto | `$ACC_PRICES/crypto/MEXC_{BASE}_{QUOTE}.ledger`         |
+| Fiat   | `$ACC_PRICES/fiat/{YYYY-MM-DD}.ledger`                  |
 
 ### `acc import`
 
@@ -643,7 +679,7 @@ stripped first, since acc's decimal parser rejects it.
 
 | Variable                    | Used by           | Description |
 |-----------------------------|-------------------|-------------|
-| `ACC_PRICES_DIR`            | main pipeline, `update` | Directory of rate files. When `-X` is set, the `.ledger` files under it are loaded before your own `-f` paths — selectively, keeping only the pairs the report's commodities can use. `acc update` writes here. |
+| `ACC_PRICES`            | main pipeline, `update` | Directory of rate files. When `-X` is set, the `.ledger` files under it are loaded before your own `-f` paths — selectively, keeping only the pairs the report's commodities can use. `acc update` writes here. |
 | `OPENEXCHANGERATES_API_KEY` | `update` (fiat)   | API key from [openexchangerates.org](https://openexchangerates.org). Required for fiat fetching. |
 
 ### Exit codes
@@ -1133,13 +1169,13 @@ If no path exists between a posting's commodity and the target,
 the posting stays in its original commodity. No error, just a
 remainder visible in the report.
 
-### `$ACC_PRICES_DIR`
+### `$ACC_PRICES`
 
 When `-X` is set, the `.ledger` files under the directory the env
 var points to supply the rates, loaded before your own `-f` paths:
 
 ```
-export ACC_PRICES_DIR=~/accounting/prices/
+export ACC_PRICES=~/accounting/prices/
 ```
 
 You can put both acc-fetched (`acc update`) and hand-written `P`
@@ -1508,7 +1544,7 @@ acc reg income:capital -X EUR    # per-disposal breakdown
 
 ## Rate updates (`acc update`)
 
-Fetches daily rates into `$ACC_PRICES_DIR` from two sources:
+Fetches daily rates into `$ACC_PRICES` from two sources:
 
 - **MEXC klines** for crypto (no API key required)
 - **openexchangerates.org** for fiat (needs
@@ -1518,9 +1554,9 @@ Fetches daily rates into `$ACC_PRICES_DIR` from two sources:
 
 Files are stored at:
 
-- Crypto: `$ACC_PRICES_DIR/crypto/MEXC_{BASE}_{QUOTE}.ledger`
+- Crypto: `$ACC_PRICES/crypto/MEXC_{BASE}_{QUOTE}.ledger`
   (one file per pair)
-- Fiat: `$ACC_PRICES_DIR/fiat/{YYYY-MM-DD}.ledger`
+- Fiat: `$ACC_PRICES/fiat/{YYYY-MM-DD}.ledger`
   (one file per day with all currencies)
 
 Rates are stored byte-for-byte as the API returned them — no
@@ -1535,7 +1571,7 @@ acc update --pair BTC/USDT --pair ETH/USDT
 acc update --pair BTC/USDT --since 2024-01-01
 acc update --pair BTC/USDT --date 2024-06-15
 
-# Refresh every existing crypto pair in $ACC_PRICES_DIR/crypto/
+# Refresh every existing crypto pair in $ACC_PRICES/crypto/
 acc update --crypto
 
 # Fiat
@@ -1885,7 +1921,7 @@ market rate.
 ### Does acc write to my journal files?
 
 No. Your journal is read-only from acc's perspective. The only
-thing that writes is `acc update`, and only to `$ACC_PRICES_DIR`.
+thing that writes is `acc update`, and only to `$ACC_PRICES`.
 
 ### Does acc make network calls?
 

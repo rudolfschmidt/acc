@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-const PRICES_DIR_ENV: &str = "ACC_PRICES_DIR";
+const PRICES_DIR_ENV: &str = "ACC_PRICES";
 
-/// Base directory for all price files. Read from `ACC_PRICES_DIR`.
+/// Base directory for all price files. Read from `ACC_PRICES`.
 /// Returns `Err` if the env var is not set.
 fn prices_dir() -> Result<PathBuf, Error> {
     std::env::var(PRICES_DIR_ENV)
@@ -26,7 +26,7 @@ fn crypto_dir() -> Result<PathBuf, Error> {
 }
 
 /// Absolute path for a given pair's crypto price file.
-/// `$ACC_PRICES_DIR/crypto/MEXC_{BASE}_{QUOTE}.ledger`
+/// `$ACC_PRICES/crypto/MEXC_{BASE}_{QUOTE}.ledger`
 pub fn path_for(base: &str, quote: &str) -> Result<PathBuf, Error> {
     let mut path = crypto_dir()?;
     path.push(format!("MEXC_{}_{}.ledger", base, quote));

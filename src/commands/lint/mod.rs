@@ -25,22 +25,24 @@ pub fn run(journal: &Journal, base: Option<&str>) {
     }
 
     println!(
-        "{}",
-        format!("Scanned {} transactions, {} postings.\n", tx_count, posting_count).dimmed()
+        "Scanned {} transactions, {} postings.\n",
+        tx_count.to_string().bold(),
+        posting_count.to_string().bold(),
     );
 
     println!("{}", "Checks:".bold());
+    let name_width = lints.iter().map(|l| l.name.len()).max().unwrap_or(0);
     for lint in &lints {
-        let status = if lint.issues.is_empty() {
-            "✓".green().to_string()
+        let mark = if lint.issues.is_empty() {
+            "✓".green()
         } else {
-            "✗".red().to_string()
+            "✗".red()
         };
         println!(
             "  {} {} — {}",
-            status,
-            lint.name.cyan(),
-            lint.description.dimmed()
+            mark,
+            format!("{:<name_width$}", lint.name).bold(),
+            lint.description,
         );
     }
 
@@ -51,14 +53,14 @@ pub fn run(journal: &Journal, base: Option<&str>) {
     }
 
     println!(
-        "\n{} issue(s) found:\n",
+        "\n{} issue(s) found:",
         total_issues.to_string().red().bold()
     );
     for lint in &lints {
         if lint.issues.is_empty() {
             continue;
         }
-        println!("{}", format!("{}:", lint.name).red().bold());
+        println!("\n{}", format!("{}:", lint.name).red().bold());
         for issue in &lint.issues {
             println!("  {}", issue);
         }
@@ -69,6 +71,26 @@ struct Lint {
     name: &'static str,
     description: &'static str,
     issues: Vec<String>,
+}
+
+/// Shorten a leading `$HOME` in a path to `~` for display. The linter's
+/// file:line locations are otherwise full absolute paths when it runs
+/// over the whole base (loaded via `-f $HOME/…`).
+fn shorten_home(path: &str) -> String {
+    if let Ok(home) = std::env::var("HOME")
+        && let Some(rest) = path.strip_prefix(&home)
+        && (rest.is_empty() || rest.starts_with('/'))
+    {
+        return format!("~{}", rest);
+    }
+    path.to_string()
+}
+
+/// A `file:line` issue location: the home-shortened path and the `:`
+/// separator in bright blue, only the line number in blue so it stands
+/// apart while the colon still reads as part of the path.
+fn loc(file: &str, line: usize) -> String {
+    format!("{}{}", format!("{}:", shorten_home(file)).bright_blue(), line.to_string().blue())
 }
 
 /// Multi-character commodity symbols must be all uppercase.
@@ -83,10 +105,10 @@ fn lint_commodity_casing(txs: &[Located<Transaction>]) -> Lint {
             let commodity = &amount.commodity;
             if commodity.len() > 1 && commodity.chars().any(|c| c.is_lowercase()) {
                 issues.push(format!(
-                    "{} commodity '{}' (account: {})",
-                    format!("{}:{}", tx.file, tx.line).cyan(),
+                    "{} expected '{}' but found '{}'",
+                    loc(&lp.file, lp.line),
+                    commodity.to_uppercase().yellow(),
                     commodity.yellow(),
-                    p.account.dimmed(),
                 ));
             }
         }
@@ -128,10 +150,10 @@ fn lint_leaf_accounts(txs: &[Located<Transaction>]) -> Lint {
         for lp in &tx.value.postings {
             if let Some(&sub) = parents.get(lp.value.account.as_str()) {
                 issues.push(format!(
-                    "{} '{}' has sub-account '{}'",
-                    format!("{}:{}", lp.file, lp.line).cyan(),
+                    "{} '{}' is not a leaf account — '{}' exists",
+                    loc(&lp.file, lp.line),
                     lp.value.account.yellow(),
-                    sub.dimmed(),
+                    sub.yellow(),
                 ));
             }
         }
@@ -154,8 +176,8 @@ fn lint_unresolved_role_refs(txs: &[Located<Transaction>]) -> Lint {
         for lp in &tx.value.postings {
             if lp.value.account.starts_with('$') {
                 issues.push(format!(
-                    "{} unresolved role reference '{}'",
-                    format!("{}:{}", lp.file, lp.line).cyan(),
+                    "{} '{}' resolves to no declared account",
+                    loc(&lp.file, lp.line),
                     lp.value.account.yellow(),
                 ));
             }
@@ -169,12 +191,14 @@ fn lint_unresolved_role_refs(txs: &[Located<Transaction>]) -> Lint {
 }
 
 /// With `--base`, every transaction whose file sits in a direct
-/// sub-directory of BASE should categorise into that directory: some
-/// posting's account must *end with* the directory name turned into
-/// account segments (`food-groceries` → `…:food:groceries`), so only the
-/// account's tail — the category — has to match, not its root. Files
-/// directly in BASE and under an `@…` directory are exempt. Catches e.g.
-/// an `expenses:travel` posting in a `food-groceries/` file.
+/// sub-directory of BASE should categorise into that directory: the
+/// *last* posting — the income/expense (P&L) leg — must have an account
+/// that *ends with* the directory name turned into account segments
+/// (`food-groceries` → `…:food:groceries`), so only the account's tail —
+/// the category — has to match, not its root. The earlier legs are the
+/// asset / transfer sides and are not checked. Files directly in BASE and
+/// under an `@…` directory are exempt. Catches e.g. a last posting of
+/// `expenses:travel` in a `food-groceries/` file.
 ///
 /// The category is found *relative to BASE*, so it works however the
 /// files were loaded — `-f .` from inside the folder, `-f food-groceries`
@@ -190,24 +214,27 @@ fn lint_dir_category(txs: &[Located<Transaction>], base: &str) -> Lint {
         };
         let folder = dir.replace('-', ":"); // food-groceries -> food:groceries
         let suffix = format!(":{folder}");
-        let matched = tx.value.postings.iter().any(|lp| {
+        // The last posting is the category account (the income/expense side);
+        // the earlier legs are assets / transfers. So the *last* posting must
+        // carry the folder category.
+        let last = tx.value.postings.last();
+        let matched = last.is_some_and(|lp| {
             lp.value.account == folder || lp.value.account.ends_with(suffix.as_str())
         });
         if !matched {
-            let accounts = tx
-                .value
-                .postings
-                .iter()
-                .map(|lp| lp.value.account.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            // Show the path as it was loaded (`-f .` → `./file`,
-            // `-f subdir` → `subdir/file`), not normalised against BASE.
+            // The last posting's account should end in the folder category;
+            // suggest the concrete fix keeping its root (`expenses:travel`
+            // → `expenses:food:groceries`).
+            let account = last.map_or("", |lp| lp.value.account.as_str());
+            let target = match account.split_once(':') {
+                Some((root, _)) => format!("{root}:{folder}"),
+                None => folder.clone(),
+            };
             issues.push(format!(
-                "{} expects category '{}' (tx: {})",
-                format!("{}:{}", tx.file, tx.line).cyan(),
-                folder.dimmed(),
-                accounts.dimmed(),
+                "{} expected '{}' but found '{}'",
+                loc(&tx.file, tx.line),
+                target.yellow(),
+                account.yellow(),
             ));
         }
     }
@@ -338,25 +365,35 @@ mod tests {
     #[test]
     fn dir_category_flags_mismatch_and_accepts_tail_match() {
         let base = "/ledger";
-        // Categorised as expenses:travel in a food-groceries/ file → no
-        // account ends with food:groceries → flagged.
+        // Last posting is expenses:travel in a food-groceries/ file → its
+        // account doesn't end with food:groceries → flagged.
         let bad = setup_file(
             "2024-01-01 * x\n\
-             \texpenses:travel   10 EUR\n\
-             \tassets:cash      -10 EUR\n",
+             \tassets:cash      -10 EUR\n\
+             \texpenses:travel   10 EUR\n",
             "/ledger/food-groceries/x.ledger",
         );
         assert_eq!(lint_dir_category(&bad, base).issues.len(), 1);
 
-        // The category account ends with the folder segments → accepted,
+        // The last posting ends with the folder segments → accepted,
         // regardless of its root.
         let good = setup_file(
+            "2024-01-01 * x\n\
+             \tassets:cash              -10 EUR\n\
+             \texpenses:food:groceries   10 EUR\n",
+            "/ledger/food-groceries/x.ledger",
+        );
+        assert!(lint_dir_category(&good, base).issues.is_empty());
+
+        // The category account is present but not last (asset is last) →
+        // flagged: only the last posting is checked.
+        let not_last = setup_file(
             "2024-01-01 * x\n\
              \texpenses:food:groceries   10 EUR\n\
              \tassets:cash              -10 EUR\n",
             "/ledger/food-groceries/x.ledger",
         );
-        assert!(lint_dir_category(&good, base).issues.is_empty());
+        assert_eq!(lint_dir_category(&not_last, base).issues.len(), 1);
 
         // An `@…` directory is exempt.
         let cash = setup_file(
