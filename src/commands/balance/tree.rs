@@ -12,7 +12,7 @@ use colored::Colorize;
 
 use super::common::{label_suffix, print_commodity_amount};
 use crate::commands::account::Account;
-use crate::commands::util::format_amount;
+use crate::commands::util::{format_amount, shows_nonzero};
 use crate::decimal::Decimal;
 use crate::loader::Journal;
 
@@ -47,11 +47,11 @@ pub(super) fn print(journal: &Journal, show_empty: bool) {
 
     println!("{}", "-".repeat(ctx.width));
     let total = root.total();
-    if total.values().all(|v| v.is_zero()) {
+    if total.iter().all(|(c, v)| !shows_nonzero(c, v, ctx.precisions)) {
         println!("{:>w$} ", 0, w = ctx.width);
     } else {
         for (commodity, value) in &total {
-            if !value.is_zero() {
+            if shows_nonzero(commodity, value, ctx.precisions) {
                 print_commodity_amount(commodity, *value, ctx.width, ctx.precisions);
                 println!();
             }
@@ -64,7 +64,10 @@ pub(super) fn print(journal: &Journal, show_empty: bool) {
 /// for this depth. `account.name` is only the last segment.
 fn print_account(ctx: &Ctx, indent: &str, path: &str, account: &Account) {
     let total = account.total();
-    let non_zero: Vec<_> = total.iter().filter(|(_, v)| !v.is_zero()).collect();
+    let non_zero: Vec<_> = total
+        .iter()
+        .filter(|(c, v)| shows_nonzero(c, v, ctx.precisions))
+        .collect();
 
     let child_indent = if non_zero.is_empty() {
         // Total nets to zero. We only descend into a node when `-E` is set

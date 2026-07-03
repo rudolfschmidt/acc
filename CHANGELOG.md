@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.16.1 — 2026-07-03
+
+### Fri 03 Jul 2026 - a status-icon convention, and output polish
+
+**Every action command now ends with a status icon** — green **✓** on
+success, yellow **!** on a warning / info (nothing matched, dry-run,
+skipped), red **✗** on error. Applied across `format` (final line),
+`diff` (✓ identical / ! differences), `import` (✓ Update / ! Preview /
+nothing-new), `update` (per-pair ✓ / ✗ / skip !, crypto and fiat),
+`rename` and the already-conforming `sweep`. Read-only reports (`bal`,
+`reg`, `print`, `accounts`, …) stay icon-free — they're queries, not
+actions.
+
+`lint`: its findings are *warnings*, so the failed-check mark, the
+issue count and the group headers move from red ✗ to yellow **!**; the
+per-issue tokens keep the red/green *diff* colours (red = the current
+value, green = the expected one), matching `rename`'s `old → new`.
+
+`rename`: the preview shortens `$HOME` to `~` (shared with `lint` now),
+shows virtual postings with their `[…]` / `(…)` brackets, and ends with
+`✓` (applied) / `!` (preview or nothing matched).
+
+**`bal`: near-zero balances render as `0`.** A sub-cent residual that
+rounds to zero at the display precision (typically an `-X` conversion
+leftover) used to print as `€0.00` while an exact zero printed as a bare
+`0`. Both now render as `0`: the zero filter uses the display-rounded
+test (`shows_nonzero`) instead of the exact `is_zero`, so such residuals
+are treated as zero everywhere — hidden without `-E`, a bare `0` with it.
+
 ## 0.16.0 — 2026-07-02
 
 ### Thu 02 Jul 2026 - `acc rename`, `ACC_PRICES`, and a lint output overhaul

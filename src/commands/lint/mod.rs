@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 use colored::Colorize;
 
+use super::util::shorten_home;
 use crate::loader::Journal;
 use crate::parser::located::Located;
 use crate::parser::transaction::Transaction;
@@ -36,7 +37,7 @@ pub fn run(journal: &Journal, base: Option<&str>) {
         let mark = if lint.issues.is_empty() {
             "✓".green()
         } else {
-            "✗".red()
+            "!".yellow()
         };
         println!(
             "  {} {} — {}",
@@ -54,13 +55,13 @@ pub fn run(journal: &Journal, base: Option<&str>) {
 
     println!(
         "\n{} issue(s) found:",
-        total_issues.to_string().red().bold()
+        total_issues.to_string().yellow().bold()
     );
     for lint in &lints {
         if lint.issues.is_empty() {
             continue;
         }
-        println!("\n{}", format!("{}:", lint.name).red().bold());
+        println!("\n{}", format!("{}:", lint.name).yellow().bold());
         for issue in &lint.issues {
             println!("  {}", issue);
         }
@@ -71,19 +72,6 @@ struct Lint {
     name: &'static str,
     description: &'static str,
     issues: Vec<String>,
-}
-
-/// Shorten a leading `$HOME` in a path to `~` for display. The linter's
-/// file:line locations are otherwise full absolute paths when it runs
-/// over the whole base (loaded via `-f $HOME/…`).
-fn shorten_home(path: &str) -> String {
-    if let Ok(home) = std::env::var("HOME")
-        && let Some(rest) = path.strip_prefix(&home)
-        && (rest.is_empty() || rest.starts_with('/'))
-    {
-        return format!("~{}", rest);
-    }
-    path.to_string()
 }
 
 /// A `file:line` issue location: the home-shortened path and the `:`
@@ -107,8 +95,8 @@ fn lint_commodity_casing(txs: &[Located<Transaction>]) -> Lint {
                 issues.push(format!(
                     "{} expected '{}' but found '{}'",
                     loc(&lp.file, lp.line),
-                    commodity.to_uppercase().yellow(),
-                    commodity.yellow(),
+                    commodity.to_uppercase().green(),
+                    commodity.red(),
                 ));
             }
         }
@@ -152,8 +140,8 @@ fn lint_leaf_accounts(txs: &[Located<Transaction>]) -> Lint {
                 issues.push(format!(
                     "{} '{}' is not a leaf account — '{}' exists",
                     loc(&lp.file, lp.line),
-                    lp.value.account.yellow(),
-                    sub.yellow(),
+                    lp.value.account.red(),
+                    sub.green(),
                 ));
             }
         }
@@ -178,7 +166,7 @@ fn lint_unresolved_role_refs(txs: &[Located<Transaction>]) -> Lint {
                 issues.push(format!(
                     "{} '{}' resolves to no declared account",
                     loc(&lp.file, lp.line),
-                    lp.value.account.yellow(),
+                    lp.value.account.red(),
                 ));
             }
         }
@@ -233,8 +221,8 @@ fn lint_dir_category(txs: &[Located<Transaction>], base: &str) -> Lint {
             issues.push(format!(
                 "{} expected '{}' but found '{}'",
                 loc(&tx.file, tx.line),
-                target.yellow(),
-                account.yellow(),
+                target.green(),
+                account.red(),
             ));
         }
     }

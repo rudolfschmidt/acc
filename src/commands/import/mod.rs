@@ -16,6 +16,8 @@ mod render;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use colored::Colorize;
+
 use crate::error::Error;
 
 pub fn run(csv_path: &str, conf_path: &str, write: bool) -> Result<(), Error> {
@@ -54,7 +56,8 @@ pub fn run(csv_path: &str, conf_path: &str, write: bool) -> Result<(), Error> {
 
     if new_blocks.is_empty() {
         println!(
-            "import: {} rows read, all already present — nothing new.",
+            "{} import: {} rows read, all already present — nothing new.",
+            "!".yellow(),
             rows.len()
         );
         return Ok(());

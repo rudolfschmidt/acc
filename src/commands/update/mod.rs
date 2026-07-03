@@ -4,6 +4,8 @@ mod fetch;
 mod fiat;
 mod file;
 
+use colored::Colorize;
+
 use crate::date::{date_to_ms, day_after};
 use crate::error::Error;
 
@@ -67,7 +69,8 @@ fn run_crypto(pairs: &[String], since: Option<&str>, date: Option<&str>) -> Resu
         let discovered = file::discover_crypto_pairs()?;
         if discovered.is_empty() {
             eprintln!(
-                "crypto: no --pair given and no existing files in $ACC_PRICES/crypto/"
+                "{} crypto: no --pair given and no existing files in $ACC_PRICES/crypto/",
+                "!".yellow()
             );
             return Ok(());
         }
@@ -80,7 +83,7 @@ fn run_crypto(pairs: &[String], since: Option<&str>, date: Option<&str>) -> Resu
     for spec in pairs {
         match parse_pair(spec) {
             Ok(pair) => process_pair(&pair, since, date),
-            Err(e) => eprintln!("skip '{}': {}", spec, e),
+            Err(e) => eprintln!("{} skip '{}': {}", "!".yellow(), spec, e),
         }
     }
     Ok(())
@@ -90,7 +93,7 @@ fn process_pair(pair: &Pair, since: Option<&str>, date: Option<&str>) {
     let path = match file::path_for(&pair.base, &pair.quote) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("{}: {}", pair.display(), e);
+            eprintln!("{} {}: {}", "✗".red(), pair.display(), e);
             return;
         }
     };
@@ -98,7 +101,7 @@ fn process_pair(pair: &Pair, since: Option<&str>, date: Option<&str>) {
     let mut existing = match file::read_existing(&path) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("{}: read error: {}", pair.display(), e);
+            eprintln!("{} {}: read error: {}", "✗".red(), pair.display(), e);
             return;
         }
     };
@@ -115,13 +118,14 @@ fn process_pair(pair: &Pair, since: Option<&str>, date: Option<&str>) {
         match day_after(last_date) {
             Ok(d) => (d, None),
             Err(e) => {
-                eprintln!("{}: invalid date in cache: {}", pair.display(), e);
+                eprintln!("{} {}: invalid date in cache: {}", "✗".red(), pair.display(), e);
                 return;
             }
         }
     } else {
         eprintln!(
-            "{}: no existing file — provide --since DATE or --date DATE",
+            "{} {}: no existing file — provide --since DATE or --date DATE",
+            "!".yellow(),
             pair.display()
         );
         return;
@@ -130,7 +134,7 @@ fn process_pair(pair: &Pair, since: Option<&str>, date: Option<&str>) {
     let start_ms = match date_to_ms(&start_date) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("{}: {}", pair.display(), e);
+            eprintln!("{} {}: {}", "✗".red(), pair.display(), e);
             return;
         }
     };
@@ -138,11 +142,11 @@ fn process_pair(pair: &Pair, since: Option<&str>, date: Option<&str>) {
     let fetched_raw = match mexc_klines(&pair.base, &pair.quote, start_ms) {
         FetchResult::Ok(v) => v,
         FetchResult::NotListed => {
-            eprintln!("{}: not listed on MEXC, skipping", pair.display());
+            eprintln!("{} {}: not listed on MEXC, skipping", "!".yellow(), pair.display());
             return;
         }
         FetchResult::OtherError(msg) => {
-            eprintln!("{}: fetch error: {}", pair.display(), msg);
+            eprintln!("{} {}: fetch error: {}", "✗".red(), pair.display(), msg);
             return;
         }
     };
@@ -160,12 +164,13 @@ fn process_pair(pair: &Pair, since: Option<&str>, date: Option<&str>) {
     let merged = file::merge_and_sort(existing, fetched);
 
     if let Err(e) = file::write_sorted(&path, &pair.base, &pair.quote, &merged) {
-        eprintln!("{}: write error: {}", pair.display(), e);
+        eprintln!("{} {}: write error: {}", "✗".red(), pair.display(), e);
         return;
     }
 
     println!(
-        "{}: {} lines total ({} fetched)",
+        "{} {}: {} lines total ({} fetched)",
+        "✓".green(),
         pair.display(),
         merged.len(),
         new_count

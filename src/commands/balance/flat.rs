@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use colored::Colorize;
 
 use super::common::{group_postings_by_account, label_suffix, print_commodity_amount};
-use crate::commands::util::format_amount;
+use crate::commands::util::{format_amount, shows_nonzero};
 use crate::decimal::Decimal;
 use crate::loader::Journal;
 
@@ -45,7 +45,10 @@ pub(super) fn print(journal: &Journal, show_empty: bool) {
     // Per-account block: one line per commodity with a non-zero sum,
     // account name printed after the last commodity line.
     for (account, amounts) in &postings {
-        let non_zero: Vec<_> = amounts.iter().filter(|(_, v)| !v.is_zero()).collect();
+        let non_zero: Vec<_> = amounts
+            .iter()
+            .filter(|(c, v)| shows_nonzero(c, v, precisions))
+            .collect();
         if non_zero.is_empty() {
             // Account nets to zero. Render a `0` line + name only under
             // `-E`; otherwise skip it.
@@ -66,11 +69,11 @@ pub(super) fn print(journal: &Journal, show_empty: bool) {
 
     // Separator + grand total.
     println!("{}", "-".repeat(width));
-    if total.values().all(|v| v.is_zero()) {
+    if total.iter().all(|(c, v)| !shows_nonzero(c, v, precisions)) {
         println!("{:>w$} ", 0, w = width);
     } else {
         for (commodity, amount) in &total {
-            if !amount.is_zero() {
+            if shows_nonzero(commodity, amount, precisions) {
                 print_commodity_amount(commodity, *amount, width, precisions);
                 println!();
             }
