@@ -60,12 +60,14 @@ pub fn run(snapshot: Option<&str>, paths: &[String]) -> Result<(), Error> {
         }
     }
 
+    let differs = files_with_diffs > 0 || any_missing;
+    let icon = if differs { "!".yellow() } else { "✓".green() };
     println!(
-        "{} files compared, {} with differences",
-        files_compared, files_with_diffs
+        "{} {} files compared, {} with differences",
+        icon, files_compared, files_with_diffs
     );
 
-    if files_with_diffs > 0 || any_missing {
+    if differs {
         std::process::exit(1);
     }
     Ok(())

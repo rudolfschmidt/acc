@@ -81,7 +81,7 @@ pub fn run(paths: &[String], sort: bool, infer: bool, fill: bool) -> Result<(), 
     if total > 0 {
         println!();
     }
-    println!("{} {} formatted", total, label);
+    println!("{} {} {} formatted", "✓".green(), total, label);
     Ok(())
 }
 

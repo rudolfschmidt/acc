@@ -39,14 +39,14 @@ pub fn diff_preview(existing: &str, added: &str, count: usize, file: &Path, skip
     let new_text = format!("\n{}", added.trim_end());
     let new_lines: Vec<&str> = new_text.lines().collect();
 
-    // Header tells the mode apart: a green ● "Update" when it was written,
-    // a hollow ○ "Preview … dry-run" when nothing has been touched.
+    // Header tells the mode apart: a green ✓ "Update" when it was written,
+    // a yellow ! "Preview … dry-run" when nothing has been touched.
     let n = count.to_string().bold();
     if written {
-        println!("{} {}", "●".green(), format!("Update({})", display_path(file)).bold());
+        println!("{} {}", "✓".green(), format!("Update({})", display_path(file)).bold());
         println!("  {} added {} transactions · {} already present", "⎿".dimmed(), n, skipped);
     } else {
-        println!("{} {}", "○".dimmed(), format!("Preview({})", display_path(file)).bold());
+        println!("{} {}", "!".yellow(), format!("Preview({})", display_path(file)).bold());
         println!(
             "  {} would add {} transactions · {} already present · add {} to append",
             "⎿".dimmed(),

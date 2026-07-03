@@ -20,6 +20,19 @@ pub(crate) fn paint_label(text: &str) -> String {
     text.bright_blue().to_string()
 }
 
+/// Shorten a leading `$HOME` in a path to `~` for display, so commands
+/// that print `file:line` over the whole base (`lint`, `rename`) don't
+/// dump full absolute paths.
+pub(crate) fn shorten_home(path: &str) -> String {
+    if let Ok(home) = std::env::var("HOME")
+        && let Some(rest) = path.strip_prefix(&home)
+        && (rest.is_empty() || rest.starts_with('/'))
+    {
+        return format!("~{}", rest);
+    }
+    path.to_string()
+}
+
 /// Account column content, matching ledger's print/reg output (verified
 /// against ledger 3.4.1): a real posting prints its bare `account`, a
 /// balanced-virtual one `[account]`, a paren-virtual one `(account)`.

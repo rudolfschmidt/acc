@@ -1,3 +1,5 @@
+use colored::Colorize;
+
 use crate::error::Error;
 
 use super::env::load_api_key;
@@ -23,7 +25,7 @@ pub fn run(
 
     if let Some(d) = date {
         if skip && file::fiat_path_for(d)?.exists() {
-            println!("fiat {}: exists, skipping", d);
+            println!("{} fiat {}: exists, skipping", "!".yellow(), d);
             return Ok(());
         }
         return fetch_and_write(&app_id, d);
@@ -43,7 +45,7 @@ pub fn run(
     };
     let today = crate::date::ms_to_date(crate::date::current_ms());
     if start.as_str() > today.as_str() {
-        println!("fiat: already up to date ({})", today);
+        println!("{} fiat: already up to date ({})", "✓".green(), today);
         return Ok(());
     }
 
@@ -65,9 +67,9 @@ pub fn run(
         cursor = advance(&cursor, cadence)?;
     }
     if skip {
-        println!("fiat: {} written, {} skipped (existing)", written, skipped);
+        println!("{} fiat: {} written, {} skipped (existing)", "✓".green(), written, skipped);
     } else {
-        println!("fiat: {} entries written", written);
+        println!("{} fiat: {} entries written", "✓".green(), written);
     }
     Ok(())
 }
@@ -85,11 +87,11 @@ fn fetch_and_write(app_id: &str, date: &str) -> Result<(), Error> {
         Ok(rates) => {
             let path = file::fiat_path_for(date)?;
             write_day(&path, date, &rates)?;
-            println!("fiat {}: {} rates", date, rates.len());
+            println!("{} fiat {}: {} rates", "✓".green(), date, rates.len());
             Ok(())
         }
         Err(e) => {
-            eprintln!("fiat {}: {}", date, e);
+            eprintln!("{} fiat {}: {}", "✗".red(), date, e);
             Err(e)
         }
     }

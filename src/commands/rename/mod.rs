@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use colored::Colorize;
 
+use super::util::{render_account, shorten_home};
 use crate::Error;
 use crate::parser;
 use crate::parser::entry::Entry;
@@ -75,8 +76,9 @@ pub fn run(paths: &[PathBuf], old: &str, new: &str, execute: bool) -> Result<(),
             write_atomic(path, &rewritten)?;
         }
 
+        let shown = shorten_home(&path.to_string_lossy());
         for h in &hits {
-            println!("{}:{}  {} → {}", path.display(), h.line, h.old.red(), h.new.green());
+            println!("{}:{} {} → {}", shown, h.line, h.old.red(), h.new.green());
         }
         postings += hits.len();
         changed_files += 1;
@@ -93,8 +95,17 @@ fn collect_hits(entries: &[crate::parser::located::Located<Entry>], old: &str, n
     for e in entries {
         let Entry::Transaction(tx) = &e.value else { continue };
         for lp in &tx.postings {
-            if let Some(renamed) = rename_account(&lp.value.account, old, new) {
-                hits.push(Hit { line: lp.line, old: lp.value.account.clone(), new: renamed });
+            let p = &lp.value;
+            if let Some(renamed) = rename_account(&p.account, old, new) {
+                // Show — and rewrite — the account with its virtual brackets
+                // (`[a:5]` / `(a:5)`), so the preview makes clear which
+                // postings are virtual and the brackets survive on write.
+                let new = match (p.is_virtual, p.balanced) {
+                    (true, true) => format!("[{renamed}]"),
+                    (true, false) => format!("({renamed})"),
+                    (false, _) => renamed,
+                };
+                hits.push(Hit { line: lp.line, old: render_account(p), new });
             }
         }
     }
@@ -138,17 +149,20 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), Error> {
 
 fn print_summary(postings: usize, files: usize, execute: bool) {
     if postings == 0 {
-        println!("No matching accounts found.");
+        println!("{} No matching accounts found.", "!".yellow());
         return;
     }
     let p = if postings == 1 { "posting" } else { "postings" };
     let f = if files == 1 { "file" } else { "files" };
     println!();
     if execute {
-        println!("Renamed {} {} in {} {}.", postings, p, files, f);
+        println!("{} Renamed {} {} in {} {}.", "✓".green(), postings, p, files, f);
     } else {
+        // Preview only — nothing written yet, so this is a warning/info, not
+        // a success.
         println!(
-            "{} {} in {} {} would be renamed. Re-run with {} to apply.",
+            "{} {} {} in {} {} would be renamed. Re-run with {} to apply.",
+            "!".yellow(),
             postings,
             p,
             files,
