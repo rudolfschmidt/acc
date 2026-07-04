@@ -115,10 +115,21 @@ Minimum Rust: **1.85** (edition 2024). Runs anywhere Rust builds
 **OpenSSL** (HTTPS for `acc update` goes through native-tls); macOS and
 Windows use the OS-native TLS stack, so no extra dependency there.
 
-**What gets written where:** acc never writes to your journal. The
-only thing that writes to disk is `acc update`, which writes rate
-files under `$ACC_PRICES`. Network I/O happens only in `acc
-update` (to MEXC and openexchangerates.org).
+**What gets written where:** report commands never touch disk. Writing
+is always explicit and opt-in — `acc format` (in-place alignment),
+`acc rename -e` (account renames), `acc import -e` (append to a `@cash`
+file), and `acc update` (rate files under `$ACC_PRICES`). Network I/O
+happens only in `acc update` (to MEXC and openexchangerates.org).
+
+**Shell completion.** acc ships dynamic completion for subcommands and
+flags. Enable it for the current shell by sourcing the script the binary
+prints — for zsh, add to `~/.zshrc`:
+
+```
+source <(COMPLETE=zsh acc)
+```
+
+`bash` and `fish` work the same way with `COMPLETE=bash` / `COMPLETE=fish`.
 
 ---
 
@@ -370,22 +381,25 @@ List every transaction code observed.
 ### `acc lint`
 
 ```
-acc [GLOBAL OPTIONS] lint [--base DIR]
+acc [GLOBAL OPTIONS] lint [--base DIR] [--categories PREFIX...]
 ```
 
 Lint the journal: run all built-in consistency checks and report any
-issues as warnings (never a hard failure).
+issues as warnings (never a hard failure). Each check reports `✓` (clean),
+`✗` (issues found), or `!` (skipped — not runnable without more config).
 
-| Flag        | Default | Description |
-|-------------|---------|-------------|
-| `--base DIR`| off     | Also run the `dir-category` check: every transaction whose file lives in a direct sub-directory of `DIR` must have a posting whose account *ends with* that directory's name turned into segments (`food-groceries` → `…:food:groceries`) — so only the account's tail (the category) has to match, prefix-agnostic. `@…` directories and files directly in `DIR` are exempt. The sub-directory is found relative to `DIR`, so it works however the files were loaded (`-f .` from inside the folder, `-f subdir`, or the whole tree). |
+| Flag                     | Default | Description |
+|--------------------------|---------|-------------|
+| `--base DIR`             | off     | Run the `dir-category` check: every transaction whose file lives in a direct sub-directory of `DIR` must categorise into that directory. `@…` directories and files directly in `DIR` are exempt. The sub-directory is found relative to `DIR`, so it works however the files were loaded (`-f .` from inside the folder, `-f subdir`, or the whole tree). |
+| `--categories PREFIX...` | off     | Account prefixes that count as *categories* (income / expense), e.g. `--categories '^in:' '^ex:'` (a leading `^` is optional). `dir-category` then only checks postings whose account starts with one of these — that category account must *end with* the folder's name as segments (`food-groceries` → `…:food:groceries`). A transaction with no category posting (a pure transfer) is skipped. Without `--categories`, `dir-category` can't tell a category account from a transfer, so it is skipped with a `!` warning. |
 
 Checks: `commodity-casing` (multi-char commodity symbols must be
 all-uppercase; single-char symbols like `$` `€` `£` are exempt),
 `leaf-accounts` (postings must target leaf accounts, never a parent that
 has sub-accounts), `role-references` (every `$role:slot` reference must
-resolve to a declared account), and — only with `--base` — `dir-category`
-(a file's category must match its folder).
+resolve to a declared account), and — with `--base` **and**
+`--categories` — `dir-category` (a category account's tail must match its
+folder).
 
 ### `acc format`
 

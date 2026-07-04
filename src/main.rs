@@ -139,7 +139,7 @@ struct ReportArgs {
 #[derive(Subcommand)]
 enum Command {
     /// Show account balances
-    #[command(visible_alias = "bal")]
+    #[command(alias = "bal")]
     Balance {
         #[command(flatten)]
         filter: ReportArgs,
@@ -156,7 +156,7 @@ enum Command {
         pattern: Vec<String>,
     },
     /// Show transaction register
-    #[command(visible_alias = "reg")]
+    #[command(alias = "reg")]
     Register {
         #[command(flatten)]
         filter: ReportArgs,
@@ -224,6 +224,14 @@ enum Command {
         /// are exempt.
         #[arg(long = "base", value_name = "DIR")]
         base: Option<String>,
+        /// Account prefixes that count as categories (income / expense),
+        /// e.g. `--categories '^in:' '^ex:'`. The dir-category check then
+        /// only evaluates postings whose account starts with one of these
+        /// (a leading `^` is optional); a transaction with none — a pure
+        /// transfer — is skipped. Without it, the check falls back to the
+        /// last posting.
+        #[arg(long = "categories", value_name = "PREFIX", num_args = 1..)]
+        categories: Vec<String>,
     },
     /// Reformat a ledger journal: account column left-aligned,
     /// amount column right-aligned.
@@ -435,6 +443,12 @@ impl Command {
 }
 
 fn main() {
+    // Shell-completion hook: when the shell calls back (COMPLETE env set),
+    // emit candidates and exit. Enabled once per shell with:
+    //   source <(COMPLETE=zsh acc)
+    use clap::CommandFactory;
+    clap_complete::env::CompleteEnv::with_factory(Args::command).complete();
+
     if let Err(e) = start() {
         eprintln!("{}", e);
         std::process::exit(1);
@@ -955,7 +969,9 @@ fn start() -> Result<(), acc::Error> {
                 eprintln!("navigate: {}", e);
             }
         }
-        Command::Lint { base } => acc::commands::lint::run(&journal, base.as_deref()),
+        Command::Lint { base, categories } => {
+            acc::commands::lint::run(&journal, base.as_deref(), &categories)
+        }
         _ => eprintln!("internal error: unexpected command reached match arm"),
     }
     Ok(())

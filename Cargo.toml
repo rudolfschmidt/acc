@@ -1,6 +1,6 @@
 [package]
 name = "acc"
-version = "0.16.1"
+version = "0.16.2"
 authors = ["Rudolf Schmidt <info@rudolfschmidt.com>"]
 edition = "2024"
 license = "GPL-3.0-or-later"
@@ -13,6 +13,7 @@ include = [ "src/**/*.rs", "README.md", "CHANGELOG.md", "LICENSE", "Cargo.toml",
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+clap_complete = { version = "4", features = ["unstable-dynamic"] }
 colored = "2"
 crossterm = "0.28"
 native-tls = "0.2"
