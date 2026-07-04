@@ -10,7 +10,7 @@ use crate::loader::Journal;
 use crate::parser::located::Located;
 use crate::parser::transaction::Transaction;
 
-pub fn run(journal: &Journal, base: Option<&str>) {
+pub fn run(journal: &Journal, base: Option<&str>, categories: &[String]) {
     let txs = &journal.transactions;
     let tx_count = txs.len();
     let posting_count: usize = txs.iter().map(|tx| tx.value.postings.len()).sum();
@@ -22,7 +22,7 @@ pub fn run(journal: &Journal, base: Option<&str>) {
     ];
     // Opt-in: only when a ledger root is given (via `--base`).
     if let Some(base) = base {
-        lints.push(lint_dir_category(txs, base));
+        lints.push(lint_dir_category(txs, base, categories));
     }
 
     println!(
@@ -34,17 +34,23 @@ pub fn run(journal: &Journal, base: Option<&str>) {
     println!("{}", "Checks:".bold());
     let name_width = lints.iter().map(|l| l.name.len()).max().unwrap_or(0);
     for lint in &lints {
-        let mark = if lint.issues.is_empty() {
+        let mark = if lint.skipped.is_some() {
+            "!".yellow()
+        } else if lint.issues.is_empty() {
             "✓".green()
         } else {
-            "!".yellow()
+            "✗".red()
         };
-        println!(
+        let head = format!(
             "  {} {} — {}",
             mark,
             format!("{:<name_width$}", lint.name).bold(),
             lint.description,
         );
+        match lint.skipped {
+            Some(reason) => println!("{} {}", head, format!("({reason})").yellow()),
+            None => println!("{}", head),
+        }
     }
 
     let total_issues: usize = lints.iter().map(|c| c.issues.len()).sum();
@@ -55,13 +61,13 @@ pub fn run(journal: &Journal, base: Option<&str>) {
 
     println!(
         "\n{} issue(s) found:",
-        total_issues.to_string().yellow().bold()
+        total_issues.to_string().red().bold()
     );
     for lint in &lints {
         if lint.issues.is_empty() {
             continue;
         }
-        println!("\n{}", format!("{}:", lint.name).yellow().bold());
+        println!("\n{}", format!("{}:", lint.name).red().bold());
         for issue in &lint.issues {
             println!("  {}", issue);
         }
@@ -72,6 +78,9 @@ struct Lint {
     name: &'static str,
     description: &'static str,
     issues: Vec<String>,
+    /// `Some(reason)` when the check could not run (missing config) — shown
+    /// as a `!` warning rather than a `✓`/`✗`. Only `dir-category` uses it.
+    skipped: Option<&'static str>,
 }
 
 /// A `file:line` issue location: the home-shortened path and the `:`
@@ -105,6 +114,7 @@ fn lint_commodity_casing(txs: &[Located<Transaction>]) -> Lint {
         name: "commodity-casing",
         description: "multi-char commodity symbols must be all-uppercase",
         issues,
+        skipped: None,
     }
 }
 
@@ -151,6 +161,7 @@ fn lint_leaf_accounts(txs: &[Located<Transaction>]) -> Lint {
         name: "leaf-accounts",
         description: "postings must target leaf accounts (no sub-accounts)",
         issues,
+        skipped: None,
     }
 }
 
@@ -175,24 +186,43 @@ fn lint_unresolved_role_refs(txs: &[Located<Transaction>]) -> Lint {
         name: "role-references",
         description: "every `$role:slot` reference must resolve to a declared account",
         issues,
+        skipped: None,
     }
 }
 
-/// With `--base`, every transaction whose file sits in a direct
-/// sub-directory of BASE should categorise into that directory: the
-/// *last* posting — the income/expense (P&L) leg — must have an account
-/// that *ends with* the directory name turned into account segments
-/// (`food-groceries` → `…:food:groceries`), so only the account's tail —
-/// the category — has to match, not its root. The earlier legs are the
-/// asset / transfer sides and are not checked. Files directly in BASE and
-/// under an `@…` directory are exempt. Catches e.g. a last posting of
-/// `expenses:travel` in a `food-groceries/` file.
+/// With `--base` and `--categories`, every transaction whose file sits in
+/// a direct sub-directory of BASE should categorise into that directory:
+/// one of its *category* postings — an account starting with a
+/// `--categories` prefix (income / expense) — must *end with* the directory
+/// name turned into account segments (`food-groceries` → `…:food:groceries`),
+/// so only the account's tail — the category — has to match, not its root.
+/// Postings on other accounts (asset / transfer legs) are ignored, and a
+/// transaction with *no* category posting (a pure transfer) is skipped.
+/// Files directly in BASE and under an `@…` directory are exempt.
 ///
-/// The category is found *relative to BASE*, so it works however the
-/// files were loaded — `-f .` from inside the folder, `-f food-groceries`
-/// from the root, or the whole tree — by resolving each file against the
-/// current directory first.
-fn lint_dir_category(txs: &[Located<Transaction>], base: &str) -> Lint {
+/// Without `--categories` the check can't tell a category account from a
+/// transfer, so it is skipped with a warning.
+///
+/// The category is found *relative to BASE*, so it works however the files
+/// were loaded — `-f .` from inside the folder, `-f food-groceries` from the
+/// root, or the whole tree.
+fn lint_dir_category(txs: &[Located<Transaction>], base: &str, categories: &[String]) -> Lint {
+    let name = "dir-category";
+    let description = "postings must categorise into their source directory";
+    if categories.is_empty() {
+        return Lint {
+            name,
+            description,
+            issues: Vec::new(),
+            skipped: Some("needs --categories to tell category accounts from transfers"),
+        };
+    }
+    // A leading `^` is optional — the match is a plain prefix either way.
+    let prefixes: Vec<&str> = categories
+        .iter()
+        .map(|c| c.strip_prefix('^').unwrap_or(c))
+        .collect();
+
     let cwd = std::env::current_dir().unwrap_or_default();
     let base_abs = absolute(base, &cwd);
     let mut issues = Vec::new();
@@ -202,18 +232,25 @@ fn lint_dir_category(txs: &[Located<Transaction>], base: &str) -> Lint {
         };
         let folder = dir.replace('-', ":"); // food-groceries -> food:groceries
         let suffix = format!(":{folder}");
-        // The last posting is the category account (the income/expense side);
-        // the earlier legs are assets / transfers. So the *last* posting must
-        // carry the folder category.
-        let last = tx.value.postings.last();
-        let matched = last.is_some_and(|lp| {
-            lp.value.account == folder || lp.value.account.ends_with(suffix.as_str())
-        });
+        // Only category postings (income/expense) carry the folder category;
+        // a transaction with none is a pure transfer → skip it.
+        let category_accounts: Vec<&str> = tx
+            .value
+            .postings
+            .iter()
+            .map(|lp| lp.value.account.as_str())
+            .filter(|a| prefixes.iter().any(|p| a.starts_with(p)))
+            .collect();
+        if category_accounts.is_empty() {
+            continue;
+        }
+        let matched = category_accounts
+            .iter()
+            .any(|a| *a == folder || a.ends_with(suffix.as_str()));
         if !matched {
-            // The last posting's account should end in the folder category;
-            // suggest the concrete fix keeping its root (`expenses:travel`
-            // → `expenses:food:groceries`).
-            let account = last.map_or("", |lp| lp.value.account.as_str());
+            // Suggest the concrete fix, keeping the account's root
+            // (`expenses:travel` → `expenses:food:groceries`).
+            let account = category_accounts[0];
             let target = match account.split_once(':') {
                 Some((root, _)) => format!("{root}:{folder}"),
                 None => folder.clone(),
@@ -227,9 +264,10 @@ fn lint_dir_category(txs: &[Located<Transaction>], base: &str) -> Lint {
         }
     }
     Lint {
-        name: "dir-category",
-        description: "postings must categorise into their source directory",
+        name,
+        description,
         issues,
+        skipped: None,
     }
 }
 
@@ -353,44 +391,59 @@ mod tests {
     #[test]
     fn dir_category_flags_mismatch_and_accepts_tail_match() {
         let base = "/ledger";
-        // Last posting is expenses:travel in a food-groceries/ file → its
-        // account doesn't end with food:groceries → flagged.
+        let cats = ["expenses:".to_string()];
+
+        // A category (expenses:) posting that doesn't end with the folder
+        // segments → flagged, wherever it sits in the transaction.
         let bad = setup_file(
             "2024-01-01 * x\n\
              \tassets:cash      -10 EUR\n\
              \texpenses:travel   10 EUR\n",
             "/ledger/food-groceries/x.ledger",
         );
-        assert_eq!(lint_dir_category(&bad, base).issues.len(), 1);
+        assert_eq!(lint_dir_category(&bad, base, &cats).issues.len(), 1);
 
-        // The last posting ends with the folder segments → accepted,
-        // regardless of its root.
+        // Category account ends with the folder segments → accepted,
+        // regardless of its position or root.
         let good = setup_file(
-            "2024-01-01 * x\n\
-             \tassets:cash              -10 EUR\n\
-             \texpenses:food:groceries   10 EUR\n",
-            "/ledger/food-groceries/x.ledger",
-        );
-        assert!(lint_dir_category(&good, base).issues.is_empty());
-
-        // The category account is present but not last (asset is last) →
-        // flagged: only the last posting is checked.
-        let not_last = setup_file(
             "2024-01-01 * x\n\
              \texpenses:food:groceries   10 EUR\n\
              \tassets:cash              -10 EUR\n",
             "/ledger/food-groceries/x.ledger",
         );
-        assert_eq!(lint_dir_category(&not_last, base).issues.len(), 1);
+        assert!(lint_dir_category(&good, base, &cats).issues.is_empty());
+
+        // No category posting at all (pure transfer) → skipped, not flagged.
+        let transfer = setup_file(
+            "2024-01-01 * x\n\
+             \tassets:a   -10 EUR\n\
+             \tassets:b    10 EUR\n",
+            "/ledger/food-groceries/x.ledger",
+        );
+        assert!(lint_dir_category(&transfer, base, &cats).issues.is_empty());
 
         // An `@…` directory is exempt.
         let cash = setup_file(
             "2024-01-01 * x\n\
-             \texpenses:travel   10 EUR\n\
-             \tassets:cash      -10 EUR\n",
+             \tassets:cash      -10 EUR\n\
+             \texpenses:travel   10 EUR\n",
             "/ledger/@cash/x.ledger",
         );
-        assert!(lint_dir_category(&cash, base).issues.is_empty());
+        assert!(lint_dir_category(&cash, base, &cats).issues.is_empty());
+    }
+
+    #[test]
+    fn dir_category_skipped_without_categories() {
+        let base = "/ledger";
+        let tx = setup_file(
+            "2024-01-01 * x\n\
+             \tassets:cash      -10 EUR\n\
+             \texpenses:travel   10 EUR\n",
+            "/ledger/food-groceries/x.ledger",
+        );
+        let lint = lint_dir_category(&tx, base, &[]);
+        assert!(lint.issues.is_empty());
+        assert!(lint.skipped.is_some());
     }
 
     #[test]

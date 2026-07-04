@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.16.2 — 2026-07-04
+
+### Fri 04 Jul 2026 - shell completion, `lint --categories`, and lint-icon rethink
+
+**Dynamic shell completion.** acc now completes its subcommands and
+flags. Enable it once per shell by sourcing what the binary prints —
+`source <(COMPLETE=zsh acc)` (also `COMPLETE=bash` / `COMPLETE=fish`).
+Built on `clap_complete`'s dynamic engine, so completions track the CLI
+without a checked-in script.
+
+**`lint --categories PREFIX…`** fixes a false positive in `dir-category`.
+The check used to inspect the *last* posting as the category account, but
+that's wrong for a pure transfer (an `assets`/numeric account as the last
+leg was flagged as mis-categorised). Now you declare which prefixes are
+category accounts — income / expense — e.g. `--categories '^in:' '^ex:'`
+(leading `^` optional). The check then only looks at postings starting
+with one of those; a transaction with none (a transfer) is skipped. The
+category account must end with the folder's name as segments. Without
+`--categories` the check can't tell a category from a transfer, so it is
+skipped with a `!` warning rather than guessing.
+
+**Lint icons settled to ✓ / ✗ / !.** The 0.16.1 change that recoloured
+findings to a yellow `!` is reverted: a *failed* check is a red `✗`
+(there's no warning-vs-error split in a linter). The yellow `!` is now
+reserved for a check that *couldn't run* — currently only `dir-category`
+without `--categories`. So: `✓` clean, `✗` issues found, `!` skipped.
+
+**`bal` / `reg` are hidden aliases now.** They still work, but only the
+long `balance` / `register` show in `--help` and completion, keeping the
+command list uncluttered.
+
+Docs: the "acc never writes to your journal" note was stale — `format`,
+`rename -e` and `import -e` all write (explicitly). The README now lists
+exactly which commands touch disk.
+
 ## 0.16.1 — 2026-07-03
 
 ### Fri 03 Jul 2026 - a status-icon convention, and output polish
