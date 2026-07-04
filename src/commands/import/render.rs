@@ -39,23 +39,6 @@ pub fn diff_preview(existing: &str, added: &str, count: usize, file: &Path, skip
     let new_text = format!("\n{}", added.trim_end());
     let new_lines: Vec<&str> = new_text.lines().collect();
 
-    // Header tells the mode apart: a green ✓ "Update" when it was written,
-    // a yellow ! "Preview … dry-run" when nothing has been touched.
-    let n = count.to_string().bold();
-    if written {
-        println!("{} {}", "✓".green(), format!("Update({})", display_path(file)).bold());
-        println!("  {} added {} transactions · {} already present", "⎿".dimmed(), n, skipped);
-    } else {
-        println!("{} {}", "!".yellow(), format!("Preview({})", display_path(file)).bold());
-        println!(
-            "  {} would add {} transactions · {} already present · add {} to append",
-            "⎿".dimmed(),
-            n,
-            skipped,
-            "--execute".bold(),
-        );
-    }
-
     // Full-width green band: pad every addition out to the terminal width
     // so the highlight spans the whole line like the editor diff. A long
     // `; csv:` comment keeps its full (green) content and simply wraps.
@@ -88,6 +71,32 @@ pub fn diff_preview(existing: &str, added: &str, count: usize, file: &Path, skip
             "+".truecolor(80, 200, 80).on_truecolor(BAND.0, BAND.1, BAND.2),
             colorize_added(&line),
             " ".repeat(pad).on_truecolor(BAND.0, BAND.1, BAND.2),
+        );
+    }
+
+    // Standardised result line at the end, matching the other commands'
+    // ✓ / ! summaries.
+    println!();
+    let path = display_path(file);
+    let t = if count == 1 { "transaction" } else { "transactions" };
+    if written {
+        println!(
+            "{} Added {} {} to {} ({} already present).",
+            "✓".green(),
+            count,
+            t,
+            path,
+            skipped,
+        );
+    } else {
+        println!(
+            "{} {} {} would be added to {} ({} already present). Re-run with {} to apply.",
+            "!".yellow(),
+            count,
+            t,
+            path,
+            skipped,
+            "-e".bold(),
         );
     }
 }

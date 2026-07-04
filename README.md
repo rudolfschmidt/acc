@@ -530,22 +530,25 @@ acc -f journal.ledger sweep '^assets:clearing$' misc income expenses >> clearing
 acc [GLOBAL OPTIONS] rename <OLD> <NEW> [-e]
 ```
 
-Rename an account across the loaded `-f` files by **prefix**: every
-posting account that *starts with* `OLD` has that prefix rewritten to
-`NEW`. `OLD` need not be a whole segment, so `rename foo:5 foo:4`
-renumbers `foo:5`, `foo:50`, `foo:5:cash`, … in one go. The match is
-anchored to the start, so `bar:foo:5` is left alone.
+Rename an account across the loaded `-f` files. `OLD` is matched with the
+same anchors as the report filter: a bare pattern matches **anywhere**
+(`contains`), a leading `^` anchors it to the **start** of the account, a
+trailing `$` to the **end**, and `^…$` an exact account. The matched span
+is rewritten to `NEW` and the rest of the account name is preserved.
+
+So `rename foo:5 foo:4` (contains) renumbers every account containing
+`foo:5` — `foo:5`, `foo:50`, `bar:foo:5:cash`, … — in one go, while
+`rename ^foo:5 foo:4` only touches accounts that *start* with `foo:5`.
 
 | Argument           | Description |
 |--------------------|-------------|
-| `OLD`              | Account prefix to rename. |
-| `NEW`              | Replacement prefix. |
+| `OLD`              | Account pattern to rename — `^` anchors the start, `$` the end, otherwise it matches anywhere. |
+| `NEW`              | Replacement for the matched span. |
 | `-e`, `--execute`  | Apply the rename in place. Without it, only a preview is printed. |
 
 **Safe and surgical.** Each file is parsed, so only real *posting*
-accounts are touched — `account` directives, auto-rule patterns,
-comments and descriptions are never rewritten, and the match is
-structural (no substring accidents). Only the account token on a matched
+accounts are touched — `account` directives, auto-rule patterns, comments
+and descriptions are never rewritten. Only the account token on a matched
 line changes; the rest of every file stays byte-for-byte identical. A
 file that fails to parse is reported and skipped, never edited; writes
 are atomic (temp file + rename).
@@ -558,6 +561,8 @@ that would change (`old → new`) and writes nothing; add `-e` to apply.
 acc -f journal.ledger rename foo:5 foo:4
 # Apply it.
 acc -f journal.ledger rename foo:5 foo:4 -e
+# Only rewrite accounts that *start* with foo:5 (anchored).
+acc -f journal.ledger rename '^foo:5' foo:4
 ```
 
 ### `acc navigate` (aliases `nav`, `ui`)

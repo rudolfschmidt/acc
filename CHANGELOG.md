@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.17.0 — 2026-07-04
+
+### Sat 04 Jul 2026 - `rename` matches like the filter, and import preview polish
+
+**`rename` now uses the report filter's anchors.** It matched by prefix
+only — anchored at the account start — so renaming a segment that sits
+*mid-account* found nothing: `rename foo:5 …` never touched
+`bar:foo:5` even though `bal foo:5` lists it. That mismatch was the
+surprise ("why doesn't rename find what the filter finds?"). Now `OLD`
+reads the same way a filter pattern does: a bare pattern matches
+**anywhere** (`contains`), a leading `^` anchors the **start**, a
+trailing `$` the **end**, and `^…$` an exact account. The matched span is
+swapped for `NEW`, the rest of the name preserved.
+
+So `rename foo:5 foo:4` (contains) still renumbers `foo:5`, `foo:50`,
+`foo:5:cash`, …, *and* now reaches `bar:foo:5` under any parent; anchor
+with `^foo:5` when you want the old start-only behaviour. This is a
+behaviour change to the default match — hence the minor bump. The
+preview (dry-run default) remains the safety net before `-e`.
+
+**`import` preview ends with a standardised result line.** The dry-run
+led with a header and a `⎿` sub-line before the diff; now it prints the
+diff first and closes with the same `✓` / `!` summary shape as `rename`
+and the other action commands — `! N transactions would be added to
+<file> (M already present). Re-run with -e to apply.` (or `✓ Added …` on
+`-e`). No more `⎿`; the result sits where every other command puts it.
+
 ## 0.16.2 — 2026-07-04
 
 ### Fri 04 Jul 2026 - shell completion, `lint --categories`, and lint-icon rethink

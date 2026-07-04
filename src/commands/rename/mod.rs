@@ -1,20 +1,24 @@
 //! `rename` command — rename an account (and everything under it) across
-//! journal files by prefix.
+//! journal files.
 //!
 //! Preview by default: prints every posting whose account would change
 //! and writes nothing. `--execute` (`-e`) applies the change in place.
 //!
+//! OLD is matched with the same anchors as the report filter: a bare
+//! pattern matches anywhere (`contains`), a leading `^` anchors it to the
+//! start of the account and a trailing `$` to the end. So `rename foo:5
+//! foo:4` (contains) renames every account containing `foo:5` — `foo:5`,
+//! `foo:50`, `bar:foo:5:cash`, … — while `rename ^foo:5 foo:4` only
+//! touches accounts that *start* with `foo:5`. The matched span is
+//! swapped for NEW and the rest of the account name is preserved.
+//!
 //! The match is structural, not textual: each file is parsed so we know
 //! exactly which lines are postings and what each posting's account is.
-//! An account matches when it *starts with* OLD, so `rename foo:5 foo:4`
-//! renames `foo:5`, `foo:50`, `foo:5:cash`, … — OLD need not be a whole
-//! segment, which lets one command renumber a whole block at once. The
-//! match is anchored to the start, so `bar:foo:5` is left alone. Only the
-//! account token on a matched *posting* line is rewritten — `account`
-//! directives, auto-rule patterns, comments and descriptions are left
-//! untouched — and the rest of the file stays byte-for-byte identical. A
-//! file that fails to parse is reported on stderr and skipped, never
-//! edited.
+//! Only the account token on a matched *posting* line is rewritten —
+//! `account` directives, auto-rule patterns, comments and descriptions
+//! are left untouched — and the rest of the file stays byte-for-byte
+//! identical. A file that fails to parse is reported on stderr and
+//! skipped, never edited.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -112,13 +116,26 @@ fn collect_hits(entries: &[crate::parser::located::Located<Entry>], old: &str, n
     hits
 }
 
-/// The renamed account when `account` starts with OLD, else `None`. OLD
-/// is a plain prefix (need not be a whole segment), so `foo:5` matches
-/// `foo:5`, `foo:50` and `foo:5:cash`; only that OLD prefix is swapped for
-/// NEW and the tail is preserved. Anchored at the start, so an OLD buried
-/// mid-account (`bar:foo:5`) does not match.
+/// The renamed account when `account` matches OLD, else `None`. OLD uses
+/// the report filter's anchors: a leading `^` matches the start, a
+/// trailing `$` the end, both together an exact account, and a bare
+/// pattern matches anywhere. The matched span is replaced with NEW and
+/// the rest is preserved — so `^foo:5` rewrites only a leading `foo:5`,
+/// `cash$` only a trailing `cash`, and a bare `foo:5` every occurrence.
 fn rename_account(account: &str, old: &str, new: &str) -> Option<String> {
-    account.strip_prefix(old).map(|rest| format!("{new}{rest}"))
+    let anchored_start = old.starts_with('^');
+    let anchored_end = old.ends_with('$');
+    // `^` and `$` are ASCII, so slicing them off keeps the core valid UTF-8.
+    let core = &old[anchored_start as usize..old.len() - anchored_end as usize];
+    if core.is_empty() {
+        return None;
+    }
+    match (anchored_start, anchored_end) {
+        (true, true) => (account == core).then(|| new.to_string()),
+        (true, false) => account.strip_prefix(core).map(|rest| format!("{new}{rest}")),
+        (false, true) => account.strip_suffix(core).map(|head| format!("{head}{new}")),
+        (false, false) => account.contains(core).then(|| account.replace(core, new)),
+    }
 }
 
 /// Rewrite the matched posting lines in `source`, leaving every other
@@ -177,13 +194,35 @@ mod tests {
     use super::{Hit, apply, rename_account};
 
     #[test]
-    fn matches_by_prefix_anchored_at_the_start() {
-        let r = |a: &str| rename_account(a, "a:5", "a:4");
-        assert_eq!(r("a:5"), Some("a:4".to_string())); // exact
-        assert_eq!(r("a:50"), Some("a:40".to_string())); // prefix within the segment
-        assert_eq!(r("a:5:cash"), Some("a:4:cash".to_string())); // sub-account
-        assert_eq!(r("x:a:5"), None); // not at the start
-        assert_eq!(r("a:6"), None); // different prefix
+    fn bare_pattern_matches_anywhere() {
+        let r = |a: &str| rename_account(a, "foo:5", "foo:4");
+        assert_eq!(r("foo:5"), Some("foo:4".to_string())); // exact occurrence
+        assert_eq!(r("foo:50"), Some("foo:40".to_string())); // within a segment
+        assert_eq!(r("foo:5:cash"), Some("foo:4:cash".to_string())); // sub-account
+        assert_eq!(r("bar:foo:5"), Some("bar:foo:4".to_string())); // mid-account
+        assert_eq!(r("foo:6"), None); // no occurrence
+    }
+
+    #[test]
+    fn caret_anchors_to_the_start() {
+        let r = |a: &str| rename_account(a, "^foo:5", "foo:4");
+        assert_eq!(r("foo:5:cash"), Some("foo:4:cash".to_string()));
+        assert_eq!(r("bar:foo:5"), None); // not at the start
+    }
+
+    #[test]
+    fn dollar_anchors_to_the_end() {
+        let r = |a: &str| rename_account(a, "cash$", "bank");
+        assert_eq!(r("foo:5:cash"), Some("foo:5:bank".to_string()));
+        assert_eq!(r("cash:foo"), None); // not at the end
+    }
+
+    #[test]
+    fn caret_and_dollar_match_exactly() {
+        let r = |a: &str| rename_account(a, "^foo:5$", "foo:4");
+        assert_eq!(r("foo:5"), Some("foo:4".to_string()));
+        assert_eq!(r("foo:50"), None); // not exact
+        assert_eq!(r("foo:5:cash"), None); // not exact
     }
 
     #[test]
