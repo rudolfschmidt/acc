@@ -6,11 +6,19 @@ use std::path::{Component, Path, PathBuf};
 use colored::Colorize;
 
 use super::util::shorten_home;
+use crate::Error;
 use crate::loader::Journal;
 use crate::parser::located::Located;
 use crate::parser::transaction::Transaction;
 
-pub fn run(journal: &Journal, base: Option<&str>, categories: &[String]) {
+pub fn run(
+    journal: &Journal,
+    base: Option<&str>,
+    categories: &[String],
+    rules: &[String],
+    fix: bool,
+    execute: bool,
+) -> Result<(), Error> {
     let txs = &journal.transactions;
     let tx_count = txs.len();
     let posting_count: usize = txs.iter().map(|tx| tx.value.postings.len()).sum();
@@ -19,21 +27,63 @@ pub fn run(journal: &Journal, base: Option<&str>, categories: &[String]) {
         lint_commodity_casing(txs),
         lint_leaf_accounts(txs),
         lint_unresolved_role_refs(txs),
+        // dir-category always appears so it can be named and fixed; without a
+        // `--base` it has no root to resolve the folder against, so it reports
+        // as skipped rather than silently vanishing from the list.
+        match base {
+            Some(b) => lint_dir_category(txs, b, categories),
+            None => Lint {
+                name: "dir-category",
+                description: "postings must categorise into their source directory",
+                issues: Vec::new(),
+                fixes: Vec::new(),
+                skipped: Some("needs --base"),
+            },
+        },
     ];
-    // Opt-in: only when a ledger root is given (via `--base`).
-    if let Some(base) = base {
-        lints.push(lint_dir_category(txs, base, categories));
+
+    // Positional rule filter: run only the named checks; none given → all.
+    if !rules.is_empty() {
+        lints.retain(|l| rules.iter().any(|r| r.as_str() == l.name));
     }
 
+    // Shared opening for both modes: what was scanned, then the checklist.
     println!(
         "Scanned {} transactions, {} postings.\n",
         tx_count.to_string().bold(),
         posting_count.to_string().bold(),
     );
+    print_checklist(&lints);
 
+    if fix {
+        return run_fix(&lints, execute);
+    }
+
+    let total_issues: usize = lints.iter().map(|c| c.issues.len()).sum();
+    if total_issues == 0 {
+        println!("\n{}", "No issues found.".green().bold());
+        return Ok(());
+    }
+
+    println!("\n{} issue(s) found:", total_issues.to_string().red().bold());
+    for lint in &lints {
+        if lint.issues.is_empty() {
+            continue;
+        }
+        println!("\n{}", format!("{}:", lint.name).red().bold());
+        for issue in &lint.issues {
+            println!("  {}", issue);
+        }
+    }
+    Ok(())
+}
+
+/// The `Checks:` overview — one line per check with its ✓ / ✗ / ! mark.
+/// Shared by the report and `--fix` modes so both open the same way.
+fn print_checklist(lints: &[Lint]) {
     println!("{}", "Checks:".bold());
     let name_width = lints.iter().map(|l| l.name.len()).max().unwrap_or(0);
-    for lint in &lints {
+    for lint in lints {
         let mark = if lint.skipped.is_some() {
             "!".yellow()
         } else if lint.issues.is_empty() {
@@ -52,35 +102,131 @@ pub fn run(journal: &Journal, base: Option<&str>, categories: &[String]) {
             None => println!("{}", head),
         }
     }
+}
 
-    let total_issues: usize = lints.iter().map(|c| c.issues.len()).sum();
-    if total_issues == 0 {
-        println!("\n{}", "No issues found.".green().bold());
-        return;
+/// `--fix` path: after the shared header + checklist, show each check's
+/// rewrites — grouped under its name like the report's findings, each with
+/// an action verb (`rename …`) so it reads plainly what happens — then a
+/// fix tally. With `-e` the rewrites are applied atomically per file. A
+/// check that flags issues but has no fixer still shows them, marked, so
+/// nothing is silently left behind.
+fn run_fix(lints: &[Lint], execute: bool) -> Result<(), Error> {
+    let fixes: Vec<&Fix> = lints.iter().flat_map(|l| l.fixes.iter()).collect();
+
+    for lint in lints {
+        if !lint.fixes.is_empty() {
+            println!("\n{}", format!("{}:", lint.name).bold());
+            for f in &lint.fixes {
+                println!(
+                    "  {} {} → {}",
+                    loc(&f.file, f.line),
+                    f.old.red(),
+                    f.new.green(),
+                );
+            }
+        } else if !lint.issues.is_empty() {
+            println!(
+                "\n{} {}",
+                format!("{}:", lint.name).red().bold(),
+                "(no automatic fix)".dimmed(),
+            );
+            for issue in &lint.issues {
+                println!("  {}", issue);
+            }
+        }
     }
 
-    println!(
-        "\n{} issue(s) found:",
-        total_issues.to_string().red().bold()
-    );
-    for lint in &lints {
-        if lint.issues.is_empty() {
-            continue;
+    if execute && !fixes.is_empty() {
+        apply_fixes(&fixes)?;
+    }
+
+    let n = fixes.len();
+    let files = fixes
+        .iter()
+        .map(|f| f.file.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let unfixable: usize = lints
+        .iter()
+        .filter(|l| l.fixes.is_empty())
+        .map(|l| l.issues.len())
+        .sum();
+
+    println!();
+    if n == 0 {
+        if unfixable == 0 {
+            println!("{} Nothing to fix.", "✓".green());
+        } else {
+            let verb = if unfixable == 1 { "issue has" } else { "issues have" };
+            println!("{} {} {} no automatic fix.", "!".yellow(), unfixable, verb);
         }
-        println!("\n{}", format!("{}:", lint.name).red().bold());
-        for issue in &lint.issues {
-            println!("  {}", issue);
+    } else {
+        let fixes_word = if n == 1 { "fix" } else { "fixes" };
+        let files_word = if files == 1 { "file" } else { "files" };
+        if execute {
+            println!("{} Applied {} {} in {} {}.", "✓".green(), n, fixes_word, files, files_word);
+        } else {
+            println!(
+                "{} {} {} in {} {} — re-run with {} to apply.",
+                "!".yellow(),
+                n,
+                fixes_word,
+                files,
+                files_word,
+                "-e".bold(),
+            );
         }
     }
+    Ok(())
+}
+
+/// Apply the collected rewrites, grouped by file and written atomically
+/// (temp file + rename), so a crash mid-write never leaves a half-written
+/// journal. Only the matched account token on each posting line changes.
+fn apply_fixes(fixes: &[&Fix]) -> Result<(), Error> {
+    use std::collections::BTreeMap;
+    let mut by_file: BTreeMap<&str, Vec<&Fix>> = BTreeMap::new();
+    for &f in fixes {
+        by_file.entry(f.file.as_str()).or_default().push(f);
+    }
+    for (file, group) in by_file {
+        let source = std::fs::read_to_string(file)
+            .map_err(|e| Error::from(format!("lint --fix: read {file}: {e}")))?;
+        let mut lines: Vec<String> = source.split('\n').map(String::from).collect();
+        for f in group {
+            if let Some(line) = lines.get_mut(f.line - 1) {
+                *line = line.replacen(&f.old, &f.new, 1);
+            }
+        }
+        let out = lines.join("\n");
+        let tmp = format!("{file}.lint-tmp");
+        std::fs::write(&tmp, &out)
+            .map_err(|e| Error::from(format!("lint --fix: write {tmp}: {e}")))?;
+        std::fs::rename(&tmp, file)
+            .map_err(|e| Error::from(format!("lint --fix: rename {tmp} -> {file}: {e}")))?;
+    }
+    Ok(())
 }
 
 struct Lint {
     name: &'static str,
     description: &'static str,
     issues: Vec<String>,
+    /// Structured rewrites this check proposes for `--fix`. Empty for
+    /// checks with no automatic fix — only `dir-category` fills it.
+    fixes: Vec<Fix>,
     /// `Some(reason)` when the check could not run (missing config) — shown
-    /// as a `!` warning rather than a `✓`/`✗`. Only `dir-category` uses it.
+    /// as a `!` warning rather than a `✓`/`✗`.
     skipped: Option<&'static str>,
+}
+
+/// One rewrite `--fix` can apply: change the account token on a single
+/// posting line.
+struct Fix {
+    file: String,
+    line: usize,
+    old: String,
+    new: String,
 }
 
 /// A `file:line` issue location: the home-shortened path and the `:`
@@ -114,6 +260,7 @@ fn lint_commodity_casing(txs: &[Located<Transaction>]) -> Lint {
         name: "commodity-casing",
         description: "multi-char commodity symbols must be all-uppercase",
         issues,
+        fixes: Vec::new(),
         skipped: None,
     }
 }
@@ -161,6 +308,7 @@ fn lint_leaf_accounts(txs: &[Located<Transaction>]) -> Lint {
         name: "leaf-accounts",
         description: "postings must target leaf accounts (no sub-accounts)",
         issues,
+        fixes: Vec::new(),
         skipped: None,
     }
 }
@@ -186,18 +334,21 @@ fn lint_unresolved_role_refs(txs: &[Located<Transaction>]) -> Lint {
         name: "role-references",
         description: "every `$role:slot` reference must resolve to a declared account",
         issues,
+        fixes: Vec::new(),
         skipped: None,
     }
 }
 
 /// With `--base` and `--categories`, every transaction whose file sits in
 /// a direct sub-directory of BASE should categorise into that directory:
-/// one of its *category* postings — an account starting with a
+/// *each* of its *category* postings — an account starting with a
 /// `--categories` prefix (income / expense) — must *end with* the directory
 /// name turned into account segments (`food-groceries` → `…:food:groceries`),
 /// so only the account's tail — the category — has to match, not its root.
-/// Postings on other accounts (asset / transfer legs) are ignored, and a
-/// transaction with *no* category posting (a pure transfer) is skipped.
+/// Every mismatching category posting is flagged (a correct sibling no
+/// longer excuses a wrong one). Postings on other accounts (asset /
+/// transfer legs) are ignored, and a transaction with *no* category
+/// posting (a pure transfer) is left alone.
 /// Files directly in BASE and under an `@…` directory are exempt.
 ///
 /// Without `--categories` the check can't tell a category account from a
@@ -214,6 +365,7 @@ fn lint_dir_category(txs: &[Located<Transaction>], base: &str, categories: &[Str
             name,
             description,
             issues: Vec::new(),
+            fixes: Vec::new(),
             skipped: Some("needs --categories to tell category accounts from transfers"),
         };
     }
@@ -226,47 +378,51 @@ fn lint_dir_category(txs: &[Located<Transaction>], base: &str, categories: &[Str
     let cwd = std::env::current_dir().unwrap_or_default();
     let base_abs = absolute(base, &cwd);
     let mut issues = Vec::new();
+    let mut fixes = Vec::new();
     for tx in txs {
         let Some(dir) = category_of(&tx.file, &cwd, &base_abs) else {
             continue;
         };
         let folder = dir.replace('-', ":"); // food-groceries -> food:groceries
         let suffix = format!(":{folder}");
-        // Only category postings (income/expense) carry the folder category;
-        // a transaction with none is a pure transfer → skip it.
-        let category_accounts: Vec<&str> = tx
-            .value
-            .postings
-            .iter()
-            .map(|lp| lp.value.account.as_str())
-            .filter(|a| prefixes.iter().any(|p| a.starts_with(p)))
-            .collect();
-        if category_accounts.is_empty() {
-            continue;
-        }
-        let matched = category_accounts
-            .iter()
-            .any(|a| *a == folder || a.ends_with(suffix.as_str()));
-        if !matched {
-            // Suggest the concrete fix, keeping the account's root
+        // Check every category posting (income/expense) independently: with
+        // `--categories` each one must categorise into the folder, so a
+        // single correct sibling no longer excuses a wrong one. Postings on
+        // other accounts (asset / transfer legs) are ignored, and a
+        // transaction with no category posting is left alone.
+        for lp in &tx.value.postings {
+            let account = lp.value.account.as_str();
+            if !prefixes.iter().any(|p| account.starts_with(p)) {
+                continue;
+            }
+            if account == folder || account.ends_with(suffix.as_str()) {
+                continue;
+            }
+            // Suggest — and fix — this posting, keeping the account's root
             // (`expenses:travel` → `expenses:food:groceries`).
-            let account = category_accounts[0];
             let target = match account.split_once(':') {
                 Some((root, _)) => format!("{root}:{folder}"),
                 None => folder.clone(),
             };
             issues.push(format!(
                 "{} expected '{}' but found '{}'",
-                loc(&tx.file, tx.line),
+                loc(&lp.file, lp.line),
                 target.green(),
                 account.red(),
             ));
+            fixes.push(Fix {
+                file: lp.file.to_string(),
+                line: lp.line,
+                old: account.to_string(),
+                new: target,
+            });
         }
     }
     Lint {
         name,
         description,
         issues,
+        fixes,
         skipped: None,
     }
 }
@@ -430,6 +586,47 @@ mod tests {
             "/ledger/@cash/x.ledger",
         );
         assert!(lint_dir_category(&cash, base, &cats).issues.is_empty());
+    }
+
+    #[test]
+    fn dir_category_produces_fix() {
+        let base = "/ledger";
+        let cats = ["expenses:".to_string()];
+        let bad = setup_file(
+            "2024-01-01 * x\n\
+             \tassets:cash      -10 EUR\n\
+             \texpenses:travel   10 EUR\n",
+            "/ledger/food-groceries/x.ledger",
+        );
+        let lint = lint_dir_category(&bad, base, &cats);
+        assert_eq!(lint.fixes.len(), 1);
+        let fix = &lint.fixes[0];
+        // Rewrite the category posting on its own line (3), keeping the root.
+        assert_eq!(fix.old, "expenses:travel");
+        assert_eq!(fix.new, "expenses:food:groceries");
+        assert_eq!(fix.line, 3);
+        assert_eq!(fix.file, "/ledger/food-groceries/x.ledger");
+    }
+
+    #[test]
+    fn dir_category_checks_every_category_posting() {
+        let base = "/ledger";
+        let cats = ["expenses:".to_string()];
+        // Two expense legs in the medical-treatment folder: one already
+        // categorised, one with a hyphen typo. Only the wrong one is
+        // flagged — a correct sibling no longer excuses it.
+        let txs = setup_file(
+            "2024-01-01 * x\n\
+             \tassets:cash                 -10 EUR\n\
+             \texpenses:medical:treatment    6 EUR\n\
+             \texpenses:medical-treatment    4 EUR\n",
+            "/ledger/medical-treatment/x.ledger",
+        );
+        let lint = lint_dir_category(&txs, base, &cats);
+        assert_eq!(lint.issues.len(), 1);
+        assert_eq!(lint.fixes.len(), 1);
+        assert_eq!(lint.fixes[0].old, "expenses:medical-treatment");
+        assert_eq!(lint.fixes[0].new, "expenses:medical:treatment");
     }
 
     #[test]

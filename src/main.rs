@@ -19,7 +19,7 @@ struct Args {
     /// and matters for transactions with identical dates. Pre-parsed
     /// out of argv before clap sees it, so it works anywhere on the
     /// command line — `acc -f CONFIG bal -f JOURNAL` collects both.
-    #[arg(short = 'f', long = "file", value_name = "PATH")]
+    #[arg(short = 'f', long = "file", value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
     paths: Vec<String>,
 
     #[command(subcommand)]
@@ -103,6 +103,19 @@ struct ReportArgs {
     #[arg(short = 'd', long = "display", value_name = "PATTERN")]
     display: Option<String>,
 
+    /// Show only postings whose amount matches EXPR. A secondary
+    /// projection like `--pos` / `--neg`, applied after selection: it
+    /// narrows which postings are shown by comparing each amount against a
+    /// threshold. EXPR is `[op]number` with op one of `>`, `<`, `>=`,
+    /// `<=`, `=` and `<>` (not equal); a bare number is `=`. The comparison
+    /// is signed, so `-A 100` keeps `100` but not `-100`, `-A '>50'` keeps
+    /// amounts above 50, and `-A '<>0'` keeps every non-zero amount. Under
+    /// `-X` the threshold is read in the target commodity.
+    // `allow_hyphen_values` so a negative threshold (`-A -100`) is taken
+    // as the value, not parsed as another flag.
+    #[arg(short = 'A', long = "amount", value_name = "EXPR", allow_hyphen_values = true)]
+    amount: Option<String>,
+
     /// Sort by field: date, amount, account, description. Prefix with - for reverse. (default: date)
     #[arg(short = 'S', long = "sort", default_value = "date")]
     sort: Vec<String>,
@@ -136,10 +149,33 @@ struct ReportArgs {
     mixed: bool,
 }
 
+/// The lint checks, selectable as positional arguments to `lint`. With
+/// none given, every check runs. The kebab-case value names match each
+/// check's reported id, so `lint dir-category` runs just that one.
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum LintRule {
+    CommodityCasing,
+    LeafAccounts,
+    RoleReferences,
+    DirCategory,
+}
+
+impl LintRule {
+    /// The check's reported id — must match the `name` field of the
+    /// corresponding `Lint` so the rule filter lines up.
+    fn as_str(self) -> &'static str {
+        match self {
+            LintRule::CommodityCasing => "commodity-casing",
+            LintRule::LeafAccounts => "leaf-accounts",
+            LintRule::RoleReferences => "role-references",
+            LintRule::DirCategory => "dir-category",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Show account balances
-    #[command(alias = "bal")]
     Balance {
         #[command(flatten)]
         filter: ReportArgs,
@@ -156,7 +192,6 @@ enum Command {
         pattern: Vec<String>,
     },
     /// Show transaction register
-    #[command(alias = "reg")]
     Register {
         #[command(flatten)]
         filter: ReportArgs,
@@ -204,7 +239,6 @@ enum Command {
         pattern: Vec<String>,
     },
     /// Interactive account navigater
-    #[command(visible_aliases = ["nav", "ui"])]
     Navigate {
         #[command(flatten)]
         filter: ReportArgs,
@@ -216,13 +250,16 @@ enum Command {
     },
     /// Lint the journal — flag convention and consistency issues as warnings
     Lint {
+        /// Which check to run (`commodity-casing`, `leaf-accounts`,
+        /// `role-references`, `dir-category`). Omit to run all.
+        rule: Option<LintRule>,
         /// Ledger root. When given, also check that each transaction whose
         /// file lives in a direct sub-directory of BASE categorises into
         /// that directory: some posting's account must end with the folder
         /// name turned into segments (`food-groceries` →
         /// `…:food:groceries`). `@…` directories and files directly in BASE
-        /// are exempt.
-        #[arg(long = "base", value_name = "DIR")]
+        /// are exempt. Falls back to the `$BASE` environment variable.
+        #[arg(long = "base", value_name = "DIR", env = "BASE")]
         base: Option<String>,
         /// Account prefixes that count as categories (income / expense),
         /// e.g. `--categories '^in:' '^ex:'`. The dir-category check then
@@ -232,6 +269,14 @@ enum Command {
         /// last posting.
         #[arg(long = "categories", value_name = "PREFIX", num_args = 1..)]
         categories: Vec<String>,
+        /// Preview the fixes for auto-fixable checks (currently only
+        /// `dir-category`): each `old → new` account rewrite, writing
+        /// nothing. Add `-e` to apply. Checks without a fixer still report.
+        #[arg(long = "fix")]
+        fix: bool,
+        /// Apply the `--fix` rewrites in place (atomic per file).
+        #[arg(short = 'e', long = "execute", requires = "fix")]
+        execute: bool,
     },
     /// Reformat a ledger journal: account column left-aligned,
     /// amount column right-aligned.
@@ -351,7 +396,7 @@ enum Command {
     Update {
         /// Trading pair in BASE/QUOTE format, e.g. BTC/USDT. Repeat
         /// `--pair` to update multiple pairs. If omitted, all existing
-        /// crypto files under $ACC_PRICES/crypto/ are updated.
+        /// crypto files under $PRICES/crypto/ are updated.
         #[arg(long = "pair")]
         pairs: Vec<String>,
         /// Overwrite data from this date onwards (YYYY-MM-DD)
@@ -384,14 +429,26 @@ enum Command {
     /// `--execute` appends them. Standalone — does not read the journal.
     Import {
         /// The bank CSV export to import.
+        #[arg(value_hint = clap::ValueHint::FilePath)]
         csv: String,
         /// The bank import profile (e.g. `bank.conf`).
-        #[arg(short = 'c', long = "conf", value_name = "FILE")]
+        #[arg(short = 'c', long = "conf", value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
         conf: String,
         /// Execute the import — append the new transactions to the ledger.
         /// Without it, the command only prints what it would add (dry-run).
         #[arg(short = 'e', long = "execute")]
         write: bool,
+    },
+
+    /// Print a shell completion script to stdout. Source it once per
+    /// shell — e.g. `source <(acc completions zsh)` — so the shell
+    /// completes acc's subcommands, flags and file paths. Paths are
+    /// completed by the shell's own file completion, so `~` expands
+    /// natively; regenerate only when acc's CLI changes.
+    Completions {
+        /// Target shell (bash, zsh, fish, elvish, powershell).
+        #[arg(value_name = "SHELL")]
+        shell: clap_complete::Shell,
     },
 }
 
@@ -415,6 +472,7 @@ impl Command {
             | Self::Diff { .. }
             | Self::Import { .. }
             | Self::Rename { .. }
+            | Self::Completions { .. }
             | Self::Sweep { .. } => &[],
         }
     }
@@ -437,18 +495,13 @@ impl Command {
             | Self::Diff { .. }
             | Self::Import { .. }
             | Self::Rename { .. }
+            | Self::Completions { .. }
             | Self::Sweep { .. } => None,
         }
     }
 }
 
 fn main() {
-    // Shell-completion hook: when the shell calls back (COMPLETE env set),
-    // emit candidates and exit. Enabled once per shell with:
-    //   source <(COMPLETE=zsh acc)
-    use clap::CommandFactory;
-    clap_complete::env::CompleteEnv::with_factory(Args::command).complete();
-
     if let Err(e) = start() {
         eprintln!("{}", e);
         std::process::exit(1);
@@ -545,13 +598,32 @@ fn split_file_args() -> (Vec<String>, Vec<String>) {
         match a.as_str() {
             "-f" | "--file" => {
                 if let Some(v) = iter.next() {
-                    files.push(v);
+                    files.push(expand_tilde(&v));
                 }
             }
             _ => rest.push(a),
         }
     }
     (files, rest)
+}
+
+/// Expand a leading `~` / `~/` to `$HOME` (the inverse of `shorten_home`).
+/// The shell normally does this, but the dynamic shell completion hands
+/// back path candidates with the tilde still literal — and zsh escapes it
+/// to `\~`, which the shell then won't expand — so a tab-completed
+/// `-f ~/…` can reach acc unexpanded. Only a leading bare `~` or `~/` is
+/// handled; `~user` and a `~` mid-path are left untouched.
+fn expand_tilde(input: &str) -> String {
+    let Ok(home) = std::env::var("HOME") else {
+        return input.to_string();
+    };
+    if input == "~" {
+        return home;
+    }
+    match input.strip_prefix("~/") {
+        Some(rest) => format!("{home}/{rest}"),
+        None => input.to_string(),
+    }
 }
 
 /// Run the standalone commands that bypass the report pipeline — each
@@ -631,7 +703,20 @@ fn try_standalone(
         // Import converts a bank CSV into ledger transactions. It reads the
         // target @cash file (for dedup) but never the journal as a whole.
         Command::Import { csv, conf, write } => {
-            Some(acc::commands::import::run(csv, conf, *write))
+            let csv = expand_tilde(csv);
+            let conf = expand_tilde(conf);
+            Some(acc::commands::import::run(&csv, &conf, *write))
+        }
+
+        // Completions just prints a static script for the target shell —
+        // no journal, no file IO. Path arguments (`-f`, `-c`, the import
+        // CSV) carry a `value_hint`, so the generated script defers them
+        // to the shell's own file completion.
+        Command::Completions { shell } => {
+            use clap::CommandFactory;
+            let mut cmd = Args::command();
+            clap_complete::generate(*shell, &mut cmd, "acc", &mut std::io::stdout());
+            Some(Ok(()))
         }
 
         // Sweep loads and books the journal, scopes it to the pass-through
@@ -770,14 +855,14 @@ fn start() -> Result<(), acc::Error> {
     // `update` already returned above.
     let filter_args: Option<&ReportArgs> = command.filter();
 
-    // Price-DB files (`$ACC_PRICES`, only under `-X`) are kept separate
+    // Price-DB files (`$PRICES`, only under `-X`) are kept separate
     // from the user's journal files so they can be loaded *selectively*: the
     // journal is parsed first to learn which commodities the report touches,
     // and only the price pairs connecting them are then parsed. The DB is
     // ~800k directives; a report needs a handful of pairs.
     let mut price_paths: Vec<std::path::PathBuf> = Vec::new();
     if filter_args.map(|f| f.exchange.is_some()).unwrap_or(false)
-        && let Ok(dir) = std::env::var("ACC_PRICES")
+        && let Ok(dir) = std::env::var("PRICES")
     {
         let path = std::path::Path::new(&dir);
         if path.is_dir() {
@@ -863,7 +948,7 @@ fn start() -> Result<(), acc::Error> {
     // commander sees an already-scoped journal.
     //
     // `print` always keeps whole matched transactions (every posting),
-    // and `--related-all` (-A) requests the same for any report command,
+    // and `--related-all` requests the same for any report command,
     // unlike `reg` / `bal` which otherwise reduce to the matched
     // postings only — a pattern then picks *which entries* to show, not
     // which lines of them.
@@ -874,6 +959,11 @@ fn start() -> Result<(), acc::Error> {
     let neg = filter_args.map(|f| f.neg).unwrap_or(false);
     let sign = acc::filter::SignFilter::from_flags(pos, neg);
     let display = filter_args.and_then(|f| f.display.as_deref());
+    // Parse `--amount` up front so a malformed EXPR fails cleanly here,
+    // consistent with how the date flags are validated before the report runs.
+    let amount = filter_args
+        .and_then(|f| f.amount.as_deref())
+        .map(|e| acc::filter::AmountFilter::parse(e).unwrap_or_else(|err| fail(&err)));
     let mut journal = acc::filter::filter(
         journal,
         command.patterns(),
@@ -883,6 +973,7 @@ fn start() -> Result<(), acc::Error> {
         whole_transactions,
         sign,
         display,
+        amount.as_ref(),
     );
 
     // Multiple `-p`: keep transactions whose date falls within any
@@ -969,8 +1060,13 @@ fn start() -> Result<(), acc::Error> {
                 eprintln!("navigate: {}", e);
             }
         }
-        Command::Lint { base, categories } => {
-            acc::commands::lint::run(&journal, base.as_deref(), &categories)
+        Command::Lint { rule, base, categories, fix, execute } => {
+            let rule_names: Vec<String> = rule.iter().map(|r| r.as_str().to_string()).collect();
+            if let Err(e) =
+                acc::commands::lint::run(&journal, base.as_deref(), &categories, &rule_names, fix, execute)
+            {
+                eprintln!("lint: {}", e);
+            }
         }
         _ => eprintln!("internal error: unexpected command reached match arm"),
     }

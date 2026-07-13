@@ -11,7 +11,7 @@ use crate::parser::transaction::Transaction;
 /// order, a ready-to-query price index, the role gain/loss account
 /// declarations extracted during resolve, and a per-commodity
 /// precision map derived from the postings.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Journal {
     pub transactions: Vec<Located<Transaction>>,
     pub prices: Index,

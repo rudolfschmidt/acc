@@ -155,6 +155,39 @@ fn semicolon_conditions_are_anded() {
 }
 
 #[test]
+fn rule_value_anchors() {
+    let dir = std::env::temp_dir().join(format!("acc-import-anchor-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let com = write(&dir, "com.ledger", "commodity €\n    precision 2\n");
+    let conf = write(
+        &dir,
+        "bank.conf",
+        &format!(
+            "field.date 0\nfield.payee 2\nfield.reference 5\nfield.amount 7\nfield.fx-currency 9\n\
+             commodities {}\noutput.file /tmp/x.ledger\noutput.title t | t\n\
+             output.account a:bank\noutput.commodity €\n\
+             identity date amount payee\n\
+             default => exp:{{payee}}\n\
+             payee ^foo => exp:starts\n\
+             payee bar$ => exp:ends\n\
+             payee ^exact$ => exp:whole\n",
+            com.display()
+        ),
+    );
+    let p = Profile::load(conf.to_str().unwrap()).unwrap();
+    // `^foo` — start anchor (case-insensitive), not a mid-string match.
+    assert_eq!(p.categorize(&row("2025-01-01", "Foo Shop", "-1", "")), "exp:starts");
+    assert_eq!(p.categorize(&row("2025-01-01", "A Foo", "-1", "")), "exp:a-foo");
+    // `bar$` — end anchor.
+    assert_eq!(p.categorize(&row("2025-01-01", "The Bar", "-1", "")), "exp:ends");
+    assert_eq!(p.categorize(&row("2025-01-01", "Bar None", "-1", "")), "exp:bar-none");
+    // `^exact$` — whole field only.
+    assert_eq!(p.categorize(&row("2025-01-01", "Exact", "-1", "")), "exp:whole");
+    assert_eq!(p.categorize(&row("2025-01-01", "Exactly", "-1", "")), "exp:exactly");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn render_uses_symbol_precision_and_bare_counter() {
     let dir = std::env::temp_dir().join(format!("acc-import-render-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

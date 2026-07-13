@@ -28,13 +28,15 @@ use crate::commands::account::Account;
 use crate::commands::util::{format_amount, shows_nonzero};
 use crate::decimal::Decimal;
 use crate::filter::PatternMatcher;
-use crate::loader::Journal;
+use crate::loader::{Journal, LabelView};
 
 const SEL_BG: Color = Color::Rgb(40, 40, 55);
 
+/// Minimum gap between the account column and the amount, matching `reg`.
+const GAP: usize = 2;
+
 pub fn run(journal: &Journal, show_empty: bool) -> Result<(), String> {
     let root = Account::from_transactions(&journal.transactions);
-    let precisions = &journal.precisions;
 
     enable_raw_mode().map_err(|e| e.to_string())?;
     stdout()
@@ -43,7 +45,7 @@ pub fn run(journal: &Journal, show_empty: bool) -> Result<(), String> {
 
     let mut terminal =
         Terminal::new(CrosstermBackend::new(stdout())).map_err(|e| e.to_string())?;
-    let mut app = App::new(&root, precisions, show_empty);
+    let mut app = App::new(&root, journal, show_empty);
     let mut frame_height: u16 = 20;
 
     loop {
@@ -79,6 +81,7 @@ pub fn run(journal: &Journal, show_empty: bool) -> Result<(), String> {
                     app.page_down(half_page);
                 }
                 KeyCode::Char(' ') | KeyCode::Enter => app.toggle(),
+                KeyCode::Tab => app.toggle_all(),
                 KeyCode::Right => {
                     if let Some(row) = app.visible.get(app.cursor)
                         && row.has_children && !row.expanded {
@@ -118,6 +121,7 @@ pub fn run(journal: &Journal, show_empty: bool) -> Result<(), String> {
 
 struct App<'a> {
     root: &'a Account,
+    journal: &'a Journal,
     precisions: &'a HashMap<String, usize>,
     expanded: BTreeSet<String>,
     cursor: usize,
@@ -136,14 +140,11 @@ struct Row<'a> {
 }
 
 impl<'a> App<'a> {
-    fn new(
-        root: &'a Account,
-        precisions: &'a HashMap<String, usize>,
-        show_empty: bool,
-    ) -> Self {
+    fn new(root: &'a Account, journal: &'a Journal, show_empty: bool) -> Self {
         let mut app = App {
             root,
-            precisions,
+            journal,
+            precisions: &journal.precisions,
             expanded: BTreeSet::new(),
             cursor: 0,
             scroll_offset: 0,
@@ -215,6 +216,26 @@ impl<'a> App<'a> {
                 }
                 self.rebuild_visible();
             }
+    }
+
+    /// Fold/unfold the whole tree: collapse everything when anything is
+    /// expanded, otherwise expand every node that has children.
+    fn toggle_all(&mut self) {
+        if self.expanded.is_empty() {
+            self.expand_all(self.root);
+        } else {
+            self.expanded.clear();
+        }
+        self.rebuild_visible();
+    }
+
+    fn expand_all(&mut self, account: &'a Account) {
+        for child in account.children.values() {
+            if !child.children.is_empty() {
+                self.expanded.insert(child.fullname.clone());
+                self.expand_all(child);
+            }
+        }
     }
 
     fn up(&mut self) {
@@ -335,6 +356,14 @@ fn max_amount_width(account: &Account, precisions: &HashMap<String, usize>) -> u
     max
 }
 
+/// The register label for `account`, formatted the way `reg` shows it —
+/// ` (label)` — or `None` when the account carries no label.
+fn label_text(journal: &Journal, account: &str) -> Option<String> {
+    journal
+        .label_for(account, LabelView::Register)
+        .map(|label| format!(" ({})", label))
+}
+
 fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -343,6 +372,35 @@ fn draw(frame: &mut Frame, app: &App) {
 
     let width = chunks[0].width as usize;
     let amount_w = max_amount_width(app.root, app.precisions).min(width / 2);
+    // Longest account name across the visible rows (" " + indent + icon +
+    // leaf + label); every amount starts GAP spaces after this column.
+    let name_col = app
+        .visible
+        .iter()
+        .map(|row| {
+            let label_w = label_text(app.journal, &row.account.fullname)
+                .map(|s| s.chars().count())
+                .unwrap_or(0);
+            1 + row.depth * 2 + 2 + row.account.name.chars().count() + label_w
+        })
+        .max()
+        .unwrap_or(0);
+    // Widest displayed amount across the visible rows; amounts are right-
+    // aligned within a field this wide, so the digits line up on the right.
+    let amount_col_w = app
+        .visible
+        .iter()
+        .map(|row| {
+            row.account
+                .total()
+                .into_iter()
+                .filter(|(c, v)| shows_nonzero(c, v, app.precisions))
+                .map(|(c, v)| format_amount(&c, &v, app.precisions).chars().count())
+                .max()
+                .unwrap_or(1)
+        })
+        .max()
+        .unwrap_or(0);
     let list_height = chunks[0].height as usize;
     let end = (app.scroll_offset + list_height).min(app.visible.len());
 
@@ -356,6 +414,8 @@ fn draw(frame: &mut Frame, app: &App) {
             _ => "  ",
         };
 
+        let label = label_text(app.journal, &row.account.fullname);
+
         let commodities: Vec<_> = row
             .account
             .total()
@@ -367,20 +427,37 @@ fn draw(frame: &mut Frame, app: &App) {
         if commodities.is_empty() {
             items.push(make_row(
                 &format!(" {}{}{}", indent, icon, row.account.name),
+                label.as_deref(),
                 "0",
                 Color::DarkGray,
                 selected,
+                name_col,
+                amount_col_w,
                 width,
             ));
         } else {
             for (j, (amount, neg)) in commodities.iter().enumerate() {
-                let name = if j == 0 {
-                    format!(" {}{}{}", indent, icon, row.account.name)
+                // The label sits on the first commodity line only; wrapped
+                // amount lines carry no name and no label.
+                let (name, label) = if j == 0 {
+                    (
+                        format!(" {}{}{}", indent, icon, row.account.name),
+                        label.as_deref(),
+                    )
                 } else {
-                    String::new()
+                    (String::new(), None)
                 };
                 let color = if *neg { Color::Red } else { Color::Green };
-                items.push(make_row(&name, amount, color, selected, width));
+                items.push(make_row(
+                    &name,
+                    label,
+                    amount,
+                    color,
+                    selected,
+                    name_col,
+                    amount_col_w,
+                    width,
+                ));
             }
         }
     }
@@ -390,7 +467,7 @@ fn draw(frame: &mut Frame, app: &App) {
     let footer_text = if app.search.is_empty() {
         let total = format_balance(&app.root.total(), app.precisions, amount_w);
         format!(
-            " Total: {}  |  Esc:quit  ↑↓:navigate  Enter:toggle  type to search",
+            " Total: {}  |  Esc:quit  ↑↓:nav  Enter:toggle  Tab:fold/unfold all  type to search",
             total.trim()
         )
     } else {
@@ -404,11 +481,41 @@ fn draw(frame: &mut Frame, app: &App) {
 
 fn make_row<'a>(
     name: &str,
+    label: Option<&str>,
     amount: &str,
     amount_color: Color,
     selected: bool,
+    name_col: usize,
+    amount_w: usize,
     width: usize,
 ) -> ListItem<'a> {
+    ListItem::new(row_line(
+        name,
+        label,
+        amount,
+        amount_color,
+        selected,
+        name_col,
+        amount_w,
+        width,
+    ))
+}
+
+/// Lay out one row: the account name (plus its optional `reg`-style label),
+/// then padding to the amount column (`name_col` + `GAP`), then the amount
+/// right-aligned within a field `amount_w` wide, then trailing fill. The
+/// longest visible name keeps exactly `GAP` before the amount field; all
+/// amounts end in a single right-aligned column so their digits line up.
+fn row_line<'a>(
+    name: &str,
+    label: Option<&str>,
+    amount: &str,
+    amount_color: Color,
+    selected: bool,
+    name_col: usize,
+    amount_w: usize,
+    width: usize,
+) -> Line<'a> {
     let bg = if selected { SEL_BG } else { Color::Reset };
     let name_style = if selected {
         Style::default()
@@ -418,13 +525,130 @@ fn make_row<'a>(
     } else {
         Style::default().bg(bg)
     };
-    let pad = width.saturating_sub(name.chars().count() + amount.chars().count());
-    ListItem::new(Line::from(vec![
-        Span::styled(name.to_string(), name_style),
-        Span::styled(" ".repeat(pad), Style::default().bg(bg)),
-        Span::styled(
-            amount.to_string(),
-            Style::default().fg(amount_color).bg(bg),
-        ),
-    ]))
+    let label_len = label.map(|l| l.chars().count()).unwrap_or(0);
+    let name_len = name.chars().count() + label_len;
+    let amount_len = amount.chars().count();
+    let lead =
+        name_col.saturating_sub(name_len) + GAP + amount_w.saturating_sub(amount_len);
+    let trail = width.saturating_sub(name_len + lead + amount_len);
+    let mut spans = vec![Span::styled(name.to_string(), name_style)];
+    if let Some(label) = label {
+        spans.push(Span::styled(
+            label.to_string(),
+            Style::default().fg(Color::LightBlue).bg(bg),
+        ));
+    }
+    spans.push(Span::styled(" ".repeat(lead), Style::default().bg(bg)));
+    spans.push(Span::styled(
+        amount.to_string(),
+        Style::default().fg(amount_color).bg(bg),
+    ));
+    spans.push(Span::styled(" ".repeat(trail), Style::default().bg(bg)));
+    Line::from(spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    /// Column just past the amount in a laid-out row: sum of the name, lead
+    /// and amount span widths (spans are `[name, lead, amount, trail]`).
+    fn amount_end_col(line: &Line) -> usize {
+        line.spans[0].content.chars().count()
+            + line.spans[1].content.chars().count()
+            + line.spans[2].content.chars().count()
+    }
+
+    #[test]
+    fn amounts_share_one_right_aligned_column() {
+        let name_col = 20;
+        let amount_w = 10;
+        let width = 60;
+        // Different name lengths AND amount widths; all must end in one column.
+        let cases = [("a", "€1.00"), ("equity", "€-45988.48"), ("ex", "€21.21")];
+        for (name, amount) in cases {
+            let line = row_line(name, None, amount, Color::Green, false, name_col, amount_w, width);
+            assert_eq!(
+                amount_end_col(&line),
+                name_col + GAP + amount_w,
+                "name={name} amount={amount}"
+            );
+        }
+        // The longest name (length == name_col) with the widest amount keeps
+        // exactly GAP of lead; a narrower amount gets more (right-aligned).
+        let longest = "x".repeat(name_col);
+        let widest = row_line(&longest, None, "€-45988.48", Color::Green, false, name_col, amount_w, width);
+        assert_eq!(widest.spans[1].content.chars().count(), GAP);
+        let narrow = row_line(&longest, None, "€1.00", Color::Green, false, name_col, amount_w, width);
+        assert!(narrow.spans[1].content.chars().count() > GAP);
+    }
+
+    #[test]
+    fn draw_renders_amounts_right_aligned() {
+        // Tree with different-length names and amount widths.
+        let mut root = Account::root();
+        root.find_or_create("equity").add_amount("€", Decimal::new(-4598848, 100));
+        root.find_or_create("ex").add_amount("€", Decimal::new(2121, 100));
+        root.find_or_create("aim").add_amount("€", Decimal::new(-47408, 100));
+        let journal = Journal::default();
+
+        let app = App::new(&root, &journal, false);
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+        let buf = terminal.backend().buffer();
+
+        // The list occupies all but the last (footer) row. Right-aligned amounts
+        // all END at the same column: the rightmost non-space cell per row.
+        let mut ends = Vec::new();
+        for y in 0..buf.area().height - 1 {
+            let mut last = None;
+            for x in 0..buf.area().width {
+                if buf[(x, y)].symbol() != " " {
+                    last = Some(x);
+                }
+            }
+            if let Some(x) = last {
+                ends.push(x);
+            }
+        }
+        assert_eq!(ends.len(), 3, "expected 3 amount rows, got {ends:?}");
+        assert!(
+            ends.iter().all(|c| *c == ends[0]),
+            "amounts not right-aligned in one column: {ends:?}"
+        );
+    }
+
+    #[test]
+    fn draw_shows_register_label_inline() {
+        let mut root = Account::root();
+        root.find_or_create("cc:12").add_amount("€", Decimal::new(4242, 100));
+        let mut journal = Journal::default();
+        journal
+            .labels_register
+            .exact
+            .insert("cc:12".to_string(), "brokerage".to_string());
+
+        // Expand `cc` so `cc:12` (which carries the label) is visible.
+        let mut app = App::new(&root, &journal, false);
+        app.expanded.insert("cc".to_string());
+        app.rebuild_visible();
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+        let buf = terminal.backend().buffer();
+
+        // The label appears inline as `(brokerage)` somewhere in the list.
+        let mut screen = String::new();
+        for y in 0..buf.area().height {
+            for x in 0..buf.area().width {
+                screen.push_str(buf[(x, y)].symbol());
+            }
+            screen.push('\n');
+        }
+        assert!(
+            screen.contains("(brokerage)"),
+            "register label not rendered inline:\n{screen}"
+        );
+    }
 }
