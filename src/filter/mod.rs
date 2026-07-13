@@ -78,6 +78,81 @@ impl SignFilter {
     }
 }
 
+/// Comparison operator for the amount filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CmpOp {
+    Eq,
+    Ne,
+    Gt,
+    Lt,
+    Ge,
+    Le,
+}
+
+/// Posting-level amount filter, driven by `--amount EXPR`. Like the sign
+/// filter, it is a secondary projection applied *after* transaction
+/// selection: it narrows which postings survive by comparing each
+/// posting's (signed) amount against a threshold. A posting without an
+/// amount has nothing to compare, so it is dropped.
+///
+/// `EXPR` is `[op]number` with `op` one of `>`, `<`, `>=`, `<=`, `=` and
+/// `<>` ("not equal"); a bare number is `=`. The comparison is signed and
+/// value-based, so `-A 100` keeps `100` but not `-100`, `-A -50` keeps
+/// exactly `-50`, `-A '>100'` keeps amounts strictly above `100`, and
+/// `-A '<>100'` keeps everything except `100`. Under `-X` the postings are
+/// already valued in the target commodity, so the threshold is read in
+/// that commodity too.
+#[derive(Debug, Clone)]
+pub struct AmountFilter {
+    op: CmpOp,
+    threshold: crate::decimal::Decimal,
+}
+
+impl AmountFilter {
+    /// Parse an `EXPR` (`[op]number`). The two-char `>=` / `<=` / `<>` must
+    /// be tested before the one-char `>` / `<`. The number is a signed
+    /// decimal parsed by `Decimal::parse`, so `-A -50` and `-A '<=1.5'`
+    /// both work. `Decimal` stores every value at one fixed scale, so the
+    /// threshold compares equal to `100`, `100.00`, … alike.
+    pub fn parse(expr: &str) -> Result<Self, String> {
+        let s = expr.trim();
+        let (op, rest) = if let Some(r) = s.strip_prefix(">=") {
+            (CmpOp::Ge, r)
+        } else if let Some(r) = s.strip_prefix("<=") {
+            (CmpOp::Le, r)
+        } else if let Some(r) = s.strip_prefix("<>") {
+            (CmpOp::Ne, r)
+        } else if let Some(r) = s.strip_prefix('>') {
+            (CmpOp::Gt, r)
+        } else if let Some(r) = s.strip_prefix('<') {
+            (CmpOp::Lt, r)
+        } else if let Some(r) = s.strip_prefix('=') {
+            (CmpOp::Eq, r)
+        } else {
+            (CmpOp::Eq, s)
+        };
+        let threshold = crate::decimal::Decimal::parse(rest.trim())
+            .map_err(|e| format!("invalid --amount `{expr}`: {e}"))?;
+        Ok(Self { op, threshold })
+    }
+
+    /// Whether a posting passes the amount constraint. A posting without
+    /// an amount is dropped — there is nothing to compare.
+    fn keeps(&self, p: &Posting) -> bool {
+        let Some(a) = p.amount.as_ref() else {
+            return false;
+        };
+        match self.op {
+            CmpOp::Eq => a.value == self.threshold,
+            CmpOp::Ne => a.value != self.threshold,
+            CmpOp::Gt => a.value > self.threshold,
+            CmpOp::Lt => a.value < self.threshold,
+            CmpOp::Ge => a.value >= self.threshold,
+            CmpOp::Le => a.value <= self.threshold,
+        }
+    }
+}
+
 /// Filter phase. Applies `patterns` and an optional `begin` / `end`
 /// date range to the journal. Transactions outside the date range are
 /// dropped; surviving transactions keep only postings that match the
@@ -100,6 +175,7 @@ pub fn filter(
     whole_transactions: bool,
     sign: SignFilter,
     display: Option<&str>,
+    amount: Option<&AmountFilter>,
 ) -> Journal {
     // Only `transactions` is transformed; every other field passes
     // through unchanged, so `..journal` carries them — including any
@@ -113,6 +189,7 @@ pub fn filter(
         whole_transactions,
         sign,
         display,
+        amount,
     );
     Journal {
         transactions,
@@ -131,6 +208,7 @@ fn filter_transactions(
     whole_transactions: bool,
     sign: SignFilter,
     display: Option<&str>,
+    amount: Option<&AmountFilter>,
 ) -> Vec<Located<Transaction>> {
     let matcher = (!patterns.is_empty()).then(|| PatternMatcher::from_parts(patterns));
     let display_matcher = display.map(PatternMatcher::new);
@@ -149,63 +227,80 @@ fn filter_transactions(
                 && lt.value.date >= e {
                     return None;
                 }
+            // Lowercased tx-wide fields for pattern matching; only needed
+            // when a positional pattern is present.
+            let (desc_lower, code_lower) = if matcher.is_some() {
+                (
+                    lt.value.description.to_lowercase(),
+                    lt.value.code.as_deref().unwrap_or("").to_lowercase(),
+                )
+            } else {
+                (String::new(), String::new())
+            };
+
+            // Transaction selection: a positional pattern keeps the entry
+            // only if at least one posting matches it (the pattern may match
+            // a tx-wide field shared by every posting). Sign/amount narrow
+            // further below, gating survival via the final empty check.
             if let Some(m) = &matcher {
-                let desc_lower = lt.value.description.to_lowercase();
-                let code_lower = lt.value.code.as_deref().unwrap_or("").to_lowercase();
-                // A transaction is kept only if at least one posting
-                // matches. The match dimension can be the posting's own
-                // account/commodity or a tx-wide field (description,
-                // code) shared by every posting.
-                let any = lt.value.postings.iter().any(|lp| {
-                    m.matches_full(&lp.value, &desc_lower, &code_lower)
-                });
+                let any = lt
+                    .value
+                    .postings
+                    .iter()
+                    .any(|lp| m.matches_full(&lp.value, &desc_lower, &code_lower));
                 if !any {
                     return None;
                 }
-                // How surviving postings are pruned:
-                // - `whole_transactions` (print): keep every posting so
-                //   the entry prints intact.
-                // - `related` (-r): keep the *siblings* of the matched
-                //   postings — drop the matched ones.
-                // - default (reg/bal): keep only the matched postings.
-                //
-                // Skipped entirely when `--display` is set: that flag
-                // defines its own projection on the *full* posting set
-                // (below), so the default prune-to-matched must not run
-                // first — otherwise there would be nothing left to
-                // project from.
-                if !whole_transactions && display_matcher.is_none() {
-                    if related {
-                        lt.value.postings.retain(|lp| {
-                            !m.matches_full(&lp.value, &desc_lower, &code_lower)
-                        });
-                    } else {
-                        lt.value.postings.retain(|lp| {
-                            m.matches_full(&lp.value, &desc_lower, &code_lower)
-                        });
-                    }
-                }
             }
 
-            // Display projection (`--display` / `-d`): keep only the
-            // postings whose account matches the pattern, from the full
-            // posting set of each selected transaction. The positional
-            // pattern selects *which transactions*; this picks *which of
-            // their postings* are shown — so `--related-all` is not
-            // needed to widen first. Account-only (`^acc`, `acc$`,
-            // `^acc$`, or substring); the running total then sums only
-            // the shown postings.
+            // A posting is "matched" by the query when it satisfies every
+            // active posting-level criterion at once: the positional
+            // pattern, the sign filter (`--pos` / `--neg`) and the amount
+            // filter (`--amount`). `-r` relates to this whole set, so an
+            // amount or sign search composes with `related` exactly like a
+            // pattern search does.
+            let matched = |lp: &Located<Posting>| {
+                matcher
+                    .as_ref()
+                    .is_none_or(|m| m.matches_full(&lp.value, &desc_lower, &code_lower))
+                    && sign.keeps(&lp.value)
+                    && amount.is_none_or(|af| af.keeps(&lp.value))
+            };
+
+            // Project which postings to show:
             if let Some(d) = &display_matcher {
+                // `--display` / `-d`: from the full posting set of each
+                // selected transaction, keep the account matches, then let
+                // the sign/amount secondary projections narrow that set.
+                // The positional pattern selects *which transactions*; this
+                // picks *which of their postings* — so `--related-all` is
+                // not needed to widen first.
                 lt.value.postings.retain(|lp| d.matches(&lp.value.account));
-            }
-
-            // Secondary projection: the sign filter (`--pos` / `--neg`)
-            // narrows the postings that survived selection by their
-            // amount sign. It runs even under `whole_transactions`, so it
-            // composes with "show every posting, then keep only the
-            // positive/negative ones".
-            if sign != SignFilter::Any {
-                lt.value.postings.retain(|lp| sign.keeps(&lp.value));
+                if sign != SignFilter::Any {
+                    lt.value.postings.retain(|lp| sign.keeps(&lp.value));
+                }
+                if let Some(af) = amount {
+                    lt.value.postings.retain(|lp| af.keeps(&lp.value));
+                }
+            } else if whole_transactions {
+                // `print` / `--related-all`: keep the entry intact, but the
+                // sign/amount secondary projections still narrow it.
+                if sign != SignFilter::Any {
+                    lt.value.postings.retain(|lp| sign.keeps(&lp.value));
+                }
+                if let Some(af) = amount {
+                    lt.value.postings.retain(|lp| af.keeps(&lp.value));
+                }
+            } else if related {
+                // `-r`: show the siblings of the matched postings. Needs at
+                // least one match, else there is nothing to relate to.
+                if !lt.value.postings.iter().any(|lp| matched(lp)) {
+                    return None;
+                }
+                lt.value.postings.retain(|lp| !matched(lp));
+            } else {
+                // Default (reg / bal): show the matched postings.
+                lt.value.postings.retain(|lp| matched(lp));
             }
 
             // A transaction whose postings were all pruned away carries
@@ -575,7 +670,12 @@ mod tests {
 
     fn run(patterns: &[&str], txs: Vec<Located<Transaction>>) -> Vec<Located<Transaction>> {
         let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
-        filter_transactions(txs, &pats, None, None, false, false, SignFilter::Any, None)
+        filter_transactions(txs, &pats, None, None, false, false, SignFilter::Any, None, None)
+    }
+
+    fn run_amount(expr: &str, txs: Vec<Located<Transaction>>) -> Vec<Located<Transaction>> {
+        let af = AmountFilter::parse(expr).unwrap();
+        filter_transactions(txs, &[], None, None, false, false, SignFilter::Any, None, Some(&af))
     }
 
     fn run_sign(
@@ -585,7 +685,7 @@ mod tests {
         txs: Vec<Located<Transaction>>,
     ) -> Vec<Located<Transaction>> {
         let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
-        filter_transactions(txs, &pats, None, None, false, whole_transactions, sign, None)
+        filter_transactions(txs, &pats, None, None, false, whole_transactions, sign, None, None)
     }
 
     fn run_display(
@@ -605,6 +705,7 @@ mod tests {
             whole_transactions,
             SignFilter::Any,
             Some(display),
+            None,
         )
     }
 
@@ -938,6 +1039,7 @@ mod tests {
             false,
             SignFilter::Any,
             None,
+            None,
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value.date.to_string(), "2025-02-01");
@@ -1156,5 +1258,179 @@ mod tests {
         let out = run_display(&[], false, false, "cash$", txs);
         assert_eq!(out.len(), 1);
         assert_eq!(accounts(&out[0]), vec!["assets:bank:cash"]);
+    }
+
+    #[test]
+    fn amount_exact_is_signed() {
+        let txs = vec![tx(
+            "2025-01-01",
+            "a",
+            vec![
+                posting("assets:a", "EUR", 100),
+                posting("assets:b", "EUR", -100),
+                posting("assets:c", "EUR", 50),
+            ],
+        )];
+        let out = run_amount("100", txs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(accounts(&out[0]), vec!["assets:a"]); // +100 only, not -100
+    }
+
+    #[test]
+    fn amount_negative_exact() {
+        let txs = vec![tx(
+            "2025-01-01",
+            "a",
+            vec![posting("assets:a", "EUR", 100), posting("assets:b", "EUR", -100)],
+        )];
+        let out = run_amount("-100", txs);
+        assert_eq!(accounts(&out[0]), vec!["assets:b"]);
+    }
+
+    #[test]
+    fn amount_greater_than_is_signed() {
+        let txs = vec![tx(
+            "2025-01-01",
+            "a",
+            vec![
+                posting("assets:a", "EUR", 150),
+                posting("assets:b", "EUR", 100),
+                posting("assets:c", "EUR", -200),
+            ],
+        )];
+        let out = run_amount(">100", txs);
+        assert_eq!(accounts(&out[0]), vec!["assets:a"]); // 150 only; -200 is not > 100
+    }
+
+    #[test]
+    fn amount_le_includes_boundary() {
+        let txs = vec![tx(
+            "2025-01-01",
+            "a",
+            vec![
+                posting("assets:a", "EUR", 50),
+                posting("assets:b", "EUR", 100),
+                posting("assets:c", "EUR", 101),
+            ],
+        )];
+        let out = run_amount("<=100", txs);
+        assert_eq!(accounts(&out[0]), vec!["assets:a", "assets:b"]);
+    }
+
+    #[test]
+    fn amount_drops_emptied_transaction() {
+        let txs = vec![tx(
+            "2025-01-01",
+            "a",
+            vec![posting("assets:a", "EUR", 5), posting("assets:b", "EUR", -5)],
+        )];
+        // No posting is exactly 999, so the whole transaction is dropped.
+        assert!(run_amount("999", txs).is_empty());
+    }
+
+    #[test]
+    fn amount_parse_ops_and_precedence() {
+        // Two-char ops must win over the one-char prefixes.
+        assert_eq!(AmountFilter::parse(">=5").unwrap().op, CmpOp::Ge);
+        assert_eq!(AmountFilter::parse("<=5").unwrap().op, CmpOp::Le);
+        assert_eq!(AmountFilter::parse("<>5").unwrap().op, CmpOp::Ne);
+        assert_eq!(AmountFilter::parse(">5").unwrap().op, CmpOp::Gt);
+        assert_eq!(AmountFilter::parse("<5").unwrap().op, CmpOp::Lt);
+        assert_eq!(AmountFilter::parse("=5").unwrap().op, CmpOp::Eq);
+        assert_eq!(AmountFilter::parse("5").unwrap().op, CmpOp::Eq);
+    }
+
+    #[test]
+    fn amount_not_equal_is_signed() {
+        let txs = vec![tx(
+            "2025-01-01",
+            "a",
+            vec![
+                posting("assets:a", "EUR", 100),
+                posting("assets:b", "EUR", -100),
+                posting("assets:c", "EUR", 50),
+            ],
+        )];
+        // `<>100` keeps everything except exactly +100 (signed).
+        let out = run_amount("<>100", txs);
+        assert_eq!(accounts(&out[0]), vec!["assets:b", "assets:c"]);
+    }
+
+    #[test]
+    fn amount_parse_rejects_garbage() {
+        assert!(AmountFilter::parse(">abc").is_err());
+        assert!(AmountFilter::parse("").is_err());
+    }
+
+    fn run_related_amount(
+        expr: &str,
+        patterns: &[&str],
+        txs: Vec<Located<Transaction>>,
+    ) -> Vec<Located<Transaction>> {
+        let af = AmountFilter::parse(expr).unwrap();
+        let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
+        filter_transactions(
+            txs,
+            &pats,
+            None,
+            None,
+            true,
+            false,
+            SignFilter::Any,
+            None,
+            Some(&af),
+        )
+    }
+
+    #[test]
+    fn related_shows_siblings_of_amount_match() {
+        // `-A ">100" -r`: the +150 posting matches the amount filter; `-r`
+        // shows its sibling instead of the match itself.
+        let txs = vec![tx(
+            "2025-02-01",
+            "a",
+            vec![
+                posting("expenses:food", "EUR", 150),
+                posting("assets:cash", "EUR", -150),
+            ],
+        )];
+        let out = run_related_amount(">100", &[], txs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(accounts(&out[0]), vec!["assets:cash"]);
+    }
+
+    #[test]
+    fn related_amount_drops_transaction_without_match() {
+        // No posting exceeds 100, so there is nothing to relate to — the
+        // whole transaction is dropped rather than shown in full.
+        let txs = vec![tx(
+            "2025-02-01",
+            "a",
+            vec![
+                posting("expenses:food", "EUR", 50),
+                posting("assets:cash", "EUR", -50),
+            ],
+        )];
+        let out = run_related_amount(">100", &[], txs);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn related_composes_pattern_and_amount() {
+        // Pattern AND amount together define the match; `-r` shows the
+        // siblings of the posting satisfying both. `expenses:small` matches
+        // the pattern but not the amount, so it is a sibling, not a match.
+        let txs = vec![tx(
+            "2025-02-01",
+            "a",
+            vec![
+                posting("expenses:food", "EUR", 150),
+                posting("expenses:small", "EUR", 10),
+                posting("assets:cash", "EUR", -160),
+            ],
+        )];
+        let out = run_related_amount(">100", &["^expenses"], txs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(accounts(&out[0]), vec!["expenses:small", "assets:cash"]);
     }
 }

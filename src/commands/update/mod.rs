@@ -69,7 +69,7 @@ fn run_crypto(pairs: &[String], since: Option<&str>, date: Option<&str>) -> Resu
         let discovered = file::discover_crypto_pairs()?;
         if discovered.is_empty() {
             eprintln!(
-                "{} crypto: no --pair given and no existing files in $ACC_PRICES/crypto/",
+                "{} crypto: no --pair given and no existing files in $PRICES/crypto/",
                 "!".yellow()
             );
             return Ok(());

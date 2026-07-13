@@ -62,6 +62,7 @@ pub fn run(
         false,
         crate::filter::SignFilter::Any,
         None,
+        None,
     );
 
     let (out, count) =

@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.18.0 — 2026-07-13
+
+### Mon 13 Jul 2026 - amount filter, navigate amounts + labels, static completion
+
+**`-A` / `--amount EXPR` — a signed amount filter.** A posting-level
+filter that keeps only postings whose *signed* amount matches a
+comparison: an optional operator (`>`, `<`, `>=`, `<=`, `=`, `<>`)
+followed by a number, with a bare number meaning `=`. So `-A '>100'`
+keeps amounts above 100, `-A '<=-50'` at most −50, `-A '=0'` exactly
+zero, and `-A '<>0'` every non-zero posting. It sits beside `--pos` /
+`--neg` as a secondary projection — narrowing which postings show after
+transaction selection — and works on `reg` and `bal` alike. It needs
+`allow_hyphen_values` so a leading-minus threshold isn't parsed as a flag.
+
+**`-r` now relates to the whole query, not just the pattern.** `--related`
+was wired only into the positional-pattern branch, and the sign / amount
+filters ran as a *later* projection that pruned the related siblings back
+out — so `acc reg -A '>100' -r` showed the large postings themselves (or
+nothing), never their counter-parties. The filter now computes a single
+"matched" predicate — a posting matches when it satisfies the positional
+pattern **and** the sign filter **and** the amount filter at once — and
+`-r` shows the siblings of that set (requiring at least one match, else
+the transaction is dropped). An amount or sign search now composes with
+`-r` exactly like a pattern does; `print` / `--related-all` / `--display`
+keep their existing projection.
+
+**navigate shows balances and labels.** Every row now carries its balance
+in a right-aligned amount column — all amounts end in one column so the
+digits line up, with the longest visible account keeping a fixed two-space
+gap before the widest amount. Account labels render inline as ` (label)`,
+the same shape and colour `reg` uses. A new `Tab` folds or unfolds the
+whole tree at once. The amount column took a couple of passes: the first
+cut computed the left-pad correctly but rendered a fixed gap instead, so
+amounts stayed ragged. The layout is now pinned by `TestBackend` render
+tests that assert the amount column is single-valued and that the label
+shows inline.
+
+**Shell completion is now a static script.** The dynamic engine
+(`source <(COMPLETE=zsh acc)`) escaped `~` in file arguments, so path
+completion was unusable. `acc completions <shell>` now prints a plain
+completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`) that
+delegates file arguments to the shell's own completion, so `~` expands
+natively. File-taking flags (`-f`, `import`'s CSV / `-c`) carry a
+`value_hint` so the generated script offers paths. acc also expands a
+leading `~` itself for `-f` and import paths, for callers that pass it
+literally.
+
+**lint gains a positional rule, `--fix`, and per-posting dir-category.**
+`lint <rule>` runs a single check by its reported id (`commodity-casing`,
+`leaf-accounts`, `role-references`, `dir-category`); omit it to run all.
+`lint dir-category --fix` previews each `old → new` account rewrite and
+`-e` applies it in place (atomic per file). `dir-category` now inspects
+*every* category posting in a transaction, not just the first — so a split
+that mis-files one leg is caught. `--base` falls back to `$BASE`.
+
+**Env and command cleanup.** The rate-directory variable `ACC_PRICES` is
+now `PRICES`, and `lint --base` reads `$BASE`. The short command aliases
+were removed from the binary — only the long `balance` / `register` /
+`navigate` names remain, keeping `--help` and completion uncluttered.
+
+**import `=>` rules take filter anchors.** A categorisation rule's value
+matched as a case-insensitive substring; it now honours the same anchors
+as the report filter — `^` for start, `$` for end, `^…$` for the whole
+field — so `payee ^SUPERMARKET` matches only payees that begin with
+`SUPERMARKET`.
+
 ## 0.17.0 — 2026-07-04
 
 ### Sat 04 Jul 2026 - `rename` matches like the filter, and import preview polish

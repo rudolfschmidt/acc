@@ -118,18 +118,20 @@ Windows use the OS-native TLS stack, so no extra dependency there.
 **What gets written where:** report commands never touch disk. Writing
 is always explicit and opt-in — `acc format` (in-place alignment),
 `acc rename -e` (account renames), `acc import -e` (append to a `@cash`
-file), and `acc update` (rate files under `$ACC_PRICES`). Network I/O
+file), and `acc update` (rate files under `$PRICES`). Network I/O
 happens only in `acc update` (to MEXC and openexchangerates.org).
 
-**Shell completion.** acc ships dynamic completion for subcommands and
-flags. Enable it for the current shell by sourcing the script the binary
-prints — for zsh, add to `~/.zshrc`:
+**Shell completion.** `acc completions <shell>` prints a completion
+script for subcommands, flags, and file paths. Enable it for the current
+shell by sourcing what it prints — for zsh, add to `~/.zshrc`:
 
 ```
-source <(COMPLETE=zsh acc)
+source <(acc completions zsh)
 ```
 
-`bash` and `fish` work the same way with `COMPLETE=bash` / `COMPLETE=fish`.
+`bash`, `fish`, `elvish` and `powershell` work the same way. Paths are
+completed by the shell's own file completion, so `~` expands natively;
+regenerate only when acc's CLI changes.
 
 ---
 
@@ -267,10 +269,11 @@ acc [GLOBAL OPTIONS] <COMMAND> [COMMAND OPTIONS] [ARGS]
 | `-X`, `--exchange SYMBOL`  | —       | Convert every amount into `SYMBOL` using the price DB. Each posting is converted at its own `tx.date` rate. |
 | `-V`, `--unrealized`       | off     | Mark-to-market: revalue open foreign-currency balances at the latest available rate instead of the historical per-posting valuation, booking the unrealized revaluation to `holding gain` / `holding loss`. Only meaningful with `-X`, and only when those accounts are declared. The default stays historical (realized only). `-V` reuses the letter ledger spends on market valuation, here for acc's opt-in unrealized revaluation. |
 | `-R`, `--real`             | off     | Drop virtual postings from the output (both `(account)` paren-virtual and `[account]` bracket-virtual). The realizer, lotter and translator inject *real* postings (slippage/unrealized, capital gain/loss, CTA), so `-R` keeps them; only the `(…)` / `[…]` postings written in the source journal are removed. |
-| `-r`, `--related`          | off     | With a pattern filter, show the *other* postings of matched transactions — the counter-parties — instead of the matched postings themselves. `acc reg ^expenses -r` shows which accounts balanced against expenses. Modeled on ledger-cli's `--related`. |
+| `-r`, `--related`          | off     | Show the *other* postings of matched transactions — the counter-parties — instead of the match itself. `acc reg ^expenses -r` shows which accounts balanced against expenses. Relates to the whole query: a posting is "matched" when it satisfies the positional pattern **and** the sign / `--amount` filters together, so `acc reg -A '>100' -r` shows the counter-parties of the large postings, not the large postings themselves. Modeled on ledger-cli's `--related`. |
 | `--related-all`            | off     | Show *every* posting of a matched transaction — the matched posting **and** its counter-parties — not just the counter-parties (`-r`) or just the match (default). Modeled on ledger-cli's `--related-all`. |
 | `--pos`                    | off     | Show only postings whose amount is `>= 0`. A secondary filter applied *after* selection — it narrows which postings show, by sign, and composes with `--related-all`. A zero amount counts as both signs, so it shows under `--pos` and `--neg`. |
 | `--neg`                    | off     | Show only postings whose amount is `<= 0`. The negative counterpart of `--pos`; zero amounts show under both. |
+| `-A`, `--amount EXPR`      | —       | Show only postings whose *signed* amount matches `EXPR`: an optional operator (`>`, `<`, `>=`, `<=`, `=`, `<>`) followed by a number, e.g. `-A '>100'` (above 100), `-A '<=-50'` (at most −50), `-A '=0'` (exactly zero), `-A '<>0'` (every non-zero amount). A bare number means `=`. Like `--pos` / `--neg` it narrows the postings after selection, and it feeds `-r` (see `--related`). |
 | `-d`, `--display PATTERN`  | —       | Show only postings whose account matches `PATTERN`, *after* transaction selection — the positional pattern picks which transactions, `-d` picks which of their postings. Runs on the full posting set, so `--related-all` isn't needed: `acc reg ^assets:vendor -d ^ex` shows the expense postings of the vendor transactions. Account-only: `^acc` (starts-with), `acc$` (ends-with), `^acc$` (exact), `acc` (substring); case-insensitive. The `reg` running total sums only the shown postings — unlike ledger's `-d`, which keeps hidden postings in the total. |
 | `--commodities N`          | —       | Keep only transactions whose balance-contributing postings use at least `N` distinct commodities; paren-virtual `(account)` postings are skipped. `--commodities 2` finds every currency-mixing transaction. |
 | `--mixed`                  | off     | Alias for `--commodities 2`: keep only transactions that mix at least two commodities. |
@@ -279,7 +282,7 @@ acc [GLOBAL OPTIONS] <COMMAND> [COMMAND OPTIONS] [ARGS]
 
 Running `acc` with no subcommand prints help.
 
-### `acc balance` (alias `bal`)
+### `acc balance`
 
 ```
 acc [GLOBAL OPTIONS] balance [OPTIONS] [PATTERN]...
@@ -297,7 +300,7 @@ with a [`label`](#account) show it dimmed after the name (`1000 (foo)`).
 
 Example output see the [Examples](#examples) section below.
 
-### `acc register` (alias `reg`)
+### `acc register`
 
 ```
 acc [GLOBAL OPTIONS] register [PATTERN]...
@@ -381,7 +384,7 @@ List every transaction code observed.
 ### `acc lint`
 
 ```
-acc [GLOBAL OPTIONS] lint [--base DIR] [--categories PREFIX...]
+acc [GLOBAL OPTIONS] lint [RULE] [--base DIR] [--categories PREFIX...] [--fix [-e]]
 ```
 
 Lint the journal: run all built-in consistency checks and report any
@@ -390,8 +393,11 @@ issues as warnings (never a hard failure). Each check reports `✓` (clean),
 
 | Flag                     | Default | Description |
 |--------------------------|---------|-------------|
-| `--base DIR`             | off     | Run the `dir-category` check: every transaction whose file lives in a direct sub-directory of `DIR` must categorise into that directory. `@…` directories and files directly in `DIR` are exempt. The sub-directory is found relative to `DIR`, so it works however the files were loaded (`-f .` from inside the folder, `-f subdir`, or the whole tree). |
-| `--categories PREFIX...` | off     | Account prefixes that count as *categories* (income / expense), e.g. `--categories '^in:' '^ex:'` (a leading `^` is optional). `dir-category` then only checks postings whose account starts with one of these — that category account must *end with* the folder's name as segments (`food-groceries` → `…:food:groceries`). A transaction with no category posting (a pure transfer) is skipped. Without `--categories`, `dir-category` can't tell a category account from a transfer, so it is skipped with a `!` warning. |
+| `RULE`                   | all     | Run just one check by its reported id: `commodity-casing`, `leaf-accounts`, `role-references`, or `dir-category`. Omit to run all. |
+| `--base DIR`             | `$BASE` | Run the `dir-category` check: every transaction whose file lives in a direct sub-directory of `DIR` must categorise into that directory. `@…` directories and files directly in `DIR` are exempt. The sub-directory is found relative to `DIR`, so it works however the files were loaded (`-f .` from inside the folder, `-f subdir`, or the whole tree). Falls back to the `$BASE` environment variable when the flag is omitted. |
+| `--categories PREFIX...` | off     | Account prefixes that count as *categories* (income / expense), e.g. `--categories '^in:' '^ex:'` (a leading `^` is optional). `dir-category` then checks *every* posting whose account starts with one of these — each such category account must *end with* the folder's name as segments (`food-groceries` → `…:food:groceries`). A transaction with no category posting (a pure transfer) is skipped. Without `--categories`, `dir-category` can't tell a category account from a transfer, so it is skipped with a `!` warning. |
+| `--fix`                  | off     | Preview the fixes for auto-fixable checks (currently only `dir-category`): each `old → new` account rewrite, writing nothing. Checks without a fixer still report. |
+| `-e`, `--execute`        | off     | Apply the `--fix` rewrites in place (atomic per file). Requires `--fix`. |
 
 Checks: `commodity-casing` (multi-char commodity symbols must be
 all-uppercase; single-char symbols like `$` `€` `£` are exempt),
@@ -399,7 +405,8 @@ all-uppercase; single-char symbols like `$` `€` `£` are exempt),
 has sub-accounts), `role-references` (every `$role:slot` reference must
 resolve to a declared account), and — with `--base` **and**
 `--categories` — `dir-category` (a category account's tail must match its
-folder).
+folder). `dir-category` is auto-fixable: `lint dir-category --fix` previews
+the account rewrites, `-e` applies them.
 
 ### `acc format`
 
@@ -565,13 +572,15 @@ acc -f journal.ledger rename foo:5 foo:4 -e
 acc -f journal.ledger rename '^foo:5' foo:4
 ```
 
-### `acc navigate` (aliases `nav`, `ui`)
+### `acc navigate`
 
 ```
 acc [GLOBAL OPTIONS] navigate [OPTIONS] [PATTERN]...
 ```
 
-Interactive TUI. Live-filter the account tree as you type.
+Interactive TUI. Live-filter the account tree as you type. Each row shows
+its balance in a right-aligned amount column, and — like `reg` — any
+account label inline as ` (label)`.
 
 | Flag             | Default | Description |
 |------------------|---------|-------------|
@@ -580,18 +589,19 @@ Interactive TUI. Live-filter the account tree as you type.
 
 Key bindings:
 
-| Key                  | Action                 |
-|----------------------|------------------------|
-| `↑` / `↓`            | Move cursor            |
-| `Enter` / `Space`    | Toggle expand/collapse |
-| `→`                  | Expand node            |
-| `←`                  | Collapse node          |
-| `PgUp` / `PgDn`      | Jump one page          |
-| `Ctrl-u` / `Ctrl-d`  | Half page up / down    |
-| `Home` / `End`       | First / last row       |
-| Type letters         | Live filter            |
-| `Backspace`          | Drop last filter char  |
-| `Esc` / `Ctrl+C`     | Quit                   |
+| Key                  | Action                     |
+|----------------------|----------------------------|
+| `↑` / `↓`            | Move cursor                |
+| `Enter` / `Space`    | Toggle expand/collapse     |
+| `→`                  | Expand node                |
+| `←`                  | Collapse node              |
+| `Tab`                | Fold / unfold the whole tree |
+| `PgUp` / `PgDn`      | Jump one page              |
+| `Ctrl-u` / `Ctrl-d`  | Half page up / down        |
+| `Home` / `End`       | First / last row           |
+| Type letters         | Live filter                |
+| `Backspace`          | Drop last filter char      |
+| `Esc` / `Ctrl+C`     | Quit                       |
 
 ### `acc update`
 
@@ -599,12 +609,12 @@ Key bindings:
 acc update [OPTIONS]
 ```
 
-Fetch exchange rates into `$ACC_PRICES`. Standalone — does not
+Fetch exchange rates into `$PRICES`. Standalone — does not
 read the journal.
 
 | Flag                  | Default | Description |
 |-----------------------|---------|-------------|
-| `--pair BASE/QUOTE`   | —       | Trading pair to update. Repeat `--pair` for multiple pairs. If omitted, every existing crypto file under `$ACC_PRICES/crypto/` is continued from the day after its last cached entry. |
+| `--pair BASE/QUOTE`   | —       | Trading pair to update. Repeat `--pair` for multiple pairs. If omitted, every existing crypto file under `$PRICES/crypto/` is continued from the day after its last cached entry. |
 | `--since DATE`        | —       | Overwrite data from `DATE` onwards (`YYYY-MM-DD`). Conflicts with `--date`. |
 | `--date DATE`         | —       | Fetch only this one date. Overrides `--since`. |
 | `--daily`             | on      | Daily cadence (default). |
@@ -625,8 +635,8 @@ Output locations:
 
 | Scope  | Path                                                        |
 |--------|-------------------------------------------------------------|
-| Crypto | `$ACC_PRICES/crypto/MEXC_{BASE}_{QUOTE}.ledger`         |
-| Fiat   | `$ACC_PRICES/fiat/{YYYY-MM-DD}.ledger`                  |
+| Crypto | `$PRICES/crypto/MEXC_{BASE}_{QUOTE}.ledger`         |
+| Fiat   | `$PRICES/fiat/{YYYY-MM-DD}.ledger`                  |
 
 ### `acc import`
 
@@ -663,8 +673,11 @@ payee SUPERMARKET => expenses:groceries   # override rule
 
 The counter account defaults to the payee slugified (lowercased, spaces
 → dashes); rules override only where that's wrong. A rule is `<field>
-<value> => <account>`, matching a column as a case-insensitive
-substring; combine conditions on one line with `;` (AND), separate
+<value> => <account>`, matching a column case-insensitively. Like the
+report filter, `<value>` matches as a **substring** by default, a leading
+`^` anchors the **start**, a trailing `$` the **end**, and `^…$` the whole
+field — so `payee ^SUPERMARKET` matches only payees beginning with
+`SUPERMARKET`. Combine conditions on one line with `;` (AND), separate
 lines for OR.
 
 **Internal transfers.** A movement between two of *your own* accounts can
@@ -698,7 +711,7 @@ stripped first, since acc's decimal parser rejects it.
 
 | Variable                    | Used by           | Description |
 |-----------------------------|-------------------|-------------|
-| `ACC_PRICES`            | main pipeline, `update` | Directory of rate files. When `-X` is set, the `.ledger` files under it are loaded before your own `-f` paths — selectively, keeping only the pairs the report's commodities can use. `acc update` writes here. |
+| `PRICES`            | main pipeline, `update` | Directory of rate files. When `-X` is set, the `.ledger` files under it are loaded before your own `-f` paths — selectively, keeping only the pairs the report's commodities can use. `acc update` writes here. |
 | `OPENEXCHANGERATES_API_KEY` | `update` (fiat)   | API key from [openexchangerates.org](https://openexchangerates.org). Required for fiat fetching. |
 
 ### Exit codes
@@ -1188,13 +1201,13 @@ If no path exists between a posting's commodity and the target,
 the posting stays in its original commodity. No error, just a
 remainder visible in the report.
 
-### `$ACC_PRICES`
+### `$PRICES`
 
 When `-X` is set, the `.ledger` files under the directory the env
 var points to supply the rates, loaded before your own `-f` paths:
 
 ```
-export ACC_PRICES=~/accounting/prices/
+export PRICES=~/accounting/prices/
 ```
 
 You can put both acc-fetched (`acc update`) and hand-written `P`
@@ -1563,7 +1576,7 @@ acc reg income:capital -X EUR    # per-disposal breakdown
 
 ## Rate updates (`acc update`)
 
-Fetches daily rates into `$ACC_PRICES` from two sources:
+Fetches daily rates into `$PRICES` from two sources:
 
 - **MEXC klines** for crypto (no API key required)
 - **openexchangerates.org** for fiat (needs
@@ -1573,9 +1586,9 @@ Fetches daily rates into `$ACC_PRICES` from two sources:
 
 Files are stored at:
 
-- Crypto: `$ACC_PRICES/crypto/MEXC_{BASE}_{QUOTE}.ledger`
+- Crypto: `$PRICES/crypto/MEXC_{BASE}_{QUOTE}.ledger`
   (one file per pair)
-- Fiat: `$ACC_PRICES/fiat/{YYYY-MM-DD}.ledger`
+- Fiat: `$PRICES/fiat/{YYYY-MM-DD}.ledger`
   (one file per day with all currencies)
 
 Rates are stored byte-for-byte as the API returned them — no
@@ -1590,7 +1603,7 @@ acc update --pair BTC/USDT --pair ETH/USDT
 acc update --pair BTC/USDT --since 2024-01-01
 acc update --pair BTC/USDT --date 2024-06-15
 
-# Refresh every existing crypto pair in $ACC_PRICES/crypto/
+# Refresh every existing crypto pair in $PRICES/crypto/
 acc update --crypto
 
 # Fiat
@@ -1940,7 +1953,7 @@ market rate.
 ### Does acc write to my journal files?
 
 No. Your journal is read-only from acc's perspective. The only
-thing that writes is `acc update`, and only to `$ACC_PRICES`.
+thing that writes is `acc update`, and only to `$PRICES`.
 
 ### Does acc make network calls?
 

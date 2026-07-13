@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acc"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -145,9 +145,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db8b397918185f0161ff3d6fcaa9e4bfc09b8367caf6e1d4a2848e5477ed027b"
 dependencies = [
  "clap",
- "clap_lex",
- "is_executable",
- "shlex",
 ]
 
 [[package]]
@@ -530,15 +527,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "is_executable"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82cb6a9f675da968c63b6208c641b9dca58fc0133ae53375736b1767b0cab8bd"
-dependencies = [
- "windows-sys 0.61.2",
 ]
 
 [[package]]

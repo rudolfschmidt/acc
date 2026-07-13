@@ -82,9 +82,48 @@ pub fn run(csv_path: &str, conf_path: &str, write: bool) -> Result<(), Error> {
 // profile
 // ---------------------------------------------------------------------
 
+/// How a rule condition matches its CSV field (case-insensitive). A bare
+/// value matches anywhere; `^` anchors the start, `$` the end, `^…$` the
+/// whole field — mirroring the report filter and `rename`.
+#[derive(Debug, Clone, Copy)]
+enum Match {
+    Contains,
+    StartsWith,
+    EndsWith,
+    Exact,
+}
+
+impl Match {
+    /// Split a raw value into its anchor mode and the core text (anchors
+    /// stripped). `^` / `$` are ASCII, so byte-slicing keeps UTF-8 valid.
+    fn parse(value: &str) -> (Match, &str) {
+        let start = value.starts_with('^');
+        let end = value.ends_with('$');
+        let core = &value[start as usize..value.len() - end as usize];
+        let mode = match (start, end) {
+            (true, true) => Match::Exact,
+            (true, false) => Match::StartsWith,
+            (false, true) => Match::EndsWith,
+            (false, false) => Match::Contains,
+        };
+        (mode, core)
+    }
+
+    /// Test an already-lowercased field against an already-lowercased
+    /// needle under this mode.
+    fn test(&self, haystack: &str, needle: &str) -> bool {
+        match self {
+            Match::Contains => haystack.contains(needle),
+            Match::StartsWith => haystack.starts_with(needle),
+            Match::EndsWith => haystack.ends_with(needle),
+            Match::Exact => haystack == needle,
+        }
+    }
+}
+
 struct Rule {
-    /// (field name, lowercased substring) — all must match.
-    conds: Vec<(String, String)>,
+    /// (field name, lowercased needle, anchor mode) — all must match.
+    conds: Vec<(String, String, Match)>,
     account: String,
 }
 
@@ -209,7 +248,8 @@ impl Profile {
                 if !fields.contains_key(fname) {
                     return Err(Error::from(format!("import: rule field '{}' has no field.* mapping", fname)));
                 }
-                conds.push((fname.to_string(), val.trim().to_lowercase()));
+                let (mode, core) = Match::parse(val.trim());
+                conds.push((fname.to_string(), core.to_lowercase(), mode));
             }
             rules.push(Rule { conds, account: acc });
         }
@@ -308,7 +348,7 @@ impl Profile {
             let hit = rule
                 .conds
                 .iter()
-                .all(|(field, val)| self.field_val(row, field).to_lowercase().contains(val));
+                .all(|(field, val, mode)| mode.test(&self.field_val(row, field).to_lowercase(), val));
             if hit {
                 return self.apply_template(&rule.account, row);
             }
