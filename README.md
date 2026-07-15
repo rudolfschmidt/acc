@@ -408,6 +408,11 @@ resolve to a declared account), and — with `--base` **and**
 folder). `dir-category` is auto-fixable: `lint dir-category --fix` previews
 the account rewrites, `-e` applies them.
 
+`lint` validates the **whole** journal on the source postings — it never
+hides forward-dated entries the way reports do (no `--future` needed), and
+it runs before enrichment, so it only ever flags what you actually wrote,
+not the synthetic postings the pipeline injects under `-X`.
+
 ### `acc format`
 
 ```

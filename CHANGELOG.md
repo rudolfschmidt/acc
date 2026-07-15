@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.18.1 — 2026-07-15
+
+### Wed 15 Jul 2026 - `lint` validates the whole journal, future included
+
+**`lint` no longer inherits the report pipeline's future cutoff.** Reports
+hide entries dated after today by default (togglable with `--future`), and
+because `lint` was dispatched *through* that pipeline it silently skipped
+every forward-dated transaction — a miscategorised posting in a
+forward-dated entry was invisible to `dir-category` until the date arrived.
+The symptom that surfaced it: a folder's last few (forward-dated) bookings
+were never flagged while the earlier ones were.
+
+The fix is structural: `lint` moves to the standalone dispatch path
+(alongside `format`, `sweep`, `rename`, …) instead of the report pipeline.
+It now parses and books the `-f` files directly and validates the result —
+so it sees the **whole** journal regardless of date, needs no `--future`,
+and runs on the **source** postings, before the enrichment phases inject
+their synthetic gain/loss / CTA postings (which a linter should never flag).
+A binary-level integration test pins the behaviour: a 2099-dated
+miscategorised posting must be reported.
+
 ## 0.18.0 — 2026-07-13
 
 ### Mon 13 Jul 2026 - amount filter, navigate amounts + labels, static completion

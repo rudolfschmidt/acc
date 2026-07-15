@@ -764,6 +764,42 @@ fn try_standalone(
             Some(acc::commands::rename::run(&rename_paths, old, new, *execute))
         }
 
+        // Lint validates the whole journal, so it must not go through the
+        // report pipeline: no date filter (a forward-dated typo is still a
+        // typo), no `-X` / sort, and no enrichment (the injected gain/loss /
+        // CTA postings are synthetic — a linter should only see what the user
+        // wrote). It parses + books the `-f` files directly, like sweep.
+        Command::Lint { rule, base, categories, fix, execute } => {
+            if paths.is_empty() {
+                eprintln!("Error: No files specified. Use -f PATH.");
+                std::process::exit(1);
+            }
+            let mut lint_paths: Vec<std::path::PathBuf> = Vec::new();
+            for input in paths {
+                let path = std::path::Path::new(input);
+                if path.is_dir() {
+                    collect_ledger_files(path, &mut lint_paths);
+                } else {
+                    lint_paths.push(path.to_path_buf());
+                }
+            }
+            let rule_names: Vec<String> = rule.iter().map(|r| r.as_str().to_string()).collect();
+            Some(
+                acc::load(&lint_paths)
+                    .map_err(|e| acc::Error::from(e.to_string()))
+                    .and_then(|j| {
+                        acc::commands::lint::run(
+                            &j,
+                            base.as_deref(),
+                            categories,
+                            &rule_names,
+                            *fix,
+                            *execute,
+                        )
+                    }),
+            )
+        }
+
         _ => None,
     }
 }
@@ -811,6 +847,8 @@ fn resolve_date_range(
 
     // The filter's `end` is exclusive, so `today+1` keeps everything up to
     // and including today. With an explicit `-e`/`-p`, take the earlier.
+    // Only report commands reach here (lint and the other standalone commands
+    // returned earlier), so the cutoff never touches a whole-journal check.
     let show_future = filter_args.map(|f| f.future).unwrap_or(false);
     let future_cap: Option<String> = (!show_future).then(|| {
         let today_str = acc::date::ms_to_date(acc::date::current_ms());
@@ -839,8 +877,8 @@ fn start() -> Result<(), acc::Error> {
         return Ok(());
     };
 
-    // Standalone commands (format, diff, update, sweep) bypass the report
-    // pipeline entirely and return here.
+    // Standalone commands (format, diff, update, sweep, rename, import,
+    // completions, lint) bypass the report pipeline entirely and return here.
     if let Some(result) = try_standalone(&command, &args.paths) {
         return result;
     }
@@ -850,9 +888,9 @@ fn start() -> Result<(), acc::Error> {
         std::process::exit(1);
     }
 
-    // Filter / convert flags for report-style commands. `None` for
-    // `lint` (runs a minimal load → validate path). `format` and
-    // `update` already returned above.
+    // Filter / convert flags for report-style commands. Only report commands
+    // reach here — the standalone commands (format, lint, update, …) already
+    // returned above via `try_standalone`.
     let filter_args: Option<&ReportArgs> = command.filter();
 
     // Price-DB files (`$PRICES`, only under `-X`) are kept separate
@@ -1058,14 +1096,6 @@ fn start() -> Result<(), acc::Error> {
         Command::Navigate { empty, .. } => {
             if let Err(e) = acc::commands::navigate::run(&journal, empty) {
                 eprintln!("navigate: {}", e);
-            }
-        }
-        Command::Lint { rule, base, categories, fix, execute } => {
-            let rule_names: Vec<String> = rule.iter().map(|r| r.as_str().to_string()).collect();
-            if let Err(e) =
-                acc::commands::lint::run(&journal, base.as_deref(), &categories, &rule_names, fix, execute)
-            {
-                eprintln!("lint: {}", e);
             }
         }
         _ => eprintln!("internal error: unexpected command reached match arm"),
