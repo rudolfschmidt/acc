@@ -428,9 +428,10 @@ enum Command {
     /// profile. Default is a dry-run (prints the additions as a diff);
     /// `--execute` appends them. Standalone — does not read the journal.
     Import {
-        /// The bank CSV export to import.
+        /// The CSV export to import. Omit for RPC-source profiles (e.g.
+        /// `source monero-rpc`), which pull their data from a wallet daemon.
         #[arg(value_hint = clap::ValueHint::FilePath)]
-        csv: String,
+        csv: Option<String>,
         /// The bank import profile (e.g. `bank.conf`).
         #[arg(short = 'c', long = "conf", value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
         conf: String,
@@ -703,9 +704,9 @@ fn try_standalone(
         // Import converts a bank CSV into ledger transactions. It reads the
         // target @cash file (for dedup) but never the journal as a whole.
         Command::Import { csv, conf, write } => {
-            let csv = expand_tilde(csv);
+            let csv = csv.as_ref().map(|c| expand_tilde(c));
             let conf = expand_tilde(conf);
-            Some(acc::commands::import::run(&csv, &conf, *write))
+            Some(acc::commands::import::run(csv.as_deref(), &conf, *write))
         }
 
         // Completions just prints a static script for the target shell —

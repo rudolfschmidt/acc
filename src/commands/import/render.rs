@@ -34,9 +34,15 @@ pub fn diff_preview(existing: &str, added: &str, count: usize, file: &Path, skip
     let existing_lines: Vec<&str> = existing.lines().collect();
     let total = existing_lines.len();
 
-    // The additions mirror exactly what `--execute` appended: a leading
-    // blank separator line, then the already-aligned transaction blocks.
-    let new_text = format!("\n{}", added.trim_end());
+    // The additions mirror exactly what `--execute` appended: a blank
+    // separator line before the already-aligned blocks — but only when there
+    // is existing content to separate from. A fresh file starts straight at
+    // the first transaction, no leading blank.
+    let new_text = if existing.trim().is_empty() {
+        added.trim_end().to_string()
+    } else {
+        format!("\n{}", added.trim_end())
+    };
     let new_lines: Vec<&str> = new_text.lines().collect();
 
     // Full-width green band: pad every addition out to the terminal width

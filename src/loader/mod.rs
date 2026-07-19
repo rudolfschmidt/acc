@@ -59,7 +59,13 @@ where
     P: AsRef<Path> + Sync,
 {
     let journal_entries = read_and_parse(journal_files)?;
-    let needed = needed_commodities(&journal_entries, target);
+    let mut needed = needed_commodities(&journal_entries, target);
+    // Widen `needed` with the bridge commodities on each conversion path, so a
+    // multi-hop `X → $ → target` survives the both-sides price filter even when
+    // the hub (`$`) is neither a posting commodity nor the target.
+    if let Some(t) = target {
+        add_bridge_commodities(&mut needed, &journal_entries, price_files, t);
+    }
     let price_entries = read_and_parse_filtered(price_files, &needed)?;
     // Prices first so journal declarations win on resolution — matches the
     // eager order where the price-dir files precede the user files.
@@ -143,11 +149,17 @@ fn needed_commodities(
     if let Some(t) = target {
         needed.insert(t.to_string());
     }
-    // Pull in every alias form, to a fixpoint: a `$ alias USD alias USDT`
-    // chain links all three via `$`, so one pass might miss a hop.
+    // Pull in every alias form: a `$ / USD / USDT` chain links all three.
+    expand_aliases(&mut needed, &alias_pairs);
+    needed
+}
+
+/// Grow `needed` to a fixpoint over the alias graph: if either side of an
+/// alias pair is needed, so is the other.
+fn expand_aliases(needed: &mut HashSet<String>, alias_pairs: &[(String, String)]) {
     loop {
         let mut grew = false;
-        for (canonical, alias) in &alias_pairs {
+        for (canonical, alias) in alias_pairs {
             if needed.contains(canonical) && needed.insert(alias.clone()) {
                 grew = true;
             }
@@ -159,7 +171,168 @@ fn needed_commodities(
             break;
         }
     }
-    needed
+}
+
+/// Add the intermediate ("bridge") commodities that lie on a conversion path
+/// from a journal commodity to `target`. Without this, a two-hop route like
+/// `XMR → $ → €` dies: `$` is neither a posting commodity nor the target, so
+/// the both-sides filter drops `XMR/USDT` and `USD/EUR` alike. The path is
+/// found over a graph built from the price DB's PAIR structure only — cheap
+/// next to the ~800k dated rates.
+fn add_bridge_commodities<P: AsRef<Path>>(
+    needed: &mut HashSet<String>,
+    journal_entries: &[Located<Entry>],
+    price_files: &[P],
+    target: &str,
+) {
+    // Alias map (any spelling → canonical) and the journal's own commodities.
+    let mut alias_pairs: Vec<(String, String)> = Vec::new();
+    let mut sources: HashSet<String> = HashSet::new();
+    for located in journal_entries {
+        match &located.value {
+            Entry::Transaction(tx) => {
+                for lp in &tx.postings {
+                    if let Some(a) = &lp.value.amount {
+                        sources.insert(a.commodity.clone());
+                    }
+                }
+            }
+            Entry::Commodity { symbol, aliases, .. } => {
+                for a in aliases {
+                    alias_pairs.push((symbol.clone(), a.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut canonical: HashMap<String, String> = HashMap::new();
+    for (sym, alias) in &alias_pairs {
+        canonical.insert(alias.clone(), sym.clone());
+    }
+    let canon = |c: &str| canonical.get(c).cloned().unwrap_or_else(|| c.to_string());
+
+    // Undirected commodity graph from the price-pair structure, canonicalized.
+    let mut adj: HashMap<String, HashSet<String>> = HashMap::new();
+    for (base, quote) in price_pair_graph(price_files) {
+        let (b, q) = (canon(&base), canon(&quote));
+        if b == q {
+            continue;
+        }
+        adj.entry(b.clone()).or_default().insert(q.clone());
+        adj.entry(q).or_default().insert(b);
+    }
+
+    let tgt = canon(target);
+    let mut on_path: HashSet<String> = HashSet::new();
+    for src in &sources {
+        let s = canon(src);
+        if s == tgt {
+            continue;
+        }
+        if let Some(path) = shortest_path(&adj, &s, &tgt) {
+            on_path.extend(path);
+        }
+    }
+    for c in on_path {
+        needed.insert(c);
+    }
+    // The graph is canonical; pull the raw alias spellings back in so the
+    // filter matches the symbols the price files are actually written in.
+    expand_aliases(needed, &alias_pairs);
+}
+
+/// Shortest commodity path `src … tgt` (inclusive) over the pair graph, or
+/// `None` if the two are not connected.
+fn shortest_path(
+    adj: &HashMap<String, HashSet<String>>,
+    src: &str,
+    tgt: &str,
+) -> Option<Vec<String>> {
+    use std::collections::VecDeque;
+    if src == tgt {
+        return Some(vec![src.to_string()]);
+    }
+    let mut prev: HashMap<String, String> = HashMap::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+    queue.push_back(src.to_string());
+    prev.insert(src.to_string(), src.to_string());
+    while let Some(node) = queue.pop_front() {
+        let Some(neighbors) = adj.get(&node) else {
+            continue;
+        };
+        for n in neighbors {
+            if prev.contains_key(n) {
+                continue;
+            }
+            prev.insert(n.clone(), node.clone());
+            if n == tgt {
+                let mut path = vec![tgt.to_string()];
+                let mut cur = tgt.to_string();
+                while cur != *src {
+                    cur = prev[&cur].clone();
+                    path.push(cur.clone());
+                }
+                return Some(path);
+            }
+            queue.push_back(n.clone());
+        }
+    }
+    None
+}
+
+/// The distinct commodity PAIRS in the price DB, read cheaply: each file is
+/// opened once and scanned only until its pairs stop being new (a single-pair
+/// crypto file stops almost at once; the first daily fiat file yields its full
+/// quote set; every later fiat file, sharing a base already scanned, stops on
+/// line one) — so this touches a few thousand lines, not the ~800k rates.
+fn price_pair_graph<P: AsRef<Path>>(files: &[P]) -> Vec<(String, String)> {
+    use std::io::{BufRead, BufReader};
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut bases_done: HashSet<String> = HashSet::new();
+    for file in files {
+        let Ok(f) = std::fs::File::open(file.as_ref()) else {
+            continue;
+        };
+        let mut reader = BufReader::new(f);
+        let mut line = String::new();
+        let mut base: Option<String> = None;
+        let mut stale = 0;
+        while stale < 16 {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let Some((b, q)) = parse_price_pair(&line) else {
+                continue;
+            };
+            if base.is_none() {
+                base = Some(b.to_string());
+                if bases_done.contains(b) {
+                    break; // a later daily file for an already-scanned base
+                }
+            }
+            if seen.insert((b.to_string(), q.to_string())) {
+                stale = 0;
+            } else {
+                stale += 1;
+            }
+        }
+        if let Some(b) = base {
+            bases_done.insert(b);
+        }
+    }
+    seen.into_iter().collect()
+}
+
+/// `P DATE BASE QUOTE RATE` → `(BASE, QUOTE)`; `None` for any other line.
+fn parse_price_pair(line: &str) -> Option<(&str, &str)> {
+    let mut it = line.split_whitespace();
+    if it.next()? != "P" {
+        return None;
+    }
+    it.next()?; // date
+    Some((it.next()?, it.next()?))
 }
 
 /// Parse price files in parallel, keeping only the `P` directives whose
@@ -302,6 +475,48 @@ mod tests {
         with_tmp("prices", src, |path| {
             let journal = load(&[path]).unwrap();
             assert!(journal.prices.find("USD", "EUR", "2024-06-16").is_some());
+        });
+    }
+
+    #[test]
+    fn shortest_path_finds_the_hub() {
+        let mut adj: HashMap<String, HashSet<String>> = HashMap::new();
+        for (a, b) in [("XMR", "$"), ("$", "€"), ("$", "£")] {
+            adj.entry(a.into()).or_default().insert(b.into());
+            adj.entry(b.into()).or_default().insert(a.into());
+        }
+        assert_eq!(shortest_path(&adj, "XMR", "€").unwrap(), vec!["€", "$", "XMR"]);
+        assert!(shortest_path(&adj, "XMR", "¥").is_none());
+    }
+
+    #[test]
+    fn bridge_commodities_pull_in_the_hub() {
+        // A journal holding only XMR, valued in € (`-X €`), needs the two-hop
+        // route XMR → $ → €. The hub `$` (and its raw spellings USD / USDT) is
+        // neither a posting commodity nor the target, so it must be pulled in
+        // explicitly or the bridge rates get filtered out.
+        let journal = "commodity $\n    alias USD\n    alias USDT\n\
+                       commodity €\n    alias EUR\n\
+                       2026-07-19 * x\n    a  1 XMR\n    b\n";
+        let xmr = "P 2026-07-19 XMR USDT 335.22\n";
+        let fiat = "P 2026-07-19 USD EUR 0.874355\n";
+        with_tmp("bridge-j", journal, |j| {
+            with_tmp("bridge-x", xmr, |x| {
+                with_tmp("bridge-e", fiat, |e| {
+                    let entries = read_and_parse(&[j]).unwrap();
+                    let mut needed = needed_commodities(&entries, Some("€"));
+                    assert!(!needed.contains("$"), "hub must not be needed yet");
+                    add_bridge_commodities(
+                        &mut needed,
+                        &entries,
+                        &[x.to_path_buf(), e.to_path_buf()],
+                        "€",
+                    );
+                    assert!(needed.contains("$"), "hub $ pulled onto the path");
+                    assert!(needed.contains("USDT"), "raw alias pulled in for the filter");
+                    assert!(needed.contains("USD"), "raw alias pulled in for the filter");
+                });
+            });
         });
     }
 

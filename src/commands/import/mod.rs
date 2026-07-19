@@ -11,6 +11,7 @@
 //! safe — a row already present in the ledger (matched on its embedded
 //! `; csv:` comment) is skipped.
 
+mod monero;
 mod render;
 
 use std::collections::HashMap;
@@ -20,7 +21,39 @@ use colored::Colorize;
 
 use crate::error::Error;
 
-pub fn run(csv_path: &str, conf_path: &str, write: bool) -> Result<(), Error> {
+pub fn run(csv_path: Option<&str>, conf_path: &str, write: bool) -> Result<(), Error> {
+    // A `source` directive routes to a non-CSV backend (e.g. a wallet RPC);
+    // without it the profile is a classic CSV import.
+    if let Some(source) = directive(&read(conf_path)?, "source") {
+        return match source.as_str() {
+            "monero-rpc" => monero::run(conf_path, write),
+            other => Err(Error::from(format!("import: unknown source '{}'", other))),
+        };
+    }
+    let csv_path = csv_path.ok_or_else(|| {
+        Error::from("import: this profile reads a CSV — pass the CSV file as the argument")
+    })?;
+    csv_run(csv_path, conf_path, write)
+}
+
+/// Read a single-word directive's value from a profile (skips `#` comments
+/// and `=>` rules). Used to peek at `source` before committing to a backend.
+fn directive(src: &str, key: &str) -> Option<String> {
+    for line in src.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.contains("=>") {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(char::is_whitespace)
+            && k.trim() == key
+        {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
+}
+
+fn csv_run(csv_path: &str, conf_path: &str, write: bool) -> Result<(), Error> {
     let profile = Profile::load(conf_path)?;
     let rows = parse_csv(&read(csv_path)?);
     let mut rows: Vec<Vec<String>> = rows.into_iter().skip(1).filter(|r| !is_blank(r)).collect();
@@ -606,11 +639,14 @@ fn read(path: &str) -> Result<String, Error> {
         .map_err(|e| Error::from(format!("import: read {}: {}", path, e)))
 }
 
-/// Append the already-aligned additions to the ledger, with a leading
-/// blank line so they're separated from whatever is already there.
+/// Append the already-aligned additions to the ledger. A blank line
+/// separates them from existing content, but a fresh (empty) file starts
+/// straight at the first transaction — no leading blank.
 fn append(path: &Path, added: &str) -> Result<(), Error> {
     use std::io::Write as _;
-    let body = format!("\n{}\n", added.trim_end());
+    let has_content = std::fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false);
+    let lead = if has_content { "\n" } else { "" };
+    let body = format!("{}{}\n", lead, added.trim_end());
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
