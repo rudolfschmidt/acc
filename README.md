@@ -646,16 +646,17 @@ Output locations:
 ### `acc import`
 
 ```
-acc import <CSV> -c <PROFILE> [--execute]
+acc import [<CSV>] -c <PROFILE> [--execute]
 ```
 
-Convert a bank's CSV export into ledger transactions via a per-bank
-profile and append them to a cash-account file. Standalone — it does
-not read the journal (only the target file, for de-duplication).
+Convert a bank's CSV export (or a coin wallet's RPC feed) into ledger
+transactions via a profile and append them to a cash-account file.
+Standalone — it does not read the journal (only the target file, for
+de-duplication).
 
 | Flag                  | Default | Description |
 |-----------------------|---------|-------------|
-| `<CSV>`               | —       | The bank CSV export to import (positional, required). |
+| `[<CSV>]`             | —       | The CSV export to import. Omit for RPC-source profiles (below), which pull from a wallet daemon instead of a file. |
 | `-c`, `--conf FILE`   | —       | The per-bank import profile (required). |
 | `-e`, `--execute`     | off     | Execute the import — append the new transactions to the target file. Without it a dry-run prints the additions as a diff and writes nothing. |
 
@@ -704,9 +705,19 @@ by the amount's sign — so both profiles that touch the pair produce the
 typed). A profile that declares `transfer` rows must also set
 `transfer.field` and `transfer.self`, or the import aborts.
 
+**RPC sources (no CSV).** Instead of a file, a profile can pull straight
+from a coin daemon's JSON-RPC: set `source monero-rpc` and point `rpc.url`
+at a local `monero-wallet-rpc`. acc calls `get_transfers`, books each
+transfer — a receive (amount only, the fee is the sender's), a send (amount
++ your fee), or a self-transfer (fee only, the amount returns to the same
+account) — and embeds the full RPC object as a `; rpc:` comment for the
+record. Dedup is on the on-chain `txid`; the same categorization grammar
+applies, matching the transfer's fields (`type`, `address`, `subaddr`,
+`payment_id`, `note`).
+
 Re-importing an overlapping export is safe: each transaction embeds its
-source row as a `; csv:` comment, and incoming rows already present
-(matched on the `identity` fields) are skipped. The write is
+source row as a `; csv:` (or `; rpc:`) comment, and rows already present
+(matched on the `identity`) are skipped. The write is
 append-only — existing entries are never rewritten. Appended transactions
 are aligned by the same in-memory formatter as `acc format`, so they match
 every other file; a thousands-separator comma in an amount (`1,190.00`) is
@@ -716,7 +727,7 @@ stripped first, since acc's decimal parser rejects it.
 
 | Variable                    | Used by           | Description |
 |-----------------------------|-------------------|-------------|
-| `PRICES`            | main pipeline, `update` | Directory of rate files. When `-X` is set, the `.ledger` files under it are loaded before your own `-f` paths — selectively, keeping only the pairs the report's commodities can use. `acc update` writes here. |
+| `PRICES`            | main pipeline, `update` | Directory of rate files. When `-X` is set, the `.ledger` files under it are loaded before your own `-f` paths — selectively, keeping only the pairs a report's conversions need, including the bridge pairs on a multi-hop path (e.g. `XMR → $ → €`). `acc update` writes here. |
 | `OPENEXCHANGERATES_API_KEY` | `update` (fiat)   | API key from [openexchangerates.org](https://openexchangerates.org). Required for fiat fetching. |
 
 ### Exit codes

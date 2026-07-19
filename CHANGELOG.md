@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.19.0 — 2026-07-19
+
+### Sun 19 Jul 2026 - crypto wallet import over RPC, and multi-hop `-X`
+
+**`import` can pull from a wallet daemon, no CSV.** A profile that sets
+`source monero-rpc` reads its transactions straight from a local
+`monero-wallet-rpc` over JSON-RPC (`get_transfers`) instead of a file. Each
+transfer is booked by what it actually is — a **receive** (amount only; the
+fee shown is the sender's, never yours), a **send** (amount + your network
+fee, three explicit postings with the counter last), or a **self-transfer**
+(the amount returns to the same account, so only the fee is a real cost:
+wallet → fee → wallet). The complete RPC object rides along as a `; rpc:`
+comment so nothing is lost, and dedup is on the on-chain `txid`. Getting the
+booking right took some digging into Monero's model: `get_transfers` lists
+one entry per *output*, so a transaction shows up several times under one
+txid (a real amount plus a 0-value padding output from the ≥2-output rule) —
+those are summed per txid; and the `fee` field appears on incoming entries
+too, so it is NOT a "you paid it" signal (which list the txid sits in — `in`
+vs `out` — is). The result is checked against ground truth: the sum of every
+wallet posting equals the wallet's `get_balance` to the piconero.
+
+**`-X` now resolves multi-hop conversions.** Valuing a commodity that only
+reaches the target through a bridge — `XMR → $ → €` — silently failed
+whenever the bridge (`$`) was neither a posting commodity nor the target:
+the selective price loader keeps a rate only when *both* its commodities are
+needed, so it dropped `XMR/USDT` and `USD/EUR` alike, and the amount stayed
+unconverted. (It worked from the full ledger, where a `$` posting pulled the
+hub in, but not from an isolated crypto file.) The loader now widens the
+needed set with the bridge commodities on each conversion path, found by a
+BFS over a graph built from the price DB's *pair structure only* — a few
+thousand lines, not the ~800k dated rates. The perf win of selective loading
+holds: a two-hop `-X €` costs ~2 ms over the one-hop `-X $`, and stays ~8×
+faster than loading the whole DB.
+
+**`import` no longer writes a leading blank line into a fresh file.** The
+blank separator before the appended block is emitted only when there is
+existing content to separate from; a brand-new cash file starts straight at
+its first transaction.
+
 ## 0.18.1 — 2026-07-15
 
 ### Wed 15 Jul 2026 - `lint` validates the whole journal, future included
