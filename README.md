@@ -694,26 +694,36 @@ this account's own in-transit identity and map each partner IBAN to the
 other account's name:
 
 ```
-transfer.field iban                     # which field holds the partner IBAN
-transfer.self  assets:transit:checking  # this account: prefix + own name
-transfer XX00…  savings                 # partner IBAN => other account's name
+transit.field iban                     # which field holds the partner IBAN
+transit.self  assets:transit:checking  # this account: prefix + own name
+transit XX00…  savings                 # partner IBAN => other account's name
 ```
 
 The counter account is built as `<prefix>:<sender>:<receiver>`, ordered
 by the amount's sign — so both profiles that touch the pair produce the
 *same* string and net (the direction comes from the money flow, never
-typed). A profile that declares `transfer` rows must also set
-`transfer.field` and `transfer.self`, or the import aborts.
+typed). A profile that declares `transit` rows must also set
+`transit.field` and `transit.self`, or the import aborts.
 
 **RPC sources (no CSV).** Instead of a file, a profile can pull straight
-from a coin daemon's JSON-RPC: set `source monero-rpc` and point `rpc.url`
-at a local `monero-wallet-rpc`. acc calls `get_transfers`, books each
+from a coin daemon's JSON-RPC: set `wallet.coin monero`; acc finds the running
+`monero-wallet-rpc` by matching `wallet.address` (no fixed port — it scans `wallet.ports` on `wallet.host`), then calls `get_transfers` and books each
 transfer — a receive (amount only, the fee is the sender's), a send (amount
 + your fee), or a self-transfer (fee only, the amount returns to the same
 account) — and embeds the full RPC object as a `; rpc:` comment for the
 record. Dedup is on the on-chain `txid`; the same categorization grammar
 applies, matching the transfer's fields (`type`, `address`, `subaddr`,
-`payment_id`, `note`).
+`payment_id`, `note`). A wallet with several accounts (major indices) books
+each to its own sub-account (`…:<label>`, or `…:<index>` when unlabelled).
+
+**Own↔own transfers between wallets.** Run one profile per wallet against the
+same daemons and a transfer from one of your wallets to another nets
+automatically: acc matches the two legs by shared `txid` across the running
+wallets — so it works even when the sending wallet cached no destination — and
+books a directional transit account whose leaf for each wallet is
+`<wallet.coin>-<last 4 of its address>`, derived purely from RPC (no other conf
+is read). Set `transit.self <prefix>`; for an account NOT on RPC (an exchange),
+map its address manually with `transit <address> <leaf>`.
 
 Re-importing an overlapping export is safe: each transaction embeds its
 source row as a `; csv:` (or `; rpc:`) comment, and rows already present
