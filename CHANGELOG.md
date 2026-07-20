@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.20.0 — 2026-07-20
+
+### Mon 20 Jul 2026 - multi-account wallets, own↔own transit, address discovery
+
+**Wallet-RPC import is found by address, not a fixed port.** A crypto profile
+no longer pins a port. It declares the wallet's own `wallet.address` plus a
+`wallet.host` and a `wallet.ports` range; acc scans that range, calls
+`get_address` on each running `monero-wallet-rpc`, and picks the one whose
+primary address matches — so the port is free to change, several wallets can
+share one range, and acc *verifies* it is talking to the wallet the profile
+means (a mismatch aborts instead of silently importing the wrong wallet). The
+old `source <coin>-rpc` selector became `wallet.coin <coin>`: its value is the
+coin, which also names the transit leaf (below); `rpc.url` is gone.
+
+**Every wallet account is imported, each to its own sub-account.** The RPC
+call now passes `all_accounts`, so a wallet with several accounts (Monero
+major indices) is read in full instead of only account 0. Each account books
+to `<output.account>:<label>` — the wallet label slugified, or the bare index
+when unlabelled — while a single-account wallet stays on the bare name (no
+noise suffix). A move between two accounts of the *same* wallet books as an
+explicit account→account transfer: out account, fee, in account.
+
+**Transfers between your own wallets net automatically, matched by txid.** Run
+one profile per wallet and a send from one to another is recognised as an
+internal transfer and booked to a *directional* transit account, so both legs
+— the send in one wallet's ledger, the receive in the other's — build the
+identical string and cancel to zero; a non-zero balance then means coin is
+still in flight. The match is the shared on-chain `txid`: acc reads the other
+running wallets' `in`/`out` lists and correlates. This is the only thing that
+can work, because a Monero receive reveals no sender and a restored wallet
+often cached no destination for a send — the counterpart address is simply
+unknown in one or both directions, but the txid is the same transaction seen
+from both wallets. Each wallet's transit leaf is derived as `<wallet.coin>-<last
+4 of its address>`, so both sides compute the same name from RPC alone — no
+wallet reads another's config. An account NOT on RPC (an exchange) is still
+mapped by hand with `transit <address> <leaf>`.
+
+**The `import` command split into per-source backends.** The monolithic
+importer is now a thin dispatcher over a `fiat` (CSV) and a `monero` (RPC)
+module that share the categorization grammar, the directional-transit helper,
+the diff preview and the IO helpers. The bank-side `transfer.*` directives
+were renamed to `transit.*` to match, so both sources speak one vocabulary.
+
 ## 0.19.0 — 2026-07-19
 
 ### Sun 19 Jul 2026 - crypto wallet import over RPC, and multi-hop `-X`
