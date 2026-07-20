@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.21.0 — 2026-07-20
+
+### Mon 20 Jul 2026 - Bitcoin & Litecoin import over one Core daemon
+
+**A Bitcoin Core-family import backend.** `wallet.coin bitcoin` and `litecoin`
+now import straight from a running Bitcoin Core-style daemon. bitcoind,
+litecoind and their forks speak byte-identical JSON-RPC, so a single backend
+serves the whole family — a new fork is one arm in the dispatcher, no new code.
+It contrasts with Monero on every connection detail: one daemon hosts every
+wallet by URL path (`…/wallet/<name>`), the RPC is built in (no separate wallet
+daemon), auth is the daemon's cookie file (or `wallet.user`/`wallet.pass`), and
+the wallet is named rather than address-scanned — so there is no port range to
+probe. A profile gives `wallet.rpc`, `wallet.name` and `wallet.cookie`; the
+commodity and coin come from the profile too, which is all that differs between
+the coins.
+
+**Booking, filtering, transit.** acc reads `listtransactions` and books a
+receive (amount only), a send (amount + its own fee posting) or a self-send
+(fee only), amounts in the coin's base units at full 8-decimal length and the
+whole RPC object kept as a `; rpc:` comment. Transactions the daemon reports as
+replaced (RBF — negative confirmations) or abandoned are dropped: they never
+settled, and booking one would double-count against its replacement. Own↔own
+transfers between your wallets net the same way as Monero — matched by shared
+on-chain `txid`, here against the daemon's other loaded wallets
+(`listwallets`) — with each wallet's transit leaf derived as `<coin>-<wallet
+name>`. The categorization grammar carries over, matching `category`,
+`address`, `label` and `txid`.
+
+**One coin-neutral backend.** What began as a `bitcoin` module is now
+`bitcoincore`, shared verbatim by both coins; the Bitcoin-specific default (the
+cookie path) was removed — it must be given, since it differs per coin — and
+the error strings made coin-agnostic.
+
 ## 0.20.0 — 2026-07-20
 
 ### Mon 20 Jul 2026 - multi-account wallets, own↔own transit, address discovery

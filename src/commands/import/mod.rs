@@ -1,9 +1,10 @@
 //! `import` command — dispatch a per-profile import to its source backend
-//! (`fiat` CSV files or a `monero` wallet RPC) and append the new, deduped
-//! transactions to a `@cash` file. This module holds the dispatcher plus the
-//! vocabulary every source shares: the categorization `Rule` grammar, the
-//! diff preview, and the small IO helpers.
+//! (`fiat` CSV files, a `monero` wallet RPC, or a `bitcoin`/`litecoin` Bitcoin
+//! Core-family RPC) and append the new, deduped transactions to a `@cash` file.
+//! This module holds the dispatcher plus the vocabulary every source shares:
+//! the categorization `Rule` grammar, the diff preview, and the small IO helpers.
 
+mod bitcoincore;
 mod fiat;
 mod monero;
 mod render;
@@ -19,6 +20,8 @@ pub fn run(csv_path: Option<&str>, conf_path: &str, write: bool) -> Result<(), E
     if let Some(coin) = directive(&read(conf_path)?, "wallet.coin") {
         return match coin.as_str() {
             "monero" => monero::run(conf_path, write),
+            // bitcoind, litecoind and other Bitcoin Core forks speak identical RPC.
+            "bitcoin" | "litecoin" => bitcoincore::run(conf_path, write),
             other => Err(Error::from(format!("import: unknown wallet.coin '{}'", other))),
         };
     }

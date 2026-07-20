@@ -716,14 +716,28 @@ applies, matching the transfer's fields (`type`, `address`, `subaddr`,
 `payment_id`, `note`). A wallet with several accounts (major indices) books
 each to its own sub-account (`…:<label>`, or `…:<index>` when unlabelled).
 
-**Own↔own transfers between wallets.** Run one profile per wallet against the
-same daemons and a transfer from one of your wallets to another nets
-automatically: acc matches the two legs by shared `txid` across the running
-wallets — so it works even when the sending wallet cached no destination — and
-books a directional transit account whose leaf for each wallet is
-`<wallet.coin>-<last 4 of its address>`, derived purely from RPC (no other conf
-is read). Set `transit.self <prefix>`; for an account NOT on RPC (an exchange),
-map its address manually with `transit <address> <leaf>`.
+**Bitcoin & Litecoin (one Core daemon).** `wallet.coin bitcoin` or `litecoin`
+targets a Bitcoin Core-family daemon instead — bitcoind, litecoind and their
+forks speak identical JSON-RPC, so one backend serves them all. A single daemon
+hosts every wallet by URL path, so there is no port scan: give its base URL
+(`wallet.rpc http://127.0.0.1:8332`), the wallet name (`wallet.name main`,
+which is also its transit leaf) and the cookie file (`wallet.cookie
+~/.bitcoin/.cookie`, or `wallet.user` + `wallet.pass`). acc reads
+`listtransactions`, books a receive/send/self-send the same way, and drops
+transactions the daemon reports as replaced (RBF, negative confirmations) or
+abandoned — they never settled. Rule fields are `category`, `address`, `label`,
+`txid`.
+
+**Own↔own transfers between wallets.** Run one profile per wallet and a
+transfer from one of your wallets to another nets automatically: acc matches
+the two legs by shared `txid` across your other wallets — for Monero the
+running wallet-rpc endpoints, for Bitcoin/Litecoin the same daemon's other
+loaded wallets — so it works even when the sending wallet cached no
+destination. It books a directional transit account whose leaf for each wallet
+is `<wallet.coin>-<last 4 of its address>` (Monero) or `<wallet.coin>-<wallet
+name>` (Bitcoin Core), derived purely from RPC — no other conf is read. Set
+`transit.self <prefix>`; for an account NOT on RPC (an exchange), map its
+address manually with `transit <address> <leaf>`.
 
 Re-importing an overlapping export is safe: each transaction embeds its
 source row as a `; csv:` (or `; rpc:`) comment, and rows already present
