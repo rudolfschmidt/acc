@@ -716,6 +716,19 @@ applies, matching the transfer's fields (`type`, `address`, `subaddr`,
 `payment_id`, `note`). A wallet with several accounts (major indices) books
 each to its own sub-account (`…:<label>`, or `…:<index>` when unlabelled).
 
+**Haveno trades (Monero).** Haveno runs its own Monero wallet, so adding a
+`haveno.*` block to that wallet's profile enriches the import: acc pulls the
+completed trades from a running `haveno-daemon` (over gRPC via the `grpcurl`
+CLI) and books each trade's two on-chain legs — matched to a wallet transfer by
+`txid` — as swap entries. The funding leg splits the outgoing XMR into the fee,
+the security deposit set aside, and the net XMR traded `@@` the fiat; the payout
+leg returns the deposit (and records the fiat paid for a buy). The amounts come
+from the trade, while the wallet transaction stays as the `; rpc:` source. Give
+`haveno.port`, `haveno.pass` (the daemon's API password), `haveno.proto` (its
+`.proto` directory) and the clearing accounts `haveno.deposit` / `haveno.swap`;
+the internal wallet-rpc's digest login goes in `wallet.login`. Every other
+transfer stays a plain Monero booking.
+
 **Bitcoin & Litecoin (one Core daemon).** `wallet.coin bitcoin` or `litecoin`
 targets a Bitcoin Core-family daemon instead — bitcoind, litecoind and their
 forks speak identical JSON-RPC, so one backend serves them all. A single daemon
