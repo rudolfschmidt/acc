@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.22.0 — 2026-07-21
+
+### Tue 21 Jul 2026 - Haveno trade import, and one shared wallet-RPC core
+
+**Haveno DEX trades book as swaps.** A `monero` profile that carries a
+`haveno.*` block now enriches the import with the completed trades from a
+running `haveno-daemon`, read over gRPC (through the `grpcurl` CLI — the daemon
+ships no reflection, so Haveno's `.proto` is supplied explicitly). Haveno runs
+its own Monero wallet, so its transfers already flow through the monero backend;
+when a transfer's `txid` matches a trade's on-chain leg, acc books it as that
+trade instead of a plain transfer. The funding leg splits the outgoing XMR into
+the network fee, the security deposit set aside, and the net traded XMR swapped
+`@@` the fiat received; the payout leg returns the deposit and, for a buy,
+records the fiat paid for the XMR that arrived. Every amount comes from the trade
+itself — the wallet transaction is kept verbatim as the `; rpc:` source, exactly
+like any other booking. All other transfers stay plain monero bookings.
+
+**One wallet-RPC core for every coin.** The `monero` and Bitcoin Core backends
+had grown ~85% identical — the same group-by-txid transaction model, the same
+receive / send / self-move rendering, the same rule and transit categorization.
+That is now a single coin-agnostic core: each backend supplies only its
+specifics (amount precision, how the daemon's transaction object is parsed,
+endpoint discovery) and embeds the shared wallet. The JSON-RPC transport is
+likewise one client with pluggable auth — none, HTTP Basic (Bitcoin Core), or
+Digest (a login-protected wallet-rpc, such as Haveno's internal one) — and every
+backend now ends on one shared step that formats, appends and previews the
+additions uniformly, so no backend can drift. The import module keeps only what
+every source shares, the CSV path included; anything used by just the wallet-RPC
+backends lives beside them. Each backend file is named for its source and
+method — `monero_rpc.rs`, `bitcoin_rpc.rs` and `litecoin_rpc.rs` (thin entries
+forwarding to the shared `bitcoin_lib.rs`), `fiat_csv.rs` — with the
+coin-agnostic core in `crypto_lib.rs`, so a file's name states how it imports.
+
 ## 0.21.0 — 2026-07-20
 
 ### Mon 20 Jul 2026 - Bitcoin & Litecoin import over one Core daemon

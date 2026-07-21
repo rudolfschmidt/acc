@@ -7,11 +7,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use colored::Colorize;
-
 use crate::error::Error;
 
-use super::{append, expand, read, render, slug, Match, Rule, Transit};
+use super::{expand, read, slug, Match, Rule, Transit};
 
 pub(super) fn run(csv_path: &str, conf_path: &str, write: bool) -> Result<(), Error> {
     let profile = Profile::load(conf_path)?;
@@ -47,28 +45,7 @@ pub(super) fn run(csv_path: &str, conf_path: &str, write: bool) -> Result<(), Er
         new_blocks.push(profile.render_transaction(row));
     }
 
-    if new_blocks.is_empty() {
-        println!(
-            "{} import: {} rows read, all already present — nothing new.",
-            "!".yellow(),
-            rows.len()
-        );
-        return Ok(());
-    }
-
-    // Align the additions exactly like `acc format`, in memory, by reusing
-    // the format command — so imported entries line up with every other
-    // file instead of a fixed wide column of our own.
-    let added = crate::commands::format::format_source(&new_blocks.join("\n\n"), false)?;
-
-    // Append first (when writing) — `existing` is already snapshotted, so
-    // the diff still renders against the pre-write state — then show the
-    // same diff in both modes; only the header differs (Preview vs Update).
-    if write {
-        append(&profile.output_file, &added)?;
-    }
-    render::diff_preview(&existing, &added, new_blocks.len(), &profile.output_file, skipped, write);
-    Ok(())
+    super::emit(&new_blocks, rows.len(), "rows", &existing, &profile.output_file, skipped, write)
 }
 
 // ---------------------------------------------------------------------

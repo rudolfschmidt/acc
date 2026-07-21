@@ -9,29 +9,36 @@
 //! matched by shared `txid` against the daemon's other loaded wallets, each
 //! wallet's leaf being `<coin>-<wallet name>`. Amounts are the coin's base
 //! units (10^8 per coin), written at full 8-decimal length.
+//!
+//! The tx model, categorization, and rendering are the shared crypto-wallet
+//! core ([`super::crypto_lib`]); this backend only supplies the Bitcoin specifics:
+//! the `listtransactions`/`listwallets` RPC, dead-tx filtering, and the tx-shape
+//! dispatch (Bitcoin has one account, so no inter-account move or fee-only churn).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use colored::Colorize;
 use serde_json::Value;
 
 use crate::error::Error;
 
-use super::{append, expand, read, slug, Match, Rule};
+use super::crypto_lib::{aggregate, existing_txids, Group, Tx, Wallet};
+use super::{expand, read, Match, Rule};
 
 /// The transaction fields a categorization rule may match on.
 const FIELDS: &[&str] = &["category", "address", "label", "txid"];
 /// Satoshis per BTC (10^8).
 const SATS: i128 = 100_000_000;
+/// Decimal places BTC/LTC is written at (satoshis, 10^8).
+const DECIMALS: u32 = 8;
 
 pub fn run(conf_path: &str, write: bool) -> Result<(), Error> {
     let mut profile = Profile::load(conf_path)?;
     // Own↔own transit, matched by txid against the daemon's OTHER wallets.
     let (incoming, outgoing) = transit_maps(&profile);
-    profile.incoming_transits = incoming;
-    profile.outgoing_transits = outgoing;
+    profile.wallet.incoming_transits = incoming;
+    profile.wallet.outgoing_transits = outgoing;
     let groups = fetch(&profile.wallet_url(), &profile.auth)?;
 
     let existing = std::fs::read_to_string(&profile.output_file).unwrap_or_default();
@@ -47,28 +54,7 @@ pub fn run(conf_path: &str, write: bool) -> Result<(), Error> {
         blocks.push(profile.render(g));
     }
 
-    if blocks.is_empty() {
-        println!(
-            "{} import: {} transactions read, all already present — nothing new.",
-            "!".yellow(),
-            groups.len()
-        );
-        return Ok(());
-    }
-
-    let added = crate::commands::format::format_source(&blocks.join("\n\n"), false)?;
-    if write {
-        append(&profile.output_file, &added)?;
-    }
-    super::render::diff_preview(
-        &existing,
-        &added,
-        blocks.len(),
-        &profile.output_file,
-        skipped,
-        write,
-    );
-    Ok(())
+    super::emit(&blocks, groups.len(), "transactions", &existing, &profile.output_file, skipped, write)
 }
 
 // ---------------------------------------------------------------------
@@ -76,27 +62,13 @@ pub fn run(conf_path: &str, write: bool) -> Result<(), Error> {
 // ---------------------------------------------------------------------
 
 struct Profile {
-    rpc: String,     // daemon base URL, e.g. http://127.0.0.1:8332
-    name: String,    // wallet name — the URL path AND the transit leaf
-    auth: String,    // ready-made `Basic <base64>` Authorization header
-    coin: String,    // from `wallet.coin` — the transit leaf's commodity part
+    /// The shared crypto-wallet core: config + render/categorize/transit.
+    wallet: Wallet,
+    rpc: String,  // daemon base URL, e.g. http://127.0.0.1:8332
+    name: String, // wallet name — the URL path AND the transit leaf
+    auth: String, // ready-made `Basic <base64>` Authorization header
+    coin: String, // from `wallet.coin` — the transit leaf's commodity part
     output_file: PathBuf,
-    title: String,
-    account: String,
-    commodity: String,
-    fee_account: String,
-    rules: Vec<Rule>,
-    default_account: String,
-    transit_prefix: Option<String>,
-    /// Manual own↔own transits for accounts NOT on this daemon (exchanges):
-    /// (exact destination address, that account's leaf).
-    transit_entries: Vec<(String, String)>,
-    /// txid → SENDER wallet name (from other wallets' `send` entries); a
-    /// receive whose txid is here came from that wallet.
-    incoming_transits: HashMap<String, String>,
-    /// txid → RECIPIENT wallet name (from other wallets' `receive` entries); a
-    /// send whose txid is here went to that wallet.
-    outgoing_transits: HashMap<String, String>,
 }
 
 impl Profile {
@@ -173,22 +145,34 @@ impl Profile {
             rules.push(Rule { conds, account: acc });
         }
 
-        Ok(Profile {
-            rpc: get("wallet.rpc")?,
-            name: get("wallet.name")?,
-            auth: auth_header(&directives)?,
-            coin: get("wallet.coin")?,
-            output_file: expand(&get("output.file")?),
+        let coin = get("wallet.coin")?;
+        let name = get("wallet.name")?;
+        let wallet = Wallet {
             title: get("output.title")?,
             account: get("output.account")?,
             commodity: get("output.commodity")?,
+            decimals: DECIMALS,
             fee_account,
             rules,
             default_account,
             transit_prefix,
+            // This wallet's own transit leaf; both sides know the names via
+            // `listwallets`, so they build the same string.
+            own_leaf: format!("{}-{}", coin, name),
             transit_entries: raw_transits,
+            // Bitcoin Core has a single account per wallet → the bare account.
+            accounts: Vec::new(),
             incoming_transits: HashMap::new(),
             outgoing_transits: HashMap::new(),
+        };
+
+        Ok(Profile {
+            wallet,
+            rpc: get("wallet.rpc")?,
+            name,
+            auth: auth_header(&directives)?,
+            coin,
+            output_file: expand(&get("output.file")?),
         })
     }
 
@@ -197,204 +181,33 @@ impl Profile {
         format!("{}/wallet/{}", self.rpc.trim_end_matches('/'), self.name)
     }
 
+    /// Dispatch one grouped transaction to the shared renderer by its shape.
+    /// Bitcoin has a single account per wallet, so the only shapes are a
+    /// self-send (both legs), an outgoing send, and a receive.
     fn render(&self, g: &Group) -> String {
+        let w = &self.wallet;
         match (&g.receive, &g.send) {
             // Both legs on the same txid → a send to one of our own addresses:
             // the amount returns to us, only the fee is a real cost.
-            (Some(_), Some(send)) => self.render_self(send),
+            (Some(_), Some(send)) => w.render_self(send),
             // A send we created.
-            (_, Some(send)) => self.render_out(send),
+            (_, Some(send)) => w.render_out(send),
             // A genuine receive — the fee is the sender's, never ours.
-            (Some(recv), None) => self.render_in(recv),
+            (Some(recv), None) => w.render_in(recv),
             (None, None) => String::new(),
         }
     }
-
-    fn header(&self, t: &Tx) -> String {
-        let date = crate::date::ms_to_date(t.time.saturating_mul(1000));
-        let rpc = serde_json::to_string(&t.raw).unwrap_or_default();
-        format!("{} * {}\n\t; rpc: {}\n", date, self.title, rpc)
-    }
-
-    /// Receive: the wallet gains `amount`; the fee is the sender's, not booked.
-    /// Two postings, so the counter is left bare to auto-balance.
-    fn render_in(&self, t: &Tx) -> String {
-        let counter = self.incoming_counter(t);
-        let mut s = self.header(t);
-        s.push_str(&format!("\t{}  {}{}\n", self.account, self.commodity, btc(t.amount)));
-        s.push_str(&format!("\t{}", counter));
-        s
-    }
-
-    /// Send: the wallet loses `amount + fee`, the fee is its own posting, and
-    /// the categorized counter gains `amount` — always the LAST posting.
-    fn render_out(&self, t: &Tx) -> String {
-        let counter = self.categorize(t);
-        let mut s = self.header(t);
-        s.push_str(&format!(
-            "\t{}  {}-{}\n",
-            self.account,
-            self.commodity,
-            btc(t.amount.abs() + t.fee)
-        ));
-        s.push_str(&format!("\t{}  {}{}\n", self.fee_account, self.commodity, btc(t.fee)));
-        s.push_str(&format!("\t{}  {}{}", counter, self.commodity, btc(t.amount.abs())));
-        s
-    }
-
-    /// Self-send: `amount` leaves the wallet and returns to it with the fee
-    /// between — the fee is the only real cost.
-    fn render_self(&self, t: &Tx) -> String {
-        let mut s = self.header(t);
-        s.push_str(&format!(
-            "\t{}  {}-{}\n",
-            self.account,
-            self.commodity,
-            btc(t.amount.abs() + t.fee)
-        ));
-        s.push_str(&format!("\t{}  {}{}\n", self.fee_account, self.commodity, btc(t.fee)));
-        s.push_str(&format!("\t{}  {}{}", self.account, self.commodity, btc(t.amount.abs())));
-        s
-    }
-
-    /// The transit leaf for a wallet: `<coin>-<wallet name>`, e.g. `bitcoin-main`.
-    /// Both sides know the names via `listwallets`, so they build the same string.
-    fn transit_leaf(&self, wallet_name: &str) -> String {
-        format!("{}-{}", self.coin, wallet_name)
-    }
-
-    /// The directional transit account for a transfer to `other` (a leaf) —
-    /// `None` when transit isn't configured (no `transit.self`).
-    fn transit_account(&self, other: &str, outgoing: bool) -> Option<String> {
-        self.transit_prefix.as_ref().map(|p| {
-            super::directional_account(p, &self.transit_leaf(&self.name), other, outgoing)
-        })
-    }
-
-    /// Counter for a receive: if the txid matches a send from another of my
-    /// wallets, book the SAME directional transit account (so both legs net);
-    /// the sender leaf comes from its wallet name. Otherwise categorize.
-    fn incoming_counter(&self, t: &Tx) -> String {
-        if let Some(sender) = self.incoming_transits.get(&t.txid)
-            && let Some(acct) = self.transit_account(&self.transit_leaf(sender), false)
-        {
-            return acct;
-        }
-        self.categorize(t)
-    }
-
-    /// Counter for a send: an internal transfer to another of my wallets —
-    /// matched by txid (its recipient wallet) — or a manually-mapped non-RPC
-    /// account matched by destination address; then a rule; else the default.
-    fn categorize(&self, t: &Tx) -> String {
-        let other = self
-            .outgoing_transits
-            .get(&t.txid)
-            .map(|recipient| self.transit_leaf(recipient))
-            .or_else(|| {
-                self.transit_entries
-                    .iter()
-                    .find(|(a, _)| a == &t.address)
-                    .map(|(_, leaf)| leaf.clone())
-            });
-        if let Some(other) = other
-            && let Some(acct) = self.transit_account(&other, true)
-        {
-            return acct;
-        }
-        let tmpl = super::match_account(&self.rules, |f| t.field(f))
-            .unwrap_or(self.default_account.as_str());
-        self.template(tmpl, t)
-    }
-
-    fn template(&self, tmpl: &str, t: &Tx) -> String {
-        let mut out = tmpl.to_string();
-        if out.contains("{address4}") {
-            let a = &t.address;
-            let tail = a.get(a.len().saturating_sub(4)..).unwrap_or("").to_string();
-            out = out.replace("{address4}", &tail);
-        }
-        if out.contains("{label}") {
-            out = out.replace("{label}", &slug(&t.label));
-        }
-        if out.contains("{type}") {
-            out = out.replace("{type}", &t.category);
-        }
-        out
-    }
-}
-
-// ---------------------------------------------------------------------
-// transactions
-// ---------------------------------------------------------------------
-
-struct Tx {
-    txid: String,
-    category: String,
-    amount: i128, // satoshis, signed (negative for a send)
-    fee: i128,    // satoshis, magnitude (0 on receives)
-    time: u64,
-    address: String,
-    label: String,
-    raw: Value,
-}
-
-impl Tx {
-    fn field(&self, name: &str) -> String {
-        match name {
-            "category" => self.category.clone(),
-            "address" => self.address.clone(),
-            "label" => self.label.clone(),
-            "txid" => self.txid.clone(),
-            _ => String::new(),
-        }
-    }
-}
-
-/// All entries sharing one txid: a `send` leg, a `receive` leg, or both (a
-/// send to one of our own addresses).
-struct Group {
-    txid: String,
-    time: u64,
-    send: Option<Tx>,
-    receive: Option<Tx>,
 }
 
 // ---------------------------------------------------------------------
 // rpc
 // ---------------------------------------------------------------------
 
-/// One JSON-RPC round-trip to `bitcoind`; returns the `result` object or an
-/// error. Bitcoin Core answers RPC errors with a non-2xx status and a JSON
-/// error body, so the body is read on both the ok and status-error paths.
+/// One JSON-RPC round-trip to `bitcoind`, via the shared client. `auth` is the
+/// ready `Basic …` header; the client reads the body on both the ok and the
+/// non-2xx paths, since Bitcoin Core returns RPC errors as a status + JSON body.
 fn rpc_call(url: &str, auth: &str, method: &str, params: Value) -> Result<Value, Error> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(30))
-        .build();
-    let body = serde_json::json!({
-        "jsonrpc": "1.0", "id": "acc", "method": method, "params": params
-    })
-    .to_string();
-    let text = match agent
-        .post(url)
-        .set("Content-Type", "application/json")
-        .set("Authorization", auth)
-        .send_string(&body)
-    {
-        Ok(r) => r.into_string(),
-        Err(ureq::Error::Status(_, r)) => r.into_string(),
-        Err(e) => return Err(Error::from(format!("import: core-rpc {}: {}", url, e))),
-    }
-    .map_err(|e| Error::from(format!("import: core-rpc read {}: {}", url, e)))?;
-
-    let resp: Value = serde_json::from_str(&text)
-        .map_err(|e| Error::from(format!("import: core-rpc bad JSON: {}", e)))?;
-    if let Some(err) = resp.get("error").filter(|e| !e.is_null()) {
-        return Err(Error::from(format!("import: core-rpc error: {}", err)));
-    }
-    resp.get("result")
-        .cloned()
-        .ok_or_else(|| Error::from("import: core-rpc: response has no result"))
+    super::rpc::call(url, method, params, &super::rpc::Auth::Basic(auth), "1.0", Duration::from_secs(30))
 }
 
 /// Every wallet transaction, walking `listtransactions` in pages of 1000.
@@ -417,8 +230,9 @@ fn list_transactions(url: &str, auth: &str) -> Result<Vec<Value>, Error> {
 
 /// Build the two transit maps from the daemon's OTHER loaded wallets (found by
 /// `listwallets`), keyed by txid: their `send` entries → `incoming` (sender
-/// wallet name, for my receives); their `receive` entries → `outgoing`
-/// (recipient wallet name, for my sends). No other conf is read.
+/// leaf, for my receives); their `receive` entries → `outgoing` (recipient
+/// leaf, for my sends). Each leaf is `<coin>-<wallet name>`, computed here so
+/// the shared code needs no coin knowledge. No other conf is read.
 fn transit_maps(p: &Profile) -> (HashMap<String, String>, HashMap<String, String>) {
     let mut incoming = HashMap::new();
     let mut outgoing = HashMap::new();
@@ -440,6 +254,7 @@ fn transit_maps(p: &Profile) -> (HashMap<String, String>, HashMap<String, String
         let Ok(txs) = list_transactions(&url, &p.auth) else {
             continue;
         };
+        let leaf = format!("{}-{}", p.coin, name);
         for t in &txs {
             if is_dead(t) {
                 continue;
@@ -449,10 +264,10 @@ fn transit_maps(p: &Profile) -> (HashMap<String, String>, HashMap<String, String
             };
             match t.get("category").and_then(|v| v.as_str()) {
                 Some("send") => {
-                    incoming.entry(txid.to_string()).or_insert_with(|| name.clone());
+                    incoming.entry(txid.to_string()).or_insert_with(|| leaf.clone());
                 }
                 Some("receive") => {
-                    outgoing.entry(txid.to_string()).or_insert_with(|| name.clone());
+                    outgoing.entry(txid.to_string()).or_insert_with(|| leaf.clone());
                 }
                 _ => {}
             }
@@ -494,19 +309,6 @@ fn fetch(url: &str, auth: &str) -> Result<Vec<Group>, Error> {
     Ok(groups)
 }
 
-/// Merge the entries of one txid+direction: sum the amounts and keep the
-/// largest as representative (its raw object + fields carry the meaningful
-/// data). The fee is a per-transaction value, so it is taken once, not summed.
-fn aggregate(mut legs: Vec<Tx>) -> Tx {
-    legs.sort_by_key(|t| std::cmp::Reverse(t.amount.abs()));
-    let total: i128 = legs.iter().map(|t| t.amount).sum();
-    let fee = legs.iter().map(|t| t.fee).max().unwrap_or(0);
-    let mut repr = legs.into_iter().next().expect("aggregate: non-empty legs");
-    repr.amount = total;
-    repr.fee = fee;
-    repr
-}
-
 /// A transaction Bitcoin Core reports as conflicted or replaced (negative
 /// confirmations) or manually abandoned never settled on-chain — booking it
 /// would double-count against its replacement, so it is skipped.
@@ -521,14 +323,25 @@ fn parse_tx(obj: &Value) -> Result<Tx, Error> {
     if txid.is_empty() {
         return Err(Error::from("import: core-rpc: transaction without txid"));
     }
+    let category = str_of("category");
+    let mut fields = HashMap::new();
+    fields.insert("category".to_string(), category.clone());
+    // `{type}` in a target template resolves to the category (send/receive/…).
+    fields.insert("type".to_string(), category.clone());
+    fields.insert("address".to_string(), str_of("address"));
+    fields.insert("label".to_string(), str_of("label"));
+    fields.insert("txid".to_string(), txid.clone());
+
     Ok(Tx {
         txid,
-        category: str_of("category"),
-        amount: sats(obj.get("amount")),
+        category,
+        // Magnitude — Bitcoin Core signs a send negative, but direction lives in
+        // the group slot, so the shared renderer works from the magnitude.
+        amount: sats(obj.get("amount")).abs(),
         fee: sats(obj.get("fee")).abs(),
+        major: 0,
         time: obj.get("time").and_then(|v| v.as_u64()).unwrap_or(0),
-        address: str_of("address"),
-        label: str_of("label"),
+        fields,
         raw: obj.clone(),
     })
 }
@@ -558,28 +371,6 @@ fn to_sats(s: &str) -> i128 {
     let frac: i128 = frac.parse().unwrap_or(0);
     let total = int * SATS + frac;
     if neg { -total } else { total }
-}
-
-/// Satoshis → a BTC decimal string at full 8-digit precision.
-fn btc(sats: i128) -> String {
-    let a = sats.abs();
-    format!("{}.{:08}", a / SATS, a % SATS)
-}
-
-/// The txids already imported, read back from the `; rpc:` comments.
-fn existing_txids(src: &str) -> HashSet<String> {
-    let mut set = HashSet::new();
-    for line in src.lines() {
-        let Some(rest) = line.trim_start().strip_prefix("; rpc:") else {
-            continue;
-        };
-        if let Ok(v) = serde_json::from_str::<Value>(rest.trim())
-            && let Some(txid) = v.get("txid").and_then(|x| x.as_str())
-        {
-            set.insert(txid.to_string());
-        }
-    }
-    set
 }
 
 // ---------------------------------------------------------------------
@@ -630,33 +421,46 @@ mod tests {
 
     fn profile() -> Profile {
         Profile {
+            wallet: Wallet {
+                title: "bitcoin".to_string(),
+                account: "assets:btc".to_string(),
+                commodity: "BTC".to_string(),
+                decimals: DECIMALS,
+                fee_account: "expenses:fees".to_string(),
+                rules: Vec::new(),
+                default_account: "expenses:unsorted".to_string(),
+                transit_prefix: None,
+                own_leaf: "bitcoin-main".to_string(),
+                transit_entries: Vec::new(),
+                accounts: Vec::new(),
+                incoming_transits: HashMap::new(),
+                outgoing_transits: HashMap::new(),
+            },
             rpc: "http://127.0.0.1:8332".to_string(),
             name: "main".to_string(),
             auth: String::new(),
             coin: "bitcoin".to_string(),
             output_file: PathBuf::new(),
-            title: "bitcoin".to_string(),
-            account: "assets:btc".to_string(),
-            commodity: "BTC".to_string(),
-            fee_account: "expenses:fees".to_string(),
-            rules: Vec::new(),
-            default_account: "expenses:unsorted".to_string(),
-            transit_prefix: None,
-            transit_entries: Vec::new(),
-            incoming_transits: HashMap::new(),
-            outgoing_transits: HashMap::new(),
         }
     }
 
+    // A tx of the given category; `amount` may be passed signed (a Bitcoin send
+    // is negative) — parse stores the magnitude, so the helper mirrors that.
     fn tx(category: &str, amount: i128, fee: i128) -> Tx {
+        let mut fields = HashMap::new();
+        fields.insert("category".to_string(), category.to_string());
+        fields.insert("type".to_string(), category.to_string());
+        fields.insert("address".to_string(), String::new());
+        fields.insert("label".to_string(), String::new());
+        fields.insert("txid".to_string(), "t".to_string());
         Tx {
             txid: "t".to_string(),
             category: category.to_string(),
-            amount,
+            amount: amount.abs(),
             fee,
+            major: 0,
             time: 1_700_000_000,
-            address: String::new(),
-            label: String::new(),
+            fields,
             raw: serde_json::json!({ "txid": "t", "category": category }),
         }
     }
@@ -666,14 +470,11 @@ mod tests {
     }
 
     #[test]
-    fn to_sats_and_btc_roundtrip() {
+    fn to_sats_roundtrip() {
         assert_eq!(to_sats("0.02778253"), 2_778_253);
         assert_eq!(to_sats("-0.00010000"), -10_000);
         assert_eq!(to_sats("1"), 100_000_000);
         assert_eq!(to_sats("\"0.5\""), 50_000_000);
-        assert_eq!(btc(2_778_253), "0.02778253");
-        assert_eq!(btc(100_000_000), "1.00000000");
-        assert_eq!(btc(-10_000), "0.00010000");
     }
 
     #[test]
@@ -715,8 +516,9 @@ mod tests {
     #[test]
     fn send_to_my_wallet_books_directional_transit() {
         let mut p = profile();
-        p.transit_prefix = Some("assets:transit".to_string());
-        p.outgoing_transits.insert("t".to_string(), "cold".to_string()); // recipient wallet "cold"
+        p.wallet.transit_prefix = Some("assets:transit".to_string());
+        // recipient wallet "cold" → its full leaf bitcoin-cold
+        p.wallet.outgoing_transits.insert("t".to_string(), "bitcoin-cold".to_string());
         let s = p.render(&group(None, Some(tx("send", -10_000, 141))));
         // leaf = coin + wallet name: own=bitcoin-main, recipient=bitcoin-cold
         assert!(s.trim_end().ends_with("assets:transit:bitcoin-main:bitcoin-cold  BTC0.00010000"));
@@ -725,8 +527,8 @@ mod tests {
     #[test]
     fn receive_matched_by_txid_books_directional_transit() {
         let mut p = profile();
-        p.transit_prefix = Some("assets:transit".to_string());
-        p.incoming_transits.insert("t".to_string(), "cold".to_string()); // sender wallet "cold"
+        p.wallet.transit_prefix = Some("assets:transit".to_string());
+        p.wallet.incoming_transits.insert("t".to_string(), "bitcoin-cold".to_string()); // sender "cold"
         let s = p.render(&group(Some(tx("receive", 2_778_253, 0)), None));
         // incoming → other:own = bitcoin-cold:bitcoin-main, matching the send leg
         assert!(s.trim_end().ends_with("assets:transit:bitcoin-cold:bitcoin-main"));
@@ -735,10 +537,10 @@ mod tests {
     #[test]
     fn send_to_manual_address_books_transit() {
         let mut p = profile();
-        p.transit_prefix = Some("assets:transit".to_string());
-        p.transit_entries = vec![("EXCH_ADDR".to_string(), "extern".to_string())];
+        p.wallet.transit_prefix = Some("assets:transit".to_string());
+        p.wallet.transit_entries = vec![("EXCH_ADDR".to_string(), "extern".to_string())];
         let mut t = tx("send", -10_000, 141);
-        t.address = "EXCH_ADDR".to_string();
+        t.fields.insert("address".to_string(), "EXCH_ADDR".to_string());
         let s = p.render(&group(None, Some(t)));
         assert!(s.trim_end().ends_with("assets:transit:bitcoin-main:extern  BTC0.00010000"));
     }

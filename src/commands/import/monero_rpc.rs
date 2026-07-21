@@ -6,43 +6,61 @@
 //! comment right after the header; dedup reads the `txid` back out of it.
 //! Amounts are atomic piconero, written at full 12-decimal length.
 //!
-//! Categorization, dedup, preview and append are shared with the CSV path;
-//! only the source (RPC instead of a file) and the rendering differ.
+//! The tx model, categorization, and rendering are the shared crypto-wallet
+//! core ([`super::crypto_lib`]); this backend only supplies the monero specifics:
+//! endpoint discovery, `get_transfers` parsing, and the tx-shape dispatch (a
+//! self-sweep / inter-account move / fee-only churn have no Bitcoin analogue).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use colored::Colorize;
 use serde_json::Value;
 
 use crate::error::Error;
 
-use super::{append, expand, read, slug, Match, Rule};
+use super::crypto_lib::{aggregate, existing_txids, Group, Tx, Wallet};
+use super::{expand, read, Match, Rule};
 
 /// The transfer fields a categorization rule may match on.
 const FIELDS: &[&str] = &["type", "txid", "address", "subaddr", "payment_id", "note"];
-/// Piconero per XMR (10^12).
-const ATOMIC: i128 = 1_000_000_000_000;
+/// Decimal places XMR is written at (piconero, 10^12).
+const DECIMALS: u32 = 12;
 
 pub fn run(conf_path: &str, write: bool) -> Result<(), Error> {
     let mut profile = Profile::load(conf_path)?;
-    // Discover every reachable wallet-rpc by primary address, resolve our own
-    // endpoint (and verify it's the right wallet).
+    // Discover the reachable wallet-rpcs by primary address. Cross-wallet
+    // transit is matched purely by TXID against the OTHER running wallets — no
+    // other conf is read, and it works even when a send cached no `destinations`
+    // or went to a subaddress. A shared txid is an internal transfer: their
+    // `out` list gives my receives (its sender), their `in` list my sends (its
+    // recipient). Any wallet's leaf is `<coin>-<last4 of address>`, so both legs
+    // build the same account and net to 0.
     let endpoints = profile.discover_endpoints();
-    profile.rpc_url = profile.resolve_own_url(&endpoints)?;
-    // Cross-wallet transit is matched purely by TXID against the other running
-    // wallets — no other conf is read, and it works even when a send cached no
-    // `destinations` or went to a subaddress. A shared txid is an internal
-    // transfer: their `out` list gives my receives (its sender), their `in`
-    // list gives my sends (its recipient). Any wallet's leaf is
-    // `<coin>-<last4 of address>`, so both legs build the same account, net to 0.
     let own = profile.wallet_address.clone();
-    let (incoming, outgoing) = transit_maps(&endpoints, &own);
-    profile.incoming_transits = incoming;
-    profile.outgoing_transits = outgoing;
-    profile.accounts = fetch_accounts(&profile.rpc_url)?;
-    let groups = fetch(&profile.rpc_url)?;
+    let (incoming, outgoing) = transit_maps(&endpoints, &own, &profile.coin, profile.login.as_deref());
+    profile.wallet.incoming_transits = incoming;
+    profile.wallet.outgoing_transits = outgoing;
+
+    // Every wallet's transfers come from its wallet-rpc via get_transfers (a
+    // Haveno wallet uses its internal one, reached with the digest login) — so
+    // the `; rpc:` source is uniform across wallets.
+    profile.rpc_url = profile.resolve_own_url(&endpoints)?;
+    profile.wallet.accounts = fetch_accounts(&profile.rpc_url, profile.login.as_deref())?;
+    let groups = fetch(&profile.rpc_url, profile.login.as_deref())?;
+
+    // A `haveno.*` block additionally pulls the completed trades; each trade leg
+    // (a transfer matched by txid) then renders as a reto swap booking sourced
+    // wholly from the trade. Every other transfer stays a plain monero booking.
+    let enricher = match &profile.haveno {
+        Some(cfg) => Some(super::monero_haveno_rpc::Enricher::fetch(
+            cfg,
+            &profile.wallet.account,
+            &profile.wallet.fee_account,
+            &profile.wallet.title,
+        )?),
+        None => None,
+    };
 
     let existing = std::fs::read_to_string(&profile.output_file).unwrap_or_default();
     let seen = existing_txids(&existing);
@@ -54,31 +72,16 @@ pub fn run(conf_path: &str, write: bool) -> Result<(), Error> {
             skipped += 1;
             continue;
         }
-        blocks.push(profile.render(g));
+        // A trade leg (deposit/payout txid) renders as its reto booking; any
+        // other transfer falls through to the normal monero rendering.
+        let enriched = match &enricher {
+            Some(e) => e.render(g)?,
+            None => None,
+        };
+        blocks.push(enriched.unwrap_or_else(|| profile.render(g)));
     }
 
-    if blocks.is_empty() {
-        println!(
-            "{} import: {} transfers read, all already present — nothing new.",
-            "!".yellow(),
-            groups.len()
-        );
-        return Ok(());
-    }
-
-    let added = crate::commands::format::format_source(&blocks.join("\n\n"), false)?;
-    if write {
-        append(&profile.output_file, &added)?;
-    }
-    super::render::diff_preview(
-        &existing,
-        &added,
-        blocks.len(),
-        &profile.output_file,
-        skipped,
-        write,
-    );
-    Ok(())
+    super::emit(&blocks, groups.len(), "transfers", &existing, &profile.output_file, skipped, write)
 }
 
 // ---------------------------------------------------------------------
@@ -86,37 +89,23 @@ pub fn run(conf_path: &str, write: bool) -> Result<(), Error> {
 // ---------------------------------------------------------------------
 
 struct Profile {
-    rpc_url: String,          // resolved endpoint (filled by discovery in run)
-    wallet_address: String,   // primary address — identity + discovery key
-    scan_host: String,        // host probed for the wallet-rpc endpoint
-    scan_ports: (u16, u16),   // inclusive port range to probe
+    /// The shared crypto-wallet core: config + render/categorize/transit.
+    wallet: Wallet,
+    rpc_url: String,        // resolved endpoint (filled by discovery in run)
+    wallet_address: String, // primary address — identity + discovery key
+    scan_host: String,      // host probed for the wallet-rpc endpoint
+    scan_ports: (u16, u16), // inclusive port range to probe
     output_file: PathBuf,
-    title: String,
-    account: String,   // the wallet's own account
-    commodity: String, // symbol prefixing every amount (XMR)
-    fee_account: String,
-    rules: Vec<Rule>,
-    default_account: String,
-    /// (major index, label) for every wallet account, from `get_accounts`.
-    /// One account → the bare `account`; several → each gets a `:label` (or
-    /// `:index`) suffix. Empty until `run` fills it after the RPC.
-    accounts: Vec<(u64, String)>,
-    /// Transit account prefix (from `transit.self`); `Some` = transit enabled.
-    transit_prefix: Option<String>,
     /// Coin name (from `wallet.coin`) — the commodity part of a transit leaf,
-    /// e.g. `monero` in `monero-kcwQ`.
+    /// e.g. `monero` in `monero-a1b2`. Used to key the transit maps in `run`.
     coin: String,
-    /// Manual own↔own transits for accounts NOT on RPC (e.g. exchanges): (exact
-    /// destination address, that account's leaf).
-    transit_entries: Vec<(String, String)>,
-    /// txid → the SENDER's primary address (from other wallets' `out` lists).
-    /// A receive whose txid appears here came from that wallet. Filled by `run`.
-    incoming_transits: HashMap<String, String>,
-    /// txid → the RECIPIENT's primary address (from other wallets' `in` lists).
-    /// A send whose txid appears here went to that wallet — matched by txid, so
-    /// it works even when the recipient is a subaddress or the sending wallet
-    /// cached no `destinations`. Filled by `run`.
-    outgoing_transits: HashMap<String, String>,
+    /// Haveno reto enrichment, present only when the profile carries a
+    /// `haveno.*` block. Trade-leg transfers then render as reto swap bookings
+    /// instead of plain transfers; everything else is unaffected.
+    haveno: Option<super::monero_haveno_rpc::Config>,
+    /// `user:pass` for wallet-rpcs behind an HTTP digest login (Haveno's
+    /// internal one). Sent only on a `401`, so login-less wallets are unaffected.
+    login: Option<String>,
 }
 
 impl Profile {
@@ -207,25 +196,37 @@ impl Profile {
         let wallet_address = get("wallet.address")?;
         let scan_host = get("wallet.host")?;
         let scan_ports = parse_ports(&get("wallet.ports")?)?;
+        let haveno = super::monero_haveno_rpc::Config::parse(&directives)?;
+        let login = directives.get("wallet.login").cloned();
+
+        let wallet = Wallet {
+            title: get("output.title")?,
+            account: get("output.account")?,
+            commodity: get("output.commodity")?,
+            decimals: DECIMALS,
+            fee_account,
+            rules,
+            default_account,
+            transit_prefix,
+            // This wallet's own transit leaf, derived from its address once so
+            // the shared code needs no coin-specific derivation.
+            own_leaf: format!("{}-{}", coin, last4(&wallet_address)),
+            transit_entries: raw_transits,
+            accounts: Vec::new(),
+            incoming_transits: HashMap::new(),
+            outgoing_transits: HashMap::new(),
+        };
 
         Ok(Profile {
+            wallet,
             rpc_url: String::new(), // resolved by discovery in run()
             wallet_address,
             scan_host,
             scan_ports,
             output_file: expand(&get("output.file")?),
-            title: get("output.title")?,
-            account: get("output.account")?,
-            commodity: get("output.commodity")?,
-            fee_account,
-            rules,
-            default_account,
-            accounts: Vec::new(),
-            transit_prefix,
             coin,
-            transit_entries: raw_transits,
-            incoming_transits: HashMap::new(),
-            outgoing_transits: HashMap::new(),
+            haveno,
+            login,
         })
     }
 
@@ -235,7 +236,7 @@ impl Profile {
         let mut map = HashMap::new();
         for port in self.scan_ports.0..=self.scan_ports.1 {
             let url = format!("http://{}:{}/json_rpc", self.scan_host, port);
-            if let Some(addr) = probe_address(&url) {
+            if let Some(addr) = probe_address(&url, self.login.as_deref()) {
                 map.insert(addr, url);
             }
         }
@@ -254,183 +255,33 @@ impl Profile {
         })
     }
 
+    /// Dispatch one grouped transaction to the shared renderer by its shape.
+    /// The zero-amount cases (a churn/multisig tx that moved nothing to others)
+    /// book fee-only; every other shape is a monero specific the shared core
+    /// draws for us.
     fn render(&self, g: &Group) -> String {
-        match (&g.incoming, &g.outgoing) {
+        let w = &self.wallet;
+        match (&g.receive, &g.send) {
             // In and out on the SAME account → a self-sweep/churn: the amount
             // returns to that account, only the fee is a real cost.
-            (Some(inc), Some(out)) if inc.major == out.major => self.render_self(out),
+            (Some(inc), Some(out)) if inc.major == out.major => {
+                if out.amount == 0 { w.render_fee_only(out) } else { w.render_self(out) }
+            }
             // In and out on DIFFERENT accounts → a move between two of this
             // wallet's own accounts: it leaves one, the fee is booked, it
             // lands in the other.
-            (Some(inc), Some(out)) => self.render_transfer(inc, out),
-            // Only outgoing → a send you created.
-            (_, Some(out)) => self.render_out(out),
+            (Some(inc), Some(out)) => w.render_transfer(inc, out),
+            // Only outgoing → a send you created. Nothing moved to others
+            // (amount 0) → a churn whose only cost is the network fee.
+            (_, Some(out)) => {
+                if out.amount == 0 { w.render_fee_only(out) } else { w.render_out(out) }
+            }
             // Only incoming → a genuine receive. You did NOT create it (no
             // outgoing leg, no tx key), so the `fee` shown is the sender's
             // metadata, not your cost — book amount only.
-            (Some(inc), None) => self.render_in(inc),
+            (Some(inc), None) => w.render_in(inc),
             (None, None) => String::new(),
         }
-    }
-
-    /// Header line + the `; rpc:` comment carrying the full source object.
-    fn header(&self, t: &Transfer) -> String {
-        let date = crate::date::ms_to_date(t.timestamp.saturating_mul(1000));
-        let rpc = serde_json::to_string(&t.raw).unwrap_or_default();
-        format!("{} * {}\n\t; rpc: {}\n", date, self.title, rpc)
-    }
-
-    /// External receive: the wallet gains `amount`; the fee is the sender's,
-    /// not booked. Two postings, so the counter is left bare to auto-balance.
-    fn render_in(&self, t: &Transfer) -> String {
-        let counter = self.incoming_counter(t);
-        let wallet = self.wallet_account(t.major);
-        let mut s = self.header(t);
-        s.push_str(&format!("\t{}  {}{}\n", wallet, self.commodity, xmr(t.amount)));
-        s.push_str(&format!("\t{}", counter));
-        s
-    }
-
-    /// Counter for a receive: if the txid matches a send from another of my
-    /// wallets, book the SAME directional transit account (so both legs net) —
-    /// the sender leaf comes from its address. Otherwise normal categorization.
-    fn incoming_counter(&self, t: &Transfer) -> String {
-        if let Some(sender) = self.incoming_transits.get(&t.txid)
-            && let Some(acct) = self.transit_account(&self.transit_leaf(sender), false)
-        {
-            return acct;
-        }
-        self.categorize(t)
-    }
-
-    /// Send: the wallet loses `amount + fee`, the fee is its own posting, and
-    /// the categorized counter gains `amount` — always the LAST posting.
-    /// Three explicit postings, none inferred.
-    fn render_out(&self, t: &Transfer) -> String {
-        let counter = self.categorize(t);
-        let wallet = self.wallet_account(t.major);
-        let mut s = self.header(t);
-        s.push_str(&format!(
-            "\t{}  {}-{}\n",
-            wallet,
-            self.commodity,
-            xmr(t.amount + t.fee)
-        ));
-        s.push_str(&format!("\t{}  {}{}\n", self.fee_account, self.commodity, xmr(t.fee)));
-        s.push_str(&format!("\t{}  {}{}", counter, self.commodity, xmr(t.amount)));
-        s
-    }
-
-    /// Self-sweep / churn: `amount` leaves this wallet account and returns to
-    /// it (11 → 11) with the fee between — the fee is the only real cost.
-    /// Three explicit postings summing to zero, none inferred.
-    fn render_self(&self, t: &Transfer) -> String {
-        let wallet = self.wallet_account(t.major);
-        let mut s = self.header(t);
-        s.push_str(&format!(
-            "\t{}  {}-{}\n",
-            wallet,
-            self.commodity,
-            xmr(t.amount + t.fee)
-        ));
-        s.push_str(&format!("\t{}  {}{}\n", self.fee_account, self.commodity, xmr(t.fee)));
-        s.push_str(&format!("\t{}  {}{}", wallet, self.commodity, xmr(t.amount)));
-        s
-    }
-
-    /// A move between two of this wallet's own accounts: `amount + fee` leaves
-    /// the `out` account, the fee is its own posting, and `amount` lands in the
-    /// `in` account — always the LAST posting. Three explicit postings.
-    fn render_transfer(&self, inc: &Transfer, out: &Transfer) -> String {
-        let from = self.wallet_account(out.major);
-        let to = self.wallet_account(inc.major);
-        let mut s = self.header(out);
-        s.push_str(&format!("\t{}  {}-{}\n", from, self.commodity, xmr(out.amount + out.fee)));
-        s.push_str(&format!("\t{}  {}{}\n", self.fee_account, self.commodity, xmr(out.fee)));
-        s.push_str(&format!("\t{}  {}{}", to, self.commodity, xmr(out.amount)));
-        s
-    }
-
-    /// The ledger account for a wallet account (major index). A single-account
-    /// wallet books to the bare `output.account`; a multi-account wallet
-    /// appends `:label` — or `:index` when that account has no label — so each
-    /// Monero account maps to its own ledger sub-account.
-    fn wallet_account(&self, major: u64) -> String {
-        if self.accounts.len() <= 1 {
-            return self.account.clone();
-        }
-        let suffix = self
-            .accounts
-            .iter()
-            .find(|(m, _)| *m == major)
-            .map(|(_, label)| label.as_str())
-            .filter(|l| !l.is_empty())
-            .map(slug)
-            .unwrap_or_else(|| major.to_string());
-        format!("{}:{}", self.account, suffix)
-    }
-
-    /// The transit leaf for a wallet: `<coin>-<last 4 of its address>`, e.g.
-    /// `monero-kcwQ`. Derivable from the address alone, so both legs of an
-    /// internal transfer name the same account without reading another conf.
-    fn transit_leaf(&self, address: &str) -> String {
-        format!("{}-{}", self.coin, last4(address))
-    }
-
-    /// The directional transit account for a transfer to `other` (a leaf) —
-    /// `None` when transit isn't configured (no `transit.self`).
-    fn transit_account(&self, other: &str, outgoing: bool) -> Option<String> {
-        self.transit_prefix.as_ref().map(|p| {
-            super::directional_account(p, &self.transit_leaf(&self.wallet_address), other, outgoing)
-        })
-    }
-
-    /// Counter account for a send: an internal transfer to another of my
-    /// wallets — matched by TXID (its recipient), leaf derived from that
-    /// wallet's address — or a manually-mapped non-RPC account (exchange)
-    /// matched by destination address; then the first matching rule; else the
-    /// default. Receives are matched by txid in `incoming_counter` instead.
-    fn categorize(&self, t: &Transfer) -> String {
-        if t.field("type") == "out" {
-            let other = self
-                .outgoing_transits
-                .get(&t.txid)
-                .map(|recipient| self.transit_leaf(recipient))
-                .or_else(|| {
-                    let dest = t.field("address");
-                    self.transit_entries
-                        .iter()
-                        .find(|(a, _)| a == &dest)
-                        .map(|(_, leaf)| leaf.clone())
-                });
-            if let Some(other) = other
-                && let Some(acct) = self.transit_account(&other, true)
-            {
-                return acct;
-            }
-        }
-        let tmpl = super::match_account(&self.rules, |f| t.field(f))
-            .unwrap_or(self.default_account.as_str());
-        self.template(tmpl, t)
-    }
-
-    fn template(&self, tmpl: &str, t: &Transfer) -> String {
-        let mut out = tmpl.to_string();
-        if out.contains("{address4}") {
-            let a = t.field("address");
-            let tail = a.get(a.len().saturating_sub(4)..).unwrap_or("").to_string();
-            out = out.replace("{address4}", &tail);
-        }
-        if out.contains("{note}") {
-            out = out.replace("{note}", &slug(&t.field("note")));
-        }
-        if out.contains("{subaddr}") {
-            out = out.replace("{subaddr}", &t.field("subaddr").replace(':', "-"));
-        }
-        if out.contains("{type}") {
-            out = out.replace("{type}", &t.field("type"));
-        }
-        out
     }
 }
 
@@ -444,68 +295,18 @@ enum Dir {
     Out,
 }
 
-struct Transfer {
-    txid: String,
-    amount: i128,
-    fee: i128,
-    /// The wallet account (major index) this leg belongs to.
-    major: u64,
-    timestamp: u64,
-    fields: HashMap<String, String>,
-    raw: Value,
-}
-
-impl Transfer {
-    fn field(&self, name: &str) -> String {
-        self.fields.get(name).cloned().unwrap_or_default()
-    }
-}
-
-/// All transfers sharing one txid: at most one `in` and one `out` (both set
-/// only for a self-send).
-struct Group {
-    txid: String,
-    timestamp: u64,
-    incoming: Option<Transfer>,
-    outgoing: Option<Transfer>,
-}
-
-/// One JSON-RPC round-trip to the wallet; returns the `result` object or an
-/// error for transport, bad JSON, or an RPC-level `error`.
-fn rpc_call(url: &str, method: &str, params: Value) -> Result<Value, Error> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(30))
-        .build();
-    let body = serde_json::json!({
-        "jsonrpc": "2.0", "id": "0", "method": method, "params": params
-    })
-    .to_string();
-    let text = agent
-        .post(url)
-        .set("Content-Type", "application/json")
-        .send_string(&body)
-        .map_err(|e| Error::from(format!("import: monero-rpc {}: {}", url, e)))?
-        .into_string()
-        .map_err(|e| Error::from(format!("import: monero-rpc read {}: {}", url, e)))?;
-    let resp: Value = serde_json::from_str(&text)
-        .map_err(|e| Error::from(format!("import: monero-rpc bad JSON: {}", e)))?;
-    if let Some(err) = resp.get("error").filter(|e| !e.is_null()) {
-        return Err(Error::from(format!("import: monero-rpc error: {}", err)));
-    }
-    resp.get("result")
-        .cloned()
-        .ok_or_else(|| Error::from("import: monero-rpc: response has no result"))
-}
-
 /// Build the two transit maps from every OTHER reachable wallet's transfers,
 /// keyed by txid (a shared txid is one and the same on-chain transaction, so
 /// it uniquely links my wallets' views of an internal transfer):
-///   - their `out` list → `incoming` (txid → SENDER address, for my receives),
-///   - their `in`  list → `outgoing` (txid → RECIPIENT address, for my sends).
-/// Purely RPC discovery; no other conf is read.
+///   - their `out` list → `incoming` (txid → SENDER leaf, for my receives),
+///   - their `in`  list → `outgoing` (txid → RECIPIENT leaf, for my sends).
+/// Each leaf is `<coin>-<last4 of that wallet's address>`, computed here so the
+/// shared code needs no coin knowledge. Purely RPC discovery; no conf is read.
 fn transit_maps(
     endpoints: &HashMap<String, String>,
     own: &str,
+    coin: &str,
+    login: Option<&str>,
 ) -> (HashMap<String, String>, HashMap<String, String>) {
     let mut incoming = HashMap::new();
     let mut outgoing = HashMap::new();
@@ -520,20 +321,30 @@ fn transit_maps(
                 "in": true, "out": true, "pending": false, "failed": false,
                 "pool": false, "all_accounts": true
             }),
+            login,
         ) else {
             continue;
         };
+        let leaf = format!("{}-{}", coin, last4(address));
         for (list, map) in [("out", &mut incoming), ("in", &mut outgoing)] {
             if let Some(arr) = result.get(list).and_then(|v| v.as_array()) {
                 for obj in arr {
                     if let Some(txid) = obj.get("txid").and_then(|v| v.as_str()) {
-                        map.entry(txid.to_string()).or_insert_with(|| address.clone());
+                        map.entry(txid.to_string()).or_insert_with(|| leaf.clone());
                     }
                 }
             }
         }
     }
     (incoming, outgoing)
+}
+
+/// One JSON-RPC round-trip to a monero-wallet-rpc, via the shared client.
+/// `login` (`user:pass`) drives the HTTP digest handshake for a login-protected
+/// wallet-rpc (Haveno's internal one); login-less wallets ignore it.
+fn rpc_call(url: &str, method: &str, params: Value, login: Option<&str>) -> Result<Value, Error> {
+    let auth = login.map(super::rpc::Auth::Digest).unwrap_or(super::rpc::Auth::None);
+    super::rpc::call(url, method, params, &auth, "2.0", Duration::from_secs(30))
 }
 
 /// The last 4 characters of an address — its short, human-readable tail (the
@@ -557,33 +368,24 @@ fn parse_ports(raw: &str) -> Result<(u16, u16), Error> {
 
 /// Probe a wallet-rpc for the primary address of its open wallet (account 0).
 /// Short timeout; `None` on any error so scanning closed ports stays cheap.
-fn probe_address(url: &str) -> Option<String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(2))
-        .build();
-    let body = serde_json::json!({
-        "jsonrpc": "2.0", "id": "0", "method": "get_address",
-        "params": { "account_index": 0 }
-    })
-    .to_string();
-    let text = agent
-        .post(url)
-        .set("Content-Type", "application/json")
-        .send_string(&body)
-        .ok()?
-        .into_string()
-        .ok()?;
-    let resp: Value = serde_json::from_str(&text).ok()?;
-    resp.get("result")?
-        .get("address")?
-        .as_str()
-        .map(String::from)
+fn probe_address(url: &str, login: Option<&str>) -> Option<String> {
+    let auth = login.map(super::rpc::Auth::Digest).unwrap_or(super::rpc::Auth::None);
+    let result = super::rpc::call(
+        url,
+        "get_address",
+        serde_json::json!({ "account_index": 0 }),
+        &auth,
+        "2.0",
+        Duration::from_secs(2),
+    )
+    .ok()?;
+    result.get("address")?.as_str().map(String::from)
 }
 
 /// Every wallet account as `(major index, label)`, via `get_accounts`. The
 /// count decides whether accounts get a name suffix; the label supplies it.
-fn fetch_accounts(url: &str) -> Result<Vec<(u64, String)>, Error> {
-    let result = rpc_call(url, "get_accounts", serde_json::json!({}))?;
+fn fetch_accounts(url: &str, login: Option<&str>) -> Result<Vec<(u64, String)>, Error> {
+    let result = rpc_call(url, "get_accounts", serde_json::json!({}), login)?;
     let arr = result
         .get("subaddress_accounts")
         .and_then(|v| v.as_array())
@@ -599,7 +401,7 @@ fn fetch_accounts(url: &str) -> Result<Vec<(u64, String)>, Error> {
 }
 
 /// Call `get_transfers` and group the in/out lists by txid (oldest first).
-fn fetch(url: &str) -> Result<Vec<Group>, Error> {
+fn fetch(url: &str, login: Option<&str>) -> Result<Vec<Group>, Error> {
     // `all_accounts` pulls transfers from every wallet account (major index),
     // not just account 0 — without it a multi-account wallet's other accounts
     // are silently skipped.
@@ -610,14 +412,15 @@ fn fetch(url: &str) -> Result<Vec<Group>, Error> {
             "in": true, "out": true, "pending": false, "failed": false,
             "pool": false, "all_accounts": true
         }),
+        login,
     )?;
 
     // `get_transfers` lists one entry per OUTPUT, so a transaction with
     // several outputs to this wallet appears as several entries sharing a
     // txid (e.g. a real amount + a 0-value padding output). Collect the legs
     // per txid+direction and aggregate them.
-    let mut ins: HashMap<String, Vec<Transfer>> = HashMap::new();
-    let mut outs: HashMap<String, Vec<Transfer>> = HashMap::new();
+    let mut ins: HashMap<String, Vec<Tx>> = HashMap::new();
+    let mut outs: HashMap<String, Vec<Tx>> = HashMap::new();
     if let Some(arr) = result.get("in").and_then(|v| v.as_array()) {
         for obj in arr {
             let t = parse_transfer(obj, Dir::In)?;
@@ -636,36 +439,20 @@ fn fetch(url: &str) -> Result<Vec<Group>, Error> {
     txids.dedup();
     let mut groups = Vec::new();
     for txid in txids {
-        let incoming = ins.remove(&txid).map(aggregate);
-        let outgoing = outs.remove(&txid).map(aggregate);
-        let timestamp = incoming
+        let receive = ins.remove(&txid).map(aggregate);
+        let send = outs.remove(&txid).map(aggregate);
+        let time = receive
             .as_ref()
-            .or(outgoing.as_ref())
-            .map(|t| t.timestamp)
+            .or(send.as_ref())
+            .map(|t| t.time)
             .unwrap_or(0);
-        groups.push(Group {
-            txid,
-            timestamp,
-            incoming,
-            outgoing,
-        });
+        groups.push(Group { txid, time, receive, send });
     }
-    groups.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then(a.txid.cmp(&b.txid)));
+    groups.sort_by(|a, b| a.time.cmp(&b.time).then(a.txid.cmp(&b.txid)));
     Ok(groups)
 }
 
-/// Merge the legs of one txid+direction: sum the amounts, and keep the
-/// largest-amount leg as the representative (its raw object + fields carry
-/// the meaningful data; the padding 0-output is noise).
-fn aggregate(mut legs: Vec<Transfer>) -> Transfer {
-    legs.sort_by_key(|t| std::cmp::Reverse(t.amount));
-    let total: i128 = legs.iter().map(|t| t.amount).sum();
-    let mut repr = legs.into_iter().next().expect("aggregate: non-empty legs");
-    repr.amount = total;
-    repr
-}
-
-fn parse_transfer(obj: &Value, dir: Dir) -> Result<Transfer, Error> {
+fn parse_transfer(obj: &Value, dir: Dir) -> Result<Tx, Error> {
     let str_of = |k: &str| obj.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let txid = str_of("txid");
     if txid.is_empty() {
@@ -703,27 +490,26 @@ fn parse_transfer(obj: &Value, dir: Dir) -> Result<Transfer, Error> {
         Dir::In => str_of("address"),
     };
 
+    let category = match dir {
+        Dir::In => "in",
+        Dir::Out => "out",
+    }
+    .to_string();
     let mut fields = HashMap::new();
-    fields.insert(
-        "type".to_string(),
-        match dir {
-            Dir::In => "in",
-            Dir::Out => "out",
-        }
-        .to_string(),
-    );
+    fields.insert("type".to_string(), category.clone());
     fields.insert("txid".to_string(), txid.clone());
     fields.insert("address".to_string(), address);
     fields.insert("subaddr".to_string(), subaddr);
     fields.insert("payment_id".to_string(), str_of("payment_id"));
     fields.insert("note".to_string(), str_of("note"));
 
-    Ok(Transfer {
+    Ok(Tx {
         txid,
+        category,
         amount: atomic(obj.get("amount")),
         fee: atomic(obj.get("fee")),
         major,
-        timestamp: obj.get("timestamp").and_then(|v| v.as_u64()).unwrap_or(0),
+        time: obj.get("timestamp").and_then(|v| v.as_u64()).unwrap_or(0),
         fields,
         raw: obj.clone(),
     })
@@ -739,58 +525,42 @@ fn atomic(v: Option<&Value>) -> i128 {
     v.to_string().trim_matches('"').parse().unwrap_or(0)
 }
 
-/// Atomic piconero → an XMR decimal string at full 12-digit precision.
-fn xmr(atomic: i128) -> String {
-    let a = atomic.abs();
-    format!("{}.{:012}", a / ATOMIC, a % ATOMIC)
-}
-
-/// The txids already imported, read back from the `; rpc:` comments.
-fn existing_txids(src: &str) -> HashSet<String> {
-    let mut set = HashSet::new();
-    for line in src.lines() {
-        let Some(rest) = line.trim_start().strip_prefix("; rpc:") else {
-            continue;
-        };
-        if let Ok(v) = serde_json::from_str::<Value>(rest.trim())
-            && let Some(txid) = v.get("txid").and_then(|x| x.as_str())
-        {
-            set.insert(txid.to_string());
-        }
-    }
-    set
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn profile() -> Profile {
         Profile {
+            wallet: Wallet {
+                title: "monero".to_string(),
+                account: "assets:xmr".to_string(),
+                commodity: "XMR".to_string(),
+                decimals: DECIMALS,
+                fee_account: "expenses:fees".to_string(),
+                rules: Vec::new(),
+                default_account: "expenses:unsorted".to_string(),
+                transit_prefix: None,
+                own_leaf: String::new(),
+                transit_entries: Vec::new(),
+                accounts: Vec::new(),
+                incoming_transits: HashMap::new(),
+                outgoing_transits: HashMap::new(),
+            },
             rpc_url: String::new(),
             wallet_address: String::new(),
             scan_host: "127.0.0.1".to_string(),
             scan_ports: (18082, 18099),
             output_file: PathBuf::new(),
-            title: "monero".to_string(),
-            account: "assets:xmr".to_string(),
-            commodity: "XMR".to_string(),
-            fee_account: "expenses:fees".to_string(),
-            rules: Vec::new(),
-            default_account: "expenses:unsorted".to_string(),
-            accounts: Vec::new(),
-            transit_prefix: None,
             coin: "monero".to_string(),
-            transit_entries: Vec::new(),
-            incoming_transits: HashMap::new(),
-            outgoing_transits: HashMap::new(),
+            haveno: None,
+            login: None,
         }
     }
 
     // A wallet with three accounts: two labelled, one bare.
     fn multi() -> Profile {
         let mut p = profile();
-        p.accounts = vec![
+        p.wallet.accounts = vec![
             (0, "Cold".to_string()),
             (1, "Hot".to_string()),
             (2, String::new()),
@@ -798,32 +568,25 @@ mod tests {
         p
     }
 
-    // Amount `x` piconero, fee `f`, dated 2025-07-02, on account 0.
-    fn transfer(x: i128, f: i128) -> Transfer {
-        Transfer {
+    // Amount `x` piconero, fee `f`, dated 2025-07-02, on account 0, incoming.
+    fn transfer(x: i128, f: i128) -> Tx {
+        Tx {
             txid: "t".to_string(),
+            category: "in".to_string(),
             amount: x,
             fee: f,
             major: 0,
-            timestamp: 1_751_495_027,
+            time: 1_751_495_027,
             fields: HashMap::new(),
             raw: serde_json::json!({ "txid": "t", "amount": x as i64 }),
         }
     }
 
     // As `transfer`, but on a specific wallet account (major index).
-    fn at_major(x: i128, f: i128, major: u64) -> Transfer {
+    fn at_major(x: i128, f: i128, major: u64) -> Tx {
         let mut t = transfer(x, f);
         t.major = major;
         t
-    }
-
-    #[test]
-    fn xmr_writes_full_twelve_decimals() {
-        assert_eq!(xmr(200_000_000_000), "0.200000000000");
-        assert_eq!(xmr(1_000_000_000_000), "1.000000000000");
-        assert_eq!(xmr(130_364_401_518), "0.130364401518");
-        assert_eq!(xmr(47_232_749_000_000), "47.232749000000");
     }
 
     #[test]
@@ -833,26 +596,8 @@ mod tests {
         assert_eq!(atomic(None), 0);
     }
 
-    #[test]
-    fn existing_txids_read_from_rpc_comments() {
-        let src = "2025-07-02 * x\n\t; rpc: {\"txid\":\"aaa\",\"type\":\"in\"}\n\tassets:xmr XMR1\n\
-                   \n2025-07-03 * y\n\t; rpc: {\"txid\":\"bbb\"}\n";
-        let set = existing_txids(src);
-        assert!(set.contains("aaa") && set.contains("bbb"));
-        assert_eq!(set.len(), 2);
-    }
-
-    #[test]
-    fn aggregate_sums_outputs_and_keeps_the_real_leg() {
-        // real 0.130364401518 + a 0-value padding output → summed, representative
-        // is the non-zero leg.
-        let agg = aggregate(vec![transfer(130_364_401_518, 1_022_340_000), transfer(0, 1_022_340_000)]);
-        assert_eq!(agg.amount, 130_364_401_518);
-        assert_eq!(agg.fee, 1_022_340_000);
-    }
-
-    fn group(inc: Option<Transfer>, out: Option<Transfer>) -> Group {
-        Group { txid: "t".to_string(), timestamp: 1_751_495_027, incoming: inc, outgoing: out }
+    fn group(inc: Option<Tx>, out: Option<Tx>) -> Group {
+        Group { txid: "t".to_string(), time: 1_751_495_027, receive: inc, send: out }
     }
 
     #[test]
@@ -867,10 +612,23 @@ mod tests {
 
     #[test]
     fn send_is_three_postings_counter_last() {
-        let s = profile().render(&group(None, Some(transfer(16_340_000_000, 30_580_000))));
+        let mut out = transfer(16_340_000_000, 30_580_000);
+        out.category = "out".to_string();
+        let s = profile().render(&group(None, Some(out)));
         assert!(s.contains("assets:xmr  XMR-0.016370580000")); // amount + fee out
         assert!(s.contains("expenses:fees  XMR0.000030580000"));
         assert!(s.trim_end().ends_with("expenses:unsorted  XMR0.016340000000")); // counter last, filled
+    }
+
+    #[test]
+    fn zero_amount_out_is_fee_only() {
+        // A churn/multisig tx (amount 0, only a fee) → two postings: the wallet
+        // loses the fee, the fee account is left bare to auto-balance.
+        let s = profile().render(&group(None, Some(transfer(0, 30_740_000))));
+        assert!(s.contains("assets:xmr  XMR-0.000030740000")); // wallet loses the fee
+        assert!(s.trim_end().ends_with("expenses:fees")); // fee account bare, last posting
+        assert!(!s.contains("expenses:unsorted")); // no counter
+        assert!(!s.contains("expenses:fees  XMR")); // fee posting carries no amount
     }
 
     #[test]
@@ -886,22 +644,19 @@ mod tests {
     fn single_account_wallet_has_no_suffix() {
         // One account → bare name, even if that account carries a label.
         let mut p = profile();
-        p.accounts = vec![(0, "Cold".to_string())];
-        assert_eq!(p.wallet_account(0), "assets:xmr");
+        p.wallet.accounts = vec![(0, "Cold".to_string())];
+        // Rendered through a receive so we exercise the shared wallet_account.
+        let s = p.render(&group(Some(transfer(1, 0)), None));
+        assert!(s.contains("assets:xmr  XMR0.000000000001"));
+        assert!(!s.contains("assets:xmr:"));
     }
 
     #[test]
     fn multi_account_uses_label_then_index() {
         let p = multi();
-        assert_eq!(p.wallet_account(0), "assets:xmr:cold"); // label
-        assert_eq!(p.wallet_account(1), "assets:xmr:hot"); // label
-        assert_eq!(p.wallet_account(2), "assets:xmr:2"); // unlabelled → index
-    }
-
-    #[test]
-    fn receive_into_second_account_books_to_its_subaccount() {
-        let s = multi().render(&group(Some(at_major(130_364_401_518, 0, 1)), None));
-        assert!(s.contains("assets:xmr:hot  XMR0.130364401518"));
+        assert!(p.render(&group(Some(at_major(1, 0, 0)), None)).contains("assets:xmr:cold  XMR")); // label
+        assert!(p.render(&group(Some(at_major(1, 0, 1)), None)).contains("assets:xmr:hot  XMR")); // label
+        assert!(p.render(&group(Some(at_major(1, 0, 2)), None)).contains("assets:xmr:2  XMR")); // unlabelled → index
     }
 
     #[test]
@@ -916,18 +671,19 @@ mod tests {
         assert!(s.trim_end().ends_with("assets:xmr:hot  XMR0.016340000000")); // into account 1
     }
 
-    // Own wallet address ends in "cold"; a sibling RPC wallet ends in "warm";
-    // plus a manual (non-RPC) exchange address. Leaf = coin + last4.
+    // Own wallet leaf is `monero-cold`; a sibling RPC wallet is `monero-warm`;
+    // plus a manual (non-RPC) exchange leaf `extern`.
     fn transit_profile() -> Profile {
         let mut p = profile();
-        p.wallet_address = "OWNADDR_cold".to_string();
-        p.transit_prefix = Some("assets:transit".to_string());
-        p.transit_entries = vec![("EXCHANGE_ADDR".to_string(), "extern".to_string())];
+        p.wallet.own_leaf = "monero-cold".to_string();
+        p.wallet.transit_prefix = Some("assets:transit".to_string());
+        p.wallet.transit_entries = vec![("EXCHANGE_ADDR".to_string(), "extern".to_string())];
         p
     }
 
-    fn out_to(address: &str) -> Transfer {
+    fn out_to(address: &str) -> Tx {
         let mut t = transfer(16_340_000_000, 30_580_000);
+        t.category = "out".to_string();
         t.fields.insert("type".to_string(), "out".to_string());
         t.fields.insert("address".to_string(), address.to_string());
         t
@@ -935,17 +691,17 @@ mod tests {
 
     #[test]
     fn last4_takes_the_address_tail() {
-        assert_eq!(last4("xxxxxxxxkcwQ"), "kcwQ");
+        assert_eq!(last4("xxxxxxxxa1b2"), "a1b2");
         assert_eq!(last4("ab"), "ab"); // shorter than 4 → whole string
     }
 
     #[test]
     fn send_matched_by_txid_books_directional_transit() {
         // txid in outgoing_transits (recipient = another of my wallets) →
-        // transit, leaf from the recipient's address. The destination need NOT
+        // transit, leaf from the recipient's wallet. The destination need NOT
         // be known — matched by txid, not address (the whole point).
         let mut p = transit_profile();
-        p.outgoing_transits.insert("t".to_string(), "SIBADDR_warm".to_string());
+        p.wallet.outgoing_transits.insert("t".to_string(), "monero-warm".to_string());
         let s = p.render(&group(None, Some(out_to(""))));
         assert!(s.trim_end().ends_with("assets:transit:monero-cold:monero-warm  XMR0.016340000000"));
         assert!(s.contains("assets:xmr  XMR-0.016370580000")); // wallet out
@@ -972,10 +728,10 @@ mod tests {
     #[test]
     fn receive_matched_by_txid_books_directional_transit() {
         // A receive whose txid is in the map came from that sender wallet →
-        // leaf from the sender's address, incoming → other:own, matching the
-        // send leg (monero-warm:monero-cold) so both net to 0.
+        // incoming → other:own, matching the send leg (monero-warm:monero-cold)
+        // so both net to 0.
         let mut p = transit_profile();
-        p.incoming_transits.insert("t".to_string(), "SIBADDR_warm".to_string());
+        p.wallet.incoming_transits.insert("t".to_string(), "monero-warm".to_string());
         let s = p.render(&group(Some(transfer(130_364_401_518, 0)), None));
         assert!(s.contains("assets:xmr  XMR0.130364401518"));
         assert!(s.trim_end().ends_with("assets:transit:monero-warm:monero-cold"));

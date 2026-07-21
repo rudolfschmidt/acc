@@ -1,13 +1,20 @@
 //! `import` command — dispatch a per-profile import to its source backend
 //! (`fiat` CSV files, a `monero` wallet RPC, or a `bitcoin`/`litecoin` Bitcoin
 //! Core-family RPC) and append the new, deduped transactions to a `@cash` file.
-//! This module holds the dispatcher plus the vocabulary every source shares:
-//! the categorization `Rule` grammar, the diff preview, and the small IO helpers.
+//! This module holds the dispatcher plus the vocabulary EVERY source shares:
+//! the categorization `Rule` grammar, own↔own `Transit`, the diff preview, and
+//! the small IO helpers. Anything used by only the wallet-RPC backends (their
+//! tx model and rendering) lives in `crypto_lib.rs`, not here.
 
-mod bitcoincore;
-mod fiat;
-mod monero;
+mod bitcoin_lib;
+mod bitcoin_rpc;
+mod crypto_lib;
+mod fiat_csv;
+mod litecoin_rpc;
+mod monero_haveno_rpc;
+mod monero_rpc;
 mod render;
+mod rpc;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,16 +26,18 @@ pub fn run(csv_path: Option<&str>, conf_path: &str, write: bool) -> Result<(), E
     // without it the profile is a classic CSV import.
     if let Some(coin) = directive(&read(conf_path)?, "wallet.coin") {
         return match coin.as_str() {
-            "monero" => monero::run(conf_path, write),
-            // bitcoind, litecoind and other Bitcoin Core forks speak identical RPC.
-            "bitcoin" | "litecoin" => bitcoincore::run(conf_path, write),
+            "monero" => monero_rpc::run(conf_path, write),
+            // bitcoind and litecoind speak the identical RPC; each coin has its
+            // own thin entry point that forwards to the shared bitcoin_lib.
+            "bitcoin" => bitcoin_rpc::run(conf_path, write),
+            "litecoin" => litecoin_rpc::run(conf_path, write),
             other => Err(Error::from(format!("import: unknown wallet.coin '{}'", other))),
         };
     }
     let csv_path = csv_path.ok_or_else(|| {
         Error::from("import: this profile reads a CSV — pass the CSV file as the argument")
     })?;
-    fiat::run(csv_path, conf_path, write)
+    fiat_csv::run(csv_path, conf_path, write)
 }
 
 /// Read a single-word directive's value from a profile (skips `#` comments
@@ -192,6 +201,38 @@ fn append(path: &Path, added: &str) -> Result<(), Error> {
         .map_err(|e| Error::from(format!("import: open {}: {}", path.display(), e)))?;
     f.write_all(body.as_bytes())
         .map_err(|e| Error::from(format!("import: write {}: {}", path.display(), e)))
+}
+
+/// The single tail every import backend ends on: format the rendered blocks
+/// (acc `format`, in memory) so imported entries line up like every other file,
+/// then append them (when writing) and show the diff preview. Centralised so the
+/// format step is applied uniformly and can never be forgotten in a backend.
+/// `read`/`noun` word the "nothing new" note when there is nothing to add.
+fn emit(
+    blocks: &[String],
+    read: usize,
+    noun: &str,
+    existing: &str,
+    output: &Path,
+    skipped: usize,
+    write: bool,
+) -> Result<(), Error> {
+    use colored::Colorize;
+    if blocks.is_empty() {
+        println!(
+            "{} import: {} {} read, all already present — nothing new.",
+            "!".yellow(),
+            read,
+            noun
+        );
+        return Ok(());
+    }
+    let added = crate::commands::format::format_source(&blocks.join("\n\n"), false)?;
+    if write {
+        append(output, &added)?;
+    }
+    render::diff_preview(existing, &added, blocks.len(), output, skipped, write);
+    Ok(())
 }
 
 /// Expand a leading `~/` to `$HOME`.

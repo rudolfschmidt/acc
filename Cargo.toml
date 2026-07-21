@@ -1,6 +1,6 @@
 [package]
 name = "acc"
-version = "0.21.0"
+version = "0.22.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "plaintext double-entry accounting command line tool"
@@ -15,6 +15,7 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 colored = "2"
 crossterm = "0.28"
+md5 = "0.7"
 native-tls = "0.2"
 ratatui = "0.29"
 rayon = "1"
