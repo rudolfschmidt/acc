@@ -281,12 +281,11 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fil
                     out.push('\n');
                 }
             }
-            // Auto-rule / template / define blocks span multiple lines
-            // (header + indented children) and their body here doesn't own
-            // multipliers or lookup entries — simpler to emit the source lines
-            // verbatim than rebuild the syntax. The block ends at the next line
-            // that isn't indented.
-            Entry::AutoRule(_) | Entry::AutoTemplate { .. } | Entry::Define { .. } => {
+            // Auto-rule / template blocks span multiple lines (header +
+            // indented children) and their body here doesn't own multipliers —
+            // simpler to emit the source lines verbatim than rebuild the
+            // syntax. The block ends at the next line that isn't indented.
+            Entry::AutoRule(_) | Entry::AutoTemplate { .. } => {
                 let start = entry.line.saturating_sub(1);
                 let mut end = start + 1;
                 while end < source_lines.len() {
@@ -301,8 +300,9 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fil
                     out.push('\n');
                 }
             }
-            Entry::AutoInstance { .. } => {
-                // A single-line directive (`= NAME a b`); emit it verbatim.
+            Entry::AutoInstance { .. } | Entry::Lookup { .. } => {
+                // Single-line directives (`= NAME a b`, `= NAME[key] :: value`);
+                // emit verbatim.
                 if let Some(line) = source_lines.get(entry.line.saturating_sub(1)) {
                     out.push_str(line);
                     out.push('\n');

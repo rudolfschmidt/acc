@@ -99,8 +99,8 @@ pub struct Resolved {
 }
 
 /// A named auto-rule template from `= NAME :: /pattern/`. Its `pattern` and
-/// posting accounts carry positional `$1`/`$2` placeholders and `lookup(key)`
-/// calls; [`expand_instance`] substitutes a pair in to produce concrete
+/// posting accounts carry positional `$1`/`$2` placeholders and `lookup[key]`
+/// references; [`expand_instance`] substitutes a pair in to produce concrete
 /// `AutoRule`s.
 struct Template {
     pattern: String,
@@ -225,9 +225,9 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                 let rules = expand_instance(&name, &args, &templates, &defines, &file, line)?;
                 auto_rules.extend(rules);
             }
-            // Account/Define/AutoTemplate scaffolds and Comment entries carry
+            // Account/Lookup/AutoTemplate scaffolds and Comment entries carry
             // no data we still need here — the first pass already consumed the
-            // defines and templates. Drop them.
+            // lookup tables and templates. Drop them.
             _ => {}
         }
     }
@@ -289,7 +289,7 @@ fn check_multiplier_balance(postings: &[AutoPosting]) -> Result<(), (&'static st
 /// instantiated in both orderings — one rule per transfer direction — so a
 /// single `= NAME a b` mirrors both `a→b` and `b→a`. Each ordering
 /// substitutes the args into the template pattern and posting accounts, then
-/// resolves any `table(key)` lookup call against the `define` tables. The
+/// resolves any `table[key]` lookup reference against the lookup tables. The
 /// resulting rules are ordinary `AutoRule`s the expander runs unchanged.
 fn expand_instance(
     name: &str,
@@ -378,10 +378,10 @@ fn param_refs(text: &str) -> Vec<&str> {
     refs
 }
 
-/// Resolve every `table(key)` call in `account` against the `define` tables,
+/// Resolve every `table[key]` reference in `account` against the lookup tables,
 /// leftmost first, until none remain. Only *declared* table names are matched,
-/// so an incidental parenthesised fragment is left alone; an unknown *key* for
-/// a known table is an error — a typo in an instantiation pair should surface.
+/// so an incidental bracketed fragment is left alone; an unknown *key* for a
+/// known table is an error — a typo in an instantiation pair should surface.
 fn resolve_lookup_calls(
     account: &str,
     defines: &HashMap<String, HashMap<String, String>>,
@@ -393,7 +393,7 @@ fn resolve_lookup_calls(
         // Leftmost `table(` across all defined tables.
         let mut hit: Option<(usize, String)> = None;
         for tname in defines.keys() {
-            if let Some(start) = result.find(&format!("{tname}(")) {
+            if let Some(start) = result.find(&format!("{tname}[")) {
                 match &hit {
                     Some((s, _)) if *s <= start => {}
                     _ => hit = Some((start, tname.clone())),
@@ -401,9 +401,9 @@ fn resolve_lookup_calls(
             }
         }
         let Some((start, tname)) = hit else { break };
-        let after = start + tname.len() + 1; // past `table(`
-        let rel_close = result[after..].find(')').ok_or_else(|| {
-            ResolveError::new(file.clone(), line, format!("unclosed `(` in `{tname}(…)` lookup"))
+        let after = start + tname.len() + 1; // past `table[`
+        let rel_close = result[after..].find(']').ok_or_else(|| {
+            ResolveError::new(file.clone(), line, format!("unclosed `[` in `{tname}[…]` lookup"))
         })?;
         let close = after + rel_close;
         let key = result[after..close].trim().to_string();
@@ -480,7 +480,7 @@ struct Declarations {
     labels: LabelSet,
     labels_balance: LabelSet,
     labels_register: LabelSet,
-    /// `define NAME` lookup tables: name → (key → value).
+    /// Lookup tables from `= NAME[key] :: value` entries: table → (key → value).
     defines: HashMap<String, HashMap<String, String>>,
     /// `= NAME :: /pattern/` auto-rule templates, by name.
     templates: HashMap<String, Template>,
@@ -498,9 +498,9 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
     let mut labels = LabelSet::default();
     let mut labels_balance = LabelSet::default();
     let mut labels_register = LabelSet::default();
-    // `define NAME` lookup tables and `= NAME :: /pattern/` templates, both
-    // gathered here so an instantiation can reference either regardless of
-    // source order.
+    // Lookup tables (`= NAME[key] :: value`) and `= NAME :: /pattern/`
+    // templates, both gathered here so an instantiation can reference either
+    // regardless of source order.
     let mut defines: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut templates: HashMap<String, Template> = HashMap::new();
 
@@ -568,22 +568,19 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
                     }
                 roles.insert(role.clone(), Declaration { line: e.line, name: account.clone() });
             }
-            Entry::Define { name, entries: kvs } => {
-                let mut table: HashMap<String, String> = HashMap::new();
-                for (k, v) in kvs {
-                    if table.insert(k.clone(), v.clone()).is_some() {
-                        return Err(ResolveError::new(
-                            e.file.clone(),
-                            e.line,
-                            format!("define `{name}` has a duplicate key `{k}`"),
-                        ));
-                    }
-                }
-                if defines.insert(name.clone(), table).is_some() {
+            Entry::Lookup { table, key, value } => {
+                // Each line is one entry; entries sharing a table name merge
+                // here. A duplicate key within one table is a conflict.
+                if defines
+                    .entry(table.clone())
+                    .or_default()
+                    .insert(key.clone(), value.clone())
+                    .is_some()
+                {
                     return Err(ResolveError::new(
                         e.file.clone(),
                         e.line,
-                        format!("define `{name}` is declared more than once"),
+                        format!("lookup table `{table}` has a duplicate key `{key}`"),
                     ));
                 }
             }
@@ -818,9 +815,9 @@ mod tests {
         assert!(out.slippage_loss.is_none());
     }
 
-    const TEMPLATE_SRC: &str = "define long\n\tfoo = foo-long\n\tbar = bar-long\n\
+    const TEMPLATE_SRC: &str = "= long[foo] :: foo-long\n= long[bar] :: bar-long\n\
         = mirror :: /^x:$1:$segment:$2:$segment$/\n\
-        \t[$1:z:long($2)]  -1\n\t[$2:z:long($1)]  1\n";
+        \t[$1:z:long[$2]]  -1\n\t[$2:z:long[$1]]  1\n";
 
     #[test]
     fn instantiation_expands_both_directions_with_lookup() {
