@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.24.0 — 2026-07-24
+
+### Fri 24 Jul 2026 - Lookup tables move onto the `=` level: `= NAME[key] :: value`
+
+**The who-owes-whom lookup drops the `define` block for `= NAME[key] :: value`
+entries.** The string→string table that expands a slug to a full counterparty
+name was a `define NAME` block with indented `key = value` lines, referenced as
+`NAME(key)`. That read as a function call it wasn't, and put the lookup on a
+different syntactic level from the templates that use it. It is now a set of
+`=`-level entries — `= NAME[key] :: value`, one per line, referenced as
+`NAME[key]` (array indexing, not a call). Definition and reference share the one
+`NAME[key]` shape, and everything the feature touches lives on the
+auto-transaction level (leading `=`), so it highlights as one family.
+
+**Parsing got simpler for it, not more complex.** The `=` dispatch already
+splits on `::` for templates, so a lookup entry reuses that split — the bracket
+in the name (`NAME[key]` vs a bare template name) is the whole discriminator,
+and the value after `::` is a bare string. The `define` keyword, its block
+accumulation, and the indented `key = value` parsing are gone; a `[key]`
+reference nested inside a `[...]` balanced-virtual posting needs no special
+handling, because the posting's outer brackets are stripped one level at a time.
+
 ## 0.23.0 — 2026-07-24
 
 ### Fri 24 Jul 2026 - Who-owes-whom over auto-transaction templates, and exchange imports

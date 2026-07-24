@@ -120,12 +120,15 @@ fn dispatch(
     }
 }
 
-/// Parse a `=` directive — three forms, told apart syntactically:
+/// Parse a `=` directive — four forms, told apart syntactically:
 ///
 /// - `= /pattern/` → an anonymous auto-rule (`AutoRule`), matched as-is.
+/// - `= NAME[key] :: value` → one entry of a named string→string lookup table
+///   (`Lookup`); the bracket in the name is the discriminator. Referenced as
+///   `NAME[key]` inside a template posting account.
 /// - `= NAME :: /pattern/` → a named auto-rule *template* (`AutoTemplate`);
 ///   its pattern and posting accounts carry positional `$1`/`$2` placeholders
-///   and `lookup(key)` calls that an instantiation fills in.
+///   and `lookup[key]` calls that an instantiation fills in.
 /// - `= NAME arg…` → instantiate template `NAME` with a pair (`AutoInstance`).
 ///
 /// Indented `[account] multiplier` lines attach via `extend_block`.
@@ -153,25 +156,51 @@ fn parse_auto_rule(
         return Ok(());
     }
 
-    // Named template: `NAME :: /pattern/ [amount <op> N]`.
-    if let Some((name_part, pattern_part)) = body.split_once("::") {
-        let name = name_part.trim();
-        if name.is_empty() {
+    // A `NAME … :: REST` form — either a lookup-table entry or a rule template.
+    if let Some((name_part, rest_part)) = body.split_once("::") {
+        let name_part = name_part.trim();
+
+        // Lookup-table entry: `NAME[key] :: value`. The bracket in the name is
+        // the discriminator (a rule template's name has none); the value is a
+        // bare string, not a `/pattern/`. Reuses the same `::` split.
+        if let Some((table, key)) = split_table_key(name_part) {
+            let value = rest_part.trim();
+            if value.is_empty() {
+                return Err(ParseError::new(
+                    line,
+                    1,
+                    "lookup entry `= NAME[key] :: value` has an empty value",
+                ));
+            }
+            entries.push(Located {
+                file: file.clone(),
+                line,
+                value: Entry::Lookup {
+                    table: table.to_string(),
+                    key: key.to_string(),
+                    value: value.to_string(),
+                },
+            });
+            return Ok(());
+        }
+
+        // Named auto-rule template: `NAME :: /pattern/ [amount <op> N]`.
+        if name_part.is_empty() {
             return Err(ParseError::new(line, 1, "auto-rule template needs a name before `::`"));
         }
-        if name.split_whitespace().count() > 1 {
+        if name_part.split_whitespace().count() > 1 {
             return Err(ParseError::new(
                 line,
                 1,
                 "auto-rule template takes no parameter list; use positional `$1`/`$2` in the pattern",
             ));
         }
-        let (pattern, condition) = parse_predicate(pattern_part, line)?;
+        let (pattern, condition) = parse_predicate(rest_part, line)?;
         entries.push(Located {
             file: file.clone(),
             line,
             value: Entry::AutoTemplate {
-                name: name.to_string(),
+                name: name_part.to_string(),
                 pattern,
                 postings: Vec::new(),
                 condition,
@@ -200,6 +229,21 @@ fn parse_auto_rule(
         value: Entry::AutoInstance { name, args },
     });
     Ok(())
+}
+
+/// Split a `table[key]` string into its two parts, trimmed. Returns `None`
+/// unless the string is exactly that shape (a `[`, and a trailing `]`, with a
+/// non-empty table and key) — that `None` is how a rule-template name
+/// (`reconcile`) is told apart from a lookup entry (`name[key]`).
+fn split_table_key(s: &str) -> Option<(&str, &str)> {
+    let inner = s.strip_suffix(']')?;
+    let open = inner.find('[')?;
+    let table = inner[..open].trim();
+    let key = inner[open + 1..].trim();
+    if table.is_empty() || key.is_empty() {
+        return None;
+    }
+    Some((table, key))
 }
 
 /// Split a `= …` predicate into the `/pattern/` inner text and an optional
@@ -429,28 +473,6 @@ fn parse_directive(
             });
             Ok(())
         }
-        "define" => {
-            if arg.is_empty() {
-                return Err(ParseError::new(line, 1, "define directive missing a name"));
-            }
-            // Only the block-table form is supported: `define NAME` + indented
-            // `key = value` lines. Reject ledger's inline `define x = expr` —
-            // acc resolves a define by map lookup, it has no expression evaluator.
-            if arg.contains('=') || arg.split_whitespace().count() > 1 {
-                return Err(ParseError::new(
-                    line,
-                    1,
-                    "inline `define NAME = expr` is not supported; use a `define NAME` \
-                     block with indented `key = value` lookup entries",
-                ));
-            }
-            entries.push(Located {
-                file: file.clone(),
-                line,
-                value: Entry::Define { name: arg.to_string(), entries: Vec::new() },
-            });
-            Ok(())
-        }
         other => Err(ParseError::new(line, 1, format!("unknown directive: {}", other))),
     }
 }
@@ -572,18 +594,6 @@ fn extend_block(
             // just carries `${N}` / `lookup(key)` placeholders resolved later.
             let auto_posting = parse_auto_posting(body, line)?;
             postings.push(auto_posting);
-        }
-        Entry::Define { entries: kvs, .. } => {
-            // A lookup entry: `key = value`, split on the first `=`.
-            let (k, v) = body
-                .split_once('=')
-                .ok_or_else(|| ParseError::new(line, 1, "define entry must be `key = value`"))?;
-            let key = k.trim().to_string();
-            let value = v.trim().to_string();
-            if key.is_empty() || value.is_empty() {
-                return Err(ParseError::new(line, 1, "define entry must be `key = value`"));
-            }
-            kvs.push((key, value));
         }
         _ => return Err(ParseError::new(line, 1, "indented directive not expected here")),
     }
@@ -1026,43 +1036,59 @@ mod tests {
     }
 
     #[test]
-    fn parse_define_template_and_instance() {
-        let src = "define long\n\tfoo = foo-long\n\tbar = bar-long\n\
+    fn parse_lookup_template_and_instance() {
+        // Two lookup entries (one table, two keys), a template referencing the
+        // table as `long[$N]`, and an instantiation.
+        let src = "= long[foo] :: foo-long\n= long[bar] :: bar-long\n\
                    = mirror :: /^x:$1:$segment:$2:$segment$/\n\
-                   \t[$1:z:long($2)]  -1\n\t[$2:z:long($1)]  1\n\
+                   \t[$1:z:long[$2]]  -1\n\t[$2:z:long[$1]]  1\n\
                    = mirror foo bar\n";
         let got = parse(src).unwrap();
         match &got[0].value {
-            Entry::Define { name, entries } => {
-                assert_eq!(name, "long");
-                assert_eq!(
-                    entries,
-                    &vec![
-                        ("foo".to_string(), "foo-long".to_string()),
-                        ("bar".to_string(), "bar-long".to_string()),
-                    ]
-                );
+            Entry::Lookup { table, key, value } => {
+                assert_eq!(table, "long");
+                assert_eq!(key, "foo");
+                assert_eq!(value, "foo-long");
             }
-            other => panic!("expected Define, got {:?}", other),
+            other => panic!("expected Lookup, got {:?}", other),
         }
         match &got[1].value {
+            Entry::Lookup { table, key, value } => {
+                assert_eq!(table, "long");
+                assert_eq!(key, "bar");
+                assert_eq!(value, "bar-long");
+            }
+            other => panic!("expected Lookup, got {:?}", other),
+        }
+        match &got[2].value {
             Entry::AutoTemplate { name, pattern, postings, condition } => {
                 assert_eq!(name, "mirror");
                 assert!(condition.is_none());
                 assert_eq!(pattern, "^x:$1:$segment:$2:$segment$");
                 assert_eq!(postings.len(), 2);
-                assert_eq!(postings[0].account, "$1:z:long($2)");
+                assert_eq!(postings[0].account, "$1:z:long[$2]");
                 assert!(postings[0].is_virtual && postings[0].balanced);
             }
             other => panic!("expected AutoTemplate, got {:?}", other),
         }
-        match &got[2].value {
+        match &got[3].value {
             Entry::AutoInstance { name, args } => {
                 assert_eq!(name, "mirror");
                 assert_eq!(args, &vec!["foo".to_string(), "bar".to_string()]);
             }
             other => panic!("expected AutoInstance, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn lookup_entry_is_told_apart_from_template_by_bracket() {
+        // `NAME[key] :: value` → a lookup entry; the bracket is the discriminator.
+        let got = parse("= tbl[k] :: some-value\n").unwrap();
+        assert!(matches!(&got[0].value,
+            Entry::Lookup { table, key, value }
+                if table == "tbl" && key == "k" && value == "some-value"));
+        // An empty value is rejected.
+        assert!(parse("= tbl[k] ::\n").is_err());
     }
 
     #[test]
@@ -1091,8 +1117,10 @@ mod tests {
     }
 
     #[test]
-    fn inline_define_is_rejected() {
-        // Only the block form is supported — no expression evaluator.
+    fn define_keyword_is_no_longer_a_directive() {
+        // The `define` block was replaced by `= NAME[key] :: value` lookup
+        // entries; `define` is now just an unknown directive.
+        assert!(parse("define foo\n").is_err());
         assert!(parse("define foo = bar\n").is_err());
     }
 

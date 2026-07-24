@@ -65,19 +65,22 @@ pub enum Entry {
     /// children provide the postings with their multipliers.
     AutoRule(AutoRule),
 
-    /// `define NAME` block + indented `key = value` lines: a named
-    /// string→string lookup table. Called as `NAME(key)` inside an
-    /// auto-template posting account to expand a key to its value. A
-    /// deliberately restricted `define` — pure lookup, no expressions — so
-    /// resolving it is a map access, not an evaluator.
-    Define {
-        name: String,
-        entries: Vec<(String, String)>,
+    /// `= NAME[key] :: value` — one entry of a named string→string lookup
+    /// table, declared on the auto-transaction level (leading `=`). Referenced
+    /// as `NAME[key]` inside an auto-template posting account to expand a key
+    /// to its value. A deliberately restricted lookup — pure map access, no
+    /// expressions — so resolving it is a map lookup, not an evaluator. Each
+    /// line is one entry; entries sharing a table name are merged in resolve.
+    /// The bracket in the name is what tells it apart from an `AutoTemplate`.
+    Lookup {
+        table: String,
+        key: String,
+        value: String,
     },
 
     /// `= NAME :: /pattern/` — a named auto-rule *template*. Its pattern and
     /// posting accounts carry positional `$1` / `$2` placeholders (and
-    /// `NAME(key)` lookup calls); an `AutoInstance` substitutes a pair in. Kept
+    /// `NAME[key]` lookup calls); an `AutoInstance` substitutes a pair in. Kept
     /// apart from `AutoRule` because it isn't matchable until filled.
     AutoTemplate {
         name: String,

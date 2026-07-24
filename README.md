@@ -163,7 +163,7 @@ ledger-style **automated transactions**
 (line-leading `= /pattern/` rules that inject scaled postings
 into matching transactions, with `$account` / `$segment`
 placeholders, plus named `= NAME :: /pattern/` templates
-instantiated per pair with positional `$1` / `$2` args, a `define`
+instantiated per pair with positional `$1` / `$2` args, a `= NAME[key] :: value`
 lookup table, and an `amount <op> N` rule clause); filter DSL across account /
 description / code / commodity plus `-r` sibling-posting view;
 per-posting currency conversion at `tx.date`; multi-hop price
@@ -179,10 +179,10 @@ same-commodity transit accounts; `-R` real-only output.
 **Not in scope today:** `include` directive, `apply/end`, the
 short-form directives `D` / `Y` / `A` / `N`, `tag`, `payee`,
 periodic transactions (`~` blocks), a general value-expression
-language — including expression-valued `define` and the
+language — including ledger's expression-valued `define` and the
 `= ... and expr "..."` conditional form of automated transactions
-(a *restricted* lookup-table `define` and an `amount <op> N` rule
-clause are supported instead), CSV import, query language, budget
+(a *restricted* `= NAME[key] :: value` lookup table and an `amount <op> N`
+rule clause are supported instead), CSV import, query language, budget
 reports, web UI.
 
 Journals using any of those will fail to load — acc has no
@@ -1000,24 +1000,24 @@ than once and in any position (`:cash:$segment:eur`); each occurrence
 consumes exactly one segment. Pair it with `$account` to flush every
 matched account to its own leg regardless of its leading segment.
 
-**Named templates + `define` lookups.** A named rule `= NAME :: /pattern/` is
+**Named templates + `[key]` lookups.** A named rule `= NAME :: /pattern/` is
 a *template* — it does nothing on its own, and is fired by instantiating it
 with a pair, `= NAME a b`. Positional `$1` / `$2` placeholders in the pattern
 and posting accounts are filled from the two arguments; because the pair is
 unordered, each instantiation emits *both* directions (one rule each), so a
-single `= NAME a b` mirrors `a→b` and `b→a`. A `define NAME` block is a
-string→string lookup table, called as `NAME(key)` inside a posting account to
-expand a key to its value (unknown key → error). Together they track a
-per-pair "who owes whom" position:
+single `= NAME a b` mirrors `a→b` and `b→a`. A lookup table is a set of
+`= NAME[key] :: value` entries — a string→string map on the same
+auto-transaction level (leading `=`), referenced as `NAME[key]` inside a
+posting account to expand a key to its value (unknown key → error). Together
+they track a per-pair "who owes whom" position:
 
 ```
-define fullname
-	a = alpha-corp
-	b = beta-llc
+= fullname[a] :: alpha-corp
+= fullname[b] :: beta-llc
 
 = reconcile :: /^transit:$1-$segment:$2-$segment$/ amount > 0
-	($1:owed:fullname($2))    1
-	($2:owed:fullname($1))   -1
+	($1:owed:fullname[$2])    1
+	($2:owed:fullname[$1])   -1
 
 = reconcile a b
 ```
@@ -1755,20 +1755,19 @@ accidentally, declare the minority spelling as an `alias` so it
 folds into the canonical form. Only filter patterns (`com usd`)
 match case-insensitively, as a user-friendliness convenience.
 
-### `define`
+### `= NAME[key] :: value` (lookup tables)
 
 ```
-define fullname
-	a = alpha-corp
-	b = beta-llc
+= fullname[a] :: alpha-corp
+= fullname[b] :: beta-llc
 ```
 
-A `define NAME` block is a string→string **lookup table**: each indented
-`key = value` line maps a key, and `NAME(key)` — inside an
-automated-transaction template posting — expands to the value (an unknown key
-is an error). It is deliberately a lookup *only*, not ledger's value-expression
-`define`; acc has no expression evaluator. See **Automated transactions** for
-how a template calls it.
+A set of `= NAME[key] :: value` entries is a string→string **lookup table** on
+the auto-transaction level (leading `=`): each line maps one key, and
+`NAME[key]` — inside an automated-transaction template posting — expands to the
+value (an unknown key is an error). Deliberately a lookup *only*, not ledger's
+value-expression `define`; acc has no expression evaluator. See **Automated
+transactions** for how a template references it.
 
 ### `account`
 
@@ -1898,7 +1897,8 @@ here so ledger-cli migrants know what to strip or rewrite:
 
 - `include` — multi-file journals compose via `-f DIR` (recursive)
   or multiple `-f PATH` arguments instead.
-- `apply` / `end`, `define` — scope-block and macro directives.
+- `apply` / `end`, `define` — scope-block and macro directives
+  (acc's string-lookup table is `= NAME[key] :: value` instead).
 - `D`, `Y`, `A`, `N` — short-form defaults.
 - `tag`, `payee` — metadata directives.
 - `~` blocks (periodic transactions) — syntax is rejected at the
