@@ -23,10 +23,12 @@ use std::sync::Arc;
 
 use crate::date::Date;
 use crate::decimal::Decimal;
-use crate::parser::entry::{AmountCondition, AutoPattern, AutoPosting, AutoRule, Entry};
+use crate::parser::entry::{
+    AmountCondition, AutoAmount, AutoPattern, AutoPosting, AutoRule, Cadence, Entry,
+};
 use crate::parser::located::Located;
 use crate::parser::posting::{Costs, Posting};
-use crate::parser::transaction::Transaction;
+use crate::parser::transaction::{State, Transaction};
 use crate::parser::entry::Price;
 
 pub mod error;
@@ -167,12 +169,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                         ),
                     ));
                 }
-                for lp in &mut tx.postings {
-                    apply_to_posting(&mut lp.value, &aliases);
-                    if let Some(name) = resolve_role_account(&lp.value.account, &roles) {
-                        lp.value.account = name;
-                    }
-                }
+                finalize_tx_postings(&mut tx, &aliases, &roles);
                 transactions.push(Located { file, line, value: tx });
             }
             Entry::AutoRule(rule) => {
@@ -186,15 +183,12 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                         "auto-rule has no postings",
                     ));
                 }
-                // Injected postings keep the transaction balanced iff each
-                // balance pool (real, balanced-virtual `[...]`) sums to zero;
-                // `(...)` unbalanced postings are exempt, like everywhere in acc.
-                if let Err((pool, sum)) = check_multiplier_balance(&rule.postings) {
-                    return Err(ResolveError::new(
-                        file.clone(),
-                        line,
-                        format!("auto-rule {pool} multipliers must sum to zero, got {sum}"),
-                    ));
+                // Injected postings must keep the transaction balanced: each pool
+                // (real, balanced-virtual `[...]`) either has a bare leg that
+                // fills to balance it, or its factors sum to zero. `(...)`
+                // postings are exempt, like everywhere in acc.
+                if let Err(msg) = check_multiplier_balance(&rule.postings) {
+                    return Err(ResolveError::new(file.clone(), line, format!("auto-rule: {msg}")));
                 }
                 auto_rules.push(rule);
             }
@@ -224,6 +218,29 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                 // first pass, so ordering across files doesn't matter.
                 let rules = expand_instance(&name, &args, &templates, &lookups, &file, line)?;
                 auto_rules.extend(rules);
+            }
+            Entry::Periodic { period, cadence, description, postings } => {
+                // A `~ PERIOD [cadence]` block expands into real, ordinary
+                // transactions — one per occurrence in the year, the written
+                // total split across them. Each then gets the same alias / date /
+                // role finalization as any transaction, and the booker balances
+                // and auto-fills it downstream.
+                if postings.len() < 2 {
+                    return Err(ResolveError::new(
+                        file.clone(),
+                        line,
+                        format!(
+                            "periodic block `~ {period}` must have at least two postings, got {}",
+                            postings.len()
+                        ),
+                    ));
+                }
+                let occurrences =
+                    expand_periodic(&period, cadence, &description, postings, &file, line)?;
+                for mut tx in occurrences {
+                    finalize_tx_postings(&mut tx, &aliases, &roles);
+                    transactions.push(Located { file: file.clone(), line, value: tx });
+                }
             }
             // Account/Lookup/AutoTemplate scaffolds and Comment entries carry
             // no data we still need here — the first pass already consumed the
@@ -261,26 +278,53 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
     })
 }
 
-/// An auto-rule's injected postings keep the transaction balanced iff its real
-/// postings sum to zero AND its balanced-virtual `[...]` postings sum to zero,
-/// each pool on its own. Unbalanced-virtual `(...)` postings take part in no
-/// balance — like everywhere else in acc — so they're exempt: a lone `(...)`
-/// posting is valid. Returns the first offending (pool-name, non-zero sum).
-fn check_multiplier_balance(postings: &[AutoPosting]) -> Result<(), (&'static str, Decimal)> {
-    let mut real = Decimal::zero();
-    let mut balanced_virtual = Decimal::zero();
+/// An auto-rule's injected postings must keep the transaction balanced. Each
+/// balance pool (real, balanced-virtual `[...]`) is checked on its own: at most
+/// one bare `Fill` leg, which balances the pool by absorbing the rest; with no
+/// `Fill`, the `Factor` multipliers must sum to zero. Unbalanced-virtual `(...)`
+/// postings take part in no balance — exempt — so a bare `(...)` has nothing to
+/// fill and is rejected. Returns a human-readable reason on failure.
+fn check_multiplier_balance(postings: &[AutoPosting]) -> Result<(), String> {
+    if postings
+        .iter()
+        .any(|p| p.is_virtual && !p.balanced && matches!(p.amount, AutoAmount::Fill))
+    {
+        return Err("a bare `(...)` posting has no pool to balance".to_string());
+    }
+    check_pool(postings, false, "real")?;
+    check_pool(postings, true, "balanced-virtual `[...]`")?;
+    Ok(())
+}
+
+/// Validate one balance pool. `balanced_virtual = false` selects the real pool
+/// (non-virtual postings), `true` the balanced-virtual `[...]` pool. At most one
+/// bare `Fill` leg (it fills the pool); with a `Fill` present the other factors
+/// may sum to anything, otherwise they must sum to zero.
+fn check_pool(postings: &[AutoPosting], balanced_virtual: bool, pool: &str) -> Result<(), String> {
+    let mut sum = Decimal::zero();
+    let mut fills = 0usize;
+    let mut clamps = 0usize;
     for p in postings {
-        if !p.is_virtual {
-            real += p.multiplier;
-        } else if p.balanced {
-            balanced_virtual += p.multiplier;
+        let in_pool = if balanced_virtual { p.is_virtual && p.balanced } else { !p.is_virtual };
+        if !in_pool {
+            continue;
+        }
+        match &p.amount {
+            AutoAmount::Factor(f) => sum += *f,
+            AutoAmount::Clamp { .. } => clamps += 1,
+            AutoAmount::Fill => fills += 1,
         }
     }
-    if !real.is_zero() {
-        return Err(("real", real));
+    if fills > 1 {
+        return Err(format!("more than one bare posting in the {pool} pool"));
     }
-    if !balanced_virtual.is_zero() {
-        return Err(("balanced-virtual `[...]`", balanced_virtual));
+    // A clamp value is only known at expansion time, so it can't be summed to
+    // zero statically — the pool needs a bare leg to absorb whatever it clamps to.
+    if clamps > 0 && fills == 0 {
+        return Err(format!("a clamp posting in the {pool} pool needs a bare leg to balance it"));
+    }
+    if fills == 0 && clamps == 0 && !sum.is_zero() {
+        return Err(format!("{pool} multipliers must sum to zero, got {sum}"));
     }
     Ok(())
 }
@@ -332,7 +376,7 @@ fn expand_instance(
             )?;
             postings.push(AutoPosting {
                 account,
-                multiplier: tp.multiplier,
+                amount: tp.amount.clone(),
                 is_virtual: tp.is_virtual,
                 balanced: tp.balanced,
             });
@@ -592,13 +636,13 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
                         format!("auto-rule template `{name}` has no postings"),
                     ));
                 }
-                // Each balance pool (real, balanced-virtual `[...]`) must sum to
-                // zero; `(...)` unbalanced postings are exempt — validate once.
-                if let Err((pool, sum)) = check_multiplier_balance(postings) {
+                // Each balance pool must balance — a bare leg fills it, or the
+                // factors sum to zero; `(...)` postings are exempt — validate once.
+                if let Err(msg) = check_multiplier_balance(postings) {
                     return Err(ResolveError::new(
                         e.file.clone(),
                         e.line,
-                        format!("template `{name}` {pool} multipliers must sum to zero, got {sum}"),
+                        format!("template `{name}`: {msg}"),
                     ));
                 }
                 // Only positional `$1` / `$2` are valid — catch `$3`, a name,
@@ -673,6 +717,146 @@ fn apply_to_posting(p: &mut Posting, aliases: &HashMap<String, String>) {
     }
     if let Some(a) = &mut p.balance_assertion {
         apply_alias(&mut a.commodity, aliases);
+    }
+}
+
+/// The per-posting resolution every transaction gets: commodity aliases,
+/// date-variable substitution in the account (`$year`/`$month`/`$day` → the
+/// transaction's own date parts), then `$role:slot` account resolution.
+/// Shared by hand-written transactions and expanded `~` periodic ones.
+fn finalize_tx_postings(
+    tx: &mut Transaction,
+    aliases: &HashMap<String, String>,
+    roles: &HashMap<String, String>,
+) {
+    let date_str = tx.date.to_string();
+    for lp in &mut tx.postings {
+        apply_to_posting(&mut lp.value, aliases);
+        substitute_date_vars(&mut lp.value.account, &date_str);
+        if let Some(name) = resolve_role_account(&lp.value.account, roles) {
+            lp.value.account = name;
+        }
+    }
+}
+
+/// Replace `$year` / `$month` / `$day` in an account with the fields of
+/// `date_str` (a `YYYY-MM-DD` string), exactly as they appear (zero-padded).
+/// A plain textual replace; accounts without `$` are skipped. Lets a posting
+/// derive a dated sub-account from its own transaction date
+/// (`assets:budget:$year` on a 2021 entry → `assets:budget:2021`). Shared with
+/// the expander, which fills the same vars in auto-rule-injected accounts using
+/// the triggering transaction's date.
+pub(crate) fn substitute_date_vars(account: &mut String, date_str: &str) {
+    // Fast path: most accounts carry no `$` at all. `str::replace` always
+    // allocates a fresh String even when the pattern is absent, so skip it.
+    if !account.contains('$') {
+        return;
+    }
+    // A `$` alone doesn't mean a date variable — `$role:slot` accounts also
+    // have one, and a date account may carry only some of the three. Guard each
+    // replace so it allocates only for the variables actually present.
+    // `date_str` is always `YYYY-MM-DD` (from Date::to_string), ASCII, so the
+    // byte slices are exactly the year / month / day fields.
+    if account.contains("$year") {
+        *account = account.replace("$year", &date_str[0..4]);
+    }
+    if account.contains("$month") {
+        *account = account.replace("$month", &date_str[5..7]);
+    }
+    if account.contains("$day") {
+        *account = account.replace("$day", &date_str[8..10]);
+    }
+}
+
+/// Expand a `~ PERIOD` block into a real transaction. Only a bare year is
+/// supported: the transaction is dated `YYYY-01-01`. Its postings are ordinary
+/// (the bare last one auto-fills in the booker); any `$year`/`$month`/`$day` in
+/// their accounts is filled by [`finalize_tx_postings`] like any transaction's.
+fn expand_periodic(
+    period: &str,
+    cadence: Cadence,
+    description: &str,
+    postings: Vec<Located<Posting>>,
+    file: &Arc<str>,
+    line: usize,
+) -> Result<Vec<Transaction>, ResolveError> {
+    let year: i32 = period.parse().map_err(|_| {
+        ResolveError::new(
+            file.clone(),
+            line,
+            format!("periodic `~ {period}` — only a bare year `YYYY` is supported"),
+        )
+    })?;
+    let jan1 = Date::parse(&format!("{year:04}-01-01"))
+        .map_err(|e| ResolveError::new(file.clone(), line, format!("periodic `~ {period}`: {e}")))?;
+    let dates = occurrence_dates(jan1, cadence);
+    let n = dates.len();
+
+    let txs = dates
+        .into_iter()
+        .enumerate()
+        .map(|(i, date)| {
+            // Each occurrence clones the source postings and takes its slice of
+            // every explicit amount; a bare leg stays bare and auto-fills.
+            let occ_postings = postings
+                .iter()
+                .map(|lp| {
+                    let mut p = lp.value.clone();
+                    if let Some(amount) = &mut p.amount {
+                        amount.value = split_amount(amount.value, amount.decimals, i, n);
+                    }
+                    Located { file: lp.file.clone(), line: lp.line, value: p }
+                })
+                .collect();
+            Transaction {
+                date,
+                state: State::Uncleared,
+                code: None,
+                description: description.to_string(),
+                postings: occ_postings,
+                comments: Vec::new(),
+            }
+        })
+        .collect();
+    Ok(txs)
+}
+
+/// The occurrence dates of a `~ YYYY` block within the year, under its cadence:
+/// one at `YYYY-01-01` for yearly, the start of each month for monthly, each day
+/// for daily.
+fn occurrence_dates(jan1: Date, cadence: Cadence) -> Vec<Date> {
+    match cadence {
+        Cadence::Yearly => vec![jan1],
+        Cadence::Monthly => step_dates(jan1, Date::next_month_start),
+        Cadence::Daily => step_dates(jan1, Date::next_day),
+    }
+}
+
+/// Walk from `jan1` up to (excluding) the next year's start, stepping with
+/// `step`, collecting each occurrence date within the year.
+fn step_dates(jan1: Date, step: fn(Date) -> Date) -> Vec<Date> {
+    let end = jan1.next_year_start().days();
+    let mut out = Vec::new();
+    let mut d = jan1;
+    while d.days() < end {
+        out.push(d);
+        d = step(d);
+    }
+    out
+}
+
+/// The `i`-th of `n` slices of `total`, at `decimals` display precision: an even
+/// split rounded to `decimals`, with the last slice taking the remainder so the
+/// `n` slices sum back to exactly `total`.
+fn split_amount(total: Decimal, decimals: usize, i: usize, n: usize) -> Decimal {
+    if n <= 1 {
+        return total;
+    }
+    let per = total.div_rounded(Decimal::from(n as i128)).round(decimals);
+    if i + 1 < n {
+        per
+    } else {
+        total - per.mul_rounded(Decimal::from((n - 1) as i128))
     }
 }
 
@@ -882,5 +1066,32 @@ mod tests {
             assert_eq!(rule.postings.len(), 1);
             assert!(rule.postings[0].is_virtual && !rule.postings[0].balanced);
         }
+    }
+
+    #[test]
+    fn periodic_monthly_splits_the_total() {
+        let out =
+            resolve(parsed("~ 2021 monthly budget\n\tassets:b:$year  €1200.00\n\tin:x\n")).unwrap();
+        // 12 monthly transactions, dated the 1st of each month.
+        assert_eq!(out.transactions.len(), 12);
+        assert_eq!(out.transactions[0].value.date.to_string(), "2021-01-01");
+        // Each slice is 1200 / 12 = 100, and the account's `$year` is filled.
+        let p = &out.transactions[5].value.postings[0].value;
+        assert_eq!(p.account, "assets:b:2021");
+        assert_eq!(p.amount.as_ref().unwrap().value, Decimal::from(100));
+    }
+
+    #[test]
+    fn periodic_split_preserves_the_total_with_remainder() {
+        // 100 / 12 does not divide evenly; the 12 slices must still sum to 100
+        // (the last occurrence absorbs the rounding remainder).
+        let out = resolve(parsed("~ 2021 monthly x\n\ta  €100.00\n\tb\n")).unwrap();
+        assert_eq!(out.transactions.len(), 12);
+        let sum = out
+            .transactions
+            .iter()
+            .map(|t| t.value.postings[0].value.amount.as_ref().unwrap().value)
+            .fold(Decimal::zero(), |acc, v| acc + v);
+        assert_eq!(sum, Decimal::from(100));
     }
 }

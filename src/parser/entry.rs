@@ -5,6 +5,8 @@ use std::sync::Arc;
 use crate::date::Date;
 use crate::decimal::Decimal;
 
+use super::located::Located;
+use super::posting::Posting;
 use super::transaction::Transaction;
 
 /// One raw record from a journal file.
@@ -98,6 +100,41 @@ pub enum Entry {
         name: String,
         args: Vec<String>,
     },
+
+    /// `~ PERIOD [CADENCE]` block + indented postings — a *periodic*
+    /// transaction. The resolver expands it into real, ordinary transactions:
+    /// one per cadence occurrence in the year, dated at the occurrence start,
+    /// with the written amounts (the period *total*) divided across them
+    /// (`monthly` → ÷12, `daily` → ÷days; the last occurrence absorbs the
+    /// rounding remainder). `$year`/`$month`/`$day` in an account are filled
+    /// from each occurrence's date. Unlike ledger's `~` (an unbounded
+    /// budget/forecast that *repeats* the amount), acc's are bounded to the year
+    /// and *split* the total; the generated transactions are real — they book,
+    /// balance, and auto-fill a bare posting like any hand-written entry.
+    Periodic {
+        /// The period token — a bare year `YYYY`.
+        period: String,
+        /// How to spread the block across the year (`~ 2021 monthly …`).
+        cadence: Cadence,
+        /// Optional description for the generated transactions (`~ 2021 note`);
+        /// empty when the header carries only the period (and cadence).
+        description: String,
+        postings: Vec<Located<Posting>>,
+    },
+}
+
+/// How a `~` periodic block spreads its amounts across the year. The written
+/// amounts are the period *total*; a cadence divides them across its
+/// occurrences — the last occurrence absorbs any rounding remainder so the sum
+/// stays exact — and dates one transaction at the start of each occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cadence {
+    /// No cadence keyword — one transaction, `YYYY-01-01`, the full amount.
+    Yearly,
+    /// `monthly` — 12 transactions, `YYYY-MM-01`, each the total ÷ 12.
+    Monthly,
+    /// `daily` — one transaction per day of the year, each the total ÷ days.
+    Daily,
 }
 
 /// Comparison operator for an `amount` clause on an auto-rule.
@@ -262,13 +299,41 @@ fn matches_segments(
     true
 }
 
-/// One posting inside an auto-rule. Account + multiplier + virtual
-/// flags mirror the posting syntax; the multiplier is applied to the
-/// triggering posting's amount during expansion.
+/// How much an auto-rule posting injects, relative to the triggering amount.
+/// Written in the amount slot after the account:
+///
+/// - a bare number, or `amount` (= `1`) / `-amount` (= `-1`) → [`Factor`]:
+///   inject `factor × trigger`.
+/// - `clamp(amount)` / `-clamp(amount)` → [`Clamp`]: inject the trigger clamped
+///   to this posting's account's remaining headroom to zero.
+/// - nothing at all (a bare `[account]`) → [`Fill`]: the balancing leg, filled
+///   by the expander with the negated sum of its pool's other injected legs —
+///   like the bare last posting of a hand-written transaction.
+///
+/// [`Factor`]: AutoAmount::Factor
+/// [`Clamp`]: AutoAmount::Clamp
+/// [`Fill`]: AutoAmount::Fill
+#[derive(Debug, Clone)]
+pub enum AutoAmount {
+    Factor(Decimal),
+    /// `clamp(amount)` / `-clamp(amount)` — inject the trigger, but clamped so
+    /// this posting's own account is not driven past zero: it fills only the
+    /// remaining headroom (`min(|trigger|, balance)`). `negate` is the
+    /// `-clamp(...)` form. Evaluated in the expander against the running account
+    /// balance; a pool with a clamp leg needs a `Fill` leg to absorb it.
+    Clamp {
+        negate: bool,
+    },
+    Fill,
+}
+
+/// One posting inside an auto-rule. Account + amount + virtual flags mirror
+/// the posting syntax; the amount is applied to the triggering posting during
+/// expansion.
 #[derive(Debug, Clone)]
 pub struct AutoPosting {
     pub account: String,
-    pub multiplier: crate::decimal::Decimal,
+    pub amount: AutoAmount,
     pub is_virtual: bool,
     pub balanced: bool,
 }

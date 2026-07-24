@@ -177,21 +177,18 @@ latest rate on `holding gain` / `holding loss`;
 same-commodity transit accounts; `-R` real-only output.
 
 **Not in scope today:** `include` directive, `apply/end`, the
-short-form directives `D` / `Y` / `A` / `N`, `tag`, `payee`,
-periodic transactions (`~` blocks), a general value-expression
-language — including the `= ... and expr "..."` conditional form of
-automated transactions (a *restricted* `= NAME[key] :: value` lookup table
-and an `amount <op> N` rule clause are supported instead), CSV import,
-query language, budget
-reports, web UI.
+short-form directives `D` / `Y` / `A` / `N`, `tag`, `payee`, a general
+value-expression language — including the `= ... and expr "..."` conditional
+form of automated transactions (a *restricted* `= NAME[key] :: value` lookup
+table and an `amount <op> N` rule clause are supported instead), CSV import,
+query language, budget reports, web UI.
 
 Journals using any of those will fail to load — acc has no
 silent-skip policy for directives it doesn't understand.
 
 Some of the list is permanently out of scope (CSV import,
 BQL-style queries, web UI — adjacent tools cover those). Some
-might land later (periodic and automated transactions, a few of
-the short-form directives).
+might land later (a few of the short-form directives).
 
 ---
 
@@ -945,11 +942,17 @@ Expanded at load time to:
 Net effect: `assets:cash` back to zero, `assets:bank` down $100,
 `expenses:cash` up $100.
 
-Multipliers must sum to zero across each balance pool — real
-postings on their own, balanced-virtual `[...]` on their own
-(unbalanced `(...)` postings are exempt) — so the expansion always
-leaves the transaction balanced; the resolver validates this. A
-VAT-split variant:
+The amount after each account is a factor on the triggering amount: a
+bare number, or `amount` / `-amount` as readable synonyms for `1` /
+`-1`. A posting with **no** amount is the balancing leg — the expander
+fills it with the negated pool sum, like the bare last posting of a
+hand-written transaction (so the flush above can also be written
+`[assets:cash] -amount` + a bare `[expenses:cash]`).
+
+Each balance pool must balance: a bare leg fills it, or the factors sum
+to zero — real postings on their own, balanced-virtual `[...]` on their
+own (unbalanced `(...)` postings are exempt); the resolver validates
+this. A VAT-split variant:
 
 ```
 = /^income:gross/
@@ -999,6 +1002,12 @@ the only metacharacters are the `^` / `$` anchors and the literal
 than once and in any position (`:cash:$segment:eur`); each occurrence
 consumes exactly one segment. Pair it with `$account` to flush every
 matched account to its own leg regardless of its leading segment.
+
+**`$year` / `$month` / `$day` — the transaction's date.** In any posting
+account (hand-written or auto-injected), `$year` / `$month` / `$day` are
+replaced with the parts of that transaction's own date — `assets:budget:$year`
+on a 2026 entry becomes `assets:budget:2026`. A plain textual replace, so they
+work embedded anywhere in the account.
 
 **Named templates + `[key]` lookups.** A named rule `= NAME :: /pattern/` is
 a *template* — it does nothing on its own, and is fired by instantiating it
@@ -1769,6 +1778,28 @@ value (an unknown key is an error). Deliberately a lookup *only*; acc has no
 expression evaluator. See **Automated transactions** for how a template
 references it.
 
+### `~` (periodic transactions)
+
+```
+~ 2021 monthly annual-budget
+	assets:budget:$year   €1200.00
+	income:x
+```
+
+A `~ YYYY [monthly|daily] [title]` block expands into **real, ordinary
+transactions** — one per occurrence in the year, dated at its start
+(`YYYY-01-01`, the 1st of each month, or each day). The written amounts are the
+period **total**; a cadence divides them across the occurrences (`monthly` →
+÷12, `daily` → ÷ days), with the last occurrence absorbing any rounding
+remainder so the slices sum back exactly. `$year` / `$month` / `$day` in an
+account are filled from each occurrence's date (so the example above accrues
+`assets:budget:2021` at €100/month). Without a cadence keyword it is a single
+transaction on `YYYY-01-01`.
+
+Unlike ledger's `~` (an unbounded forecast that *repeats* the amount), acc's are
+bounded to the year and *split* the total; the generated transactions are real
+— they book, balance, and auto-fill a bare posting like any hand-written entry.
+
 ### `account`
 
 ```
@@ -1900,8 +1931,6 @@ here so ledger-cli migrants know what to strip or rewrite:
 - `apply` / `end` — scope-block directives.
 - `D`, `Y`, `A`, `N` — short-form defaults.
 - `tag`, `payee` — metadata directives.
-- `~` blocks (periodic transactions) — syntax is rejected at the
-  parser level.
 
 ---
 
