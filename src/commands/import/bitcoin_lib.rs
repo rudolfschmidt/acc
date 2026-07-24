@@ -207,7 +207,7 @@ impl Profile {
 /// ready `Basic …` header; the client reads the body on both the ok and the
 /// non-2xx paths, since Bitcoin Core returns RPC errors as a status + JSON body.
 fn rpc_call(url: &str, auth: &str, method: &str, params: Value) -> Result<Value, Error> {
-    super::rpc::call(url, method, params, &super::rpc::Auth::Basic(auth), "1.0", Duration::from_secs(30))
+    super::rpc_lib::call(url, method, params, &super::rpc_lib::Auth::Basic(auth), "1.0", Duration::from_secs(30))
 }
 
 /// Every wallet transaction, walking `listtransactions` in pages of 1000.

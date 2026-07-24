@@ -187,6 +187,7 @@ fn add_bridge_commodities<P: AsRef<Path>>(
 ) {
     // Alias map (any spelling → canonical) and the journal's own commodities.
     let mut alias_pairs: Vec<(String, String)> = Vec::new();
+    let mut parity_pairs: Vec<(String, String)> = Vec::new();
     let mut sources: HashSet<String> = HashSet::new();
     for located in journal_entries {
         match &located.value {
@@ -197,9 +198,12 @@ fn add_bridge_commodities<P: AsRef<Path>>(
                     }
                 }
             }
-            Entry::Commodity { symbol, aliases, .. } => {
+            Entry::Commodity { symbol, aliases, parities, .. } => {
                 for a in aliases {
                     alias_pairs.push((symbol.clone(), a.clone()));
+                }
+                for t in parities {
+                    parity_pairs.push((symbol.clone(), t.clone()));
                 }
             }
             _ => {}
@@ -220,6 +224,17 @@ fn add_bridge_commodities<P: AsRef<Path>>(
         }
         adj.entry(b.clone()).or_default().insert(q.clone());
         adj.entry(q).or_default().insert(b);
+    }
+    // Fixed parity edges (`commodity USDC / parity $`) live in the config,
+    // not the price DB — add them so a route like USDC → $ → € is found and
+    // the hub `$` is pulled into `needed`, keeping `$→€` past the filter.
+    for (sym, t) in &parity_pairs {
+        let (a, b) = (canon(sym), canon(t));
+        if a == b {
+            continue;
+        }
+        adj.entry(a.clone()).or_default().insert(b.clone());
+        adj.entry(b).or_default().insert(a);
     }
 
     let tgt = canon(target);
@@ -521,6 +536,29 @@ mod tests {
     }
 
     #[test]
+    fn parity_edge_bridges_usdc_to_the_hub() {
+        // A journal holding USDC, valued in € (`-X €`). USDC is not an alias
+        // of $ — it is `parity $`, its own commodity — and there is no USDC/…
+        // pair in the price DB. The parity edge must feed the bridge graph so
+        // the route USDC → $ → € is found and the hub $ pulled into `needed`.
+        let journal = "commodity $\n    alias USD\n\
+                       commodity USDC\n    parity $\n\
+                       commodity €\n    alias EUR\n\
+                       2026-07-19 * x\n    a  1 USDC\n    b\n";
+        let fiat = "P 2026-07-19 USD EUR 0.874355\n";
+        with_tmp("parity-j", journal, |j| {
+            with_tmp("parity-e", fiat, |e| {
+                let entries = read_and_parse(&[j]).unwrap();
+                let mut needed = needed_commodities(&entries, Some("€"));
+                assert!(!needed.contains("$"), "hub must not be needed yet");
+                add_bridge_commodities(&mut needed, &entries, &[e.to_path_buf()], "€");
+                assert!(needed.contains("$"), "hub $ pulled onto the parity path");
+                assert!(needed.contains("USD"), "raw alias pulled in for the filter");
+            });
+        });
+    }
+
+    #[test]
     fn extracts_slippage_accounts() {
         let src = "account Equity:SlippageGain\n    slippage gain\naccount Equity:SlippageLoss\n    slippage loss\n";
         with_tmp("slippage", src, |path| {
@@ -609,6 +647,28 @@ mod tests {
                 with_tmp("ali_prc", prices, |prc| {
                     let sel = load_selective(&[cfg, jrn], &[prc], Some("€")).unwrap();
                     assert!(sel.prices.find("$", "€", "2024-01-11").is_some());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn selective_parity_values_usdc_via_hub() {
+        // USDC declared `parity $`; the DB has only USD/EUR. `-X €` must reach
+        // USDC → € by chaining the synthetic 1:1 parity edge (USDC→$) with the
+        // fiat hub ($→€), and the selective loader must keep the $→€ pair.
+        let config = "commodity $\n    alias USD\ncommodity USDC\n    parity $\ncommodity €\n    alias EUR\n";
+        let journal = "2024-01-10 * in\n    assets:kraken  USDC10\n    equity\n";
+        let prices = "P 2024-01-10 USD EUR 0.9\n";
+        with_tmp("par_cfg", config, |cfg| {
+            with_tmp("par_jrn", journal, |jrn| {
+                with_tmp("par_prc", prices, |prc| {
+                    let sel = load_selective(&[cfg, jrn], &[prc], Some("€")).unwrap();
+                    // USDC → € chains: USDC→$ (parity, ×1) then $→€ (×0.9).
+                    assert_eq!(
+                        sel.prices.find("USDC", "€", "2024-01-11"),
+                        Some(crate::decimal::Decimal::parse("0.9").unwrap())
+                    );
                 });
             });
         });

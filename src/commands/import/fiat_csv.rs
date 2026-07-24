@@ -431,7 +431,8 @@ fn load_commodities(path: &Path, target: &str) -> Result<(HashMap<String, String
 
 /// Minimal RFC-4180 parser: handles quoted fields with embedded commas,
 /// doubled `""` escapes, and `\r\n`. Returns every record (no header skip).
-fn parse_csv(src: &str) -> Vec<Vec<String>> {
+/// Shared with `crypto_csv` (both parse exchange/bank CSV exports).
+pub(super) fn parse_csv(src: &str) -> Vec<Vec<String>> {
     let mut records = Vec::new();
     let mut record = Vec::new();
     let mut field = String::new();
@@ -470,7 +471,7 @@ fn parse_csv(src: &str) -> Vec<Vec<String>> {
 }
 
 /// Parse a single CSV record (one line, no trailing newline).
-fn parse_record(line: &str) -> Vec<String> {
+pub(super) fn parse_record(line: &str) -> Vec<String> {
     parse_csv(line).into_iter().next().unwrap_or_default()
 }
 

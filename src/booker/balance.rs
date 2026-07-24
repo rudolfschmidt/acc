@@ -20,7 +20,12 @@ use super::error::{BookError, BookErrorKind, Residual};
 /// Balance one transaction. If one posting lacks an amount, it is
 /// inferred as the negated sum of the others (in the cost-effective
 /// commodity if any `@`/`@@` annotations are in play). If all
-/// postings carry amounts, each commodity's sum must be zero.
+/// postings carry amounts, each commodity's sum must be zero — always
+/// when a single commodity remains after cost resolution, and (for a
+/// multi-commodity entry) whenever any `@`/`@@` cost is present, which
+/// ties every commodity together including fee legs in a different
+/// unit. A lot `{…}` cost alone does not (its counter may balance in
+/// the face commodity).
 ///
 /// Assumes any balance-assignment posting (`= X` without amount) has
 /// already been resolved by the caller. Balance-assertion-only
@@ -36,6 +41,14 @@ pub(super) fn balance_tx(
     let mut sums: HashMap<String, Decimal> = HashMap::new();
     let mut max_decimals: HashMap<String, usize> = HashMap::new();
     let mut missing_idx: Option<usize> = None;
+    // An `@`/`@@` cost converts a leg into its cost commodity for
+    // balance, signalling the author wants cross-commodity balance —
+    // which promotes the multi-commodity case from accepted as-is to
+    // fully enforced (see the final check). A lot `{…}` cost does NOT:
+    // its counter may sit in the lot's face commodity (e.g.
+    // `FOO 100 {=$5} / income FOO -100`, which balances in FOO), so
+    // the `$`-converted lot leg must not be forced against it.
+    let mut has_costs = false;
 
     let err = |kind: BookErrorKind| BookError::new(file.clone(), start_line, end_line, kind);
 
@@ -43,6 +56,9 @@ pub(super) fn balance_tx(
         let p = &lp.value;
         if p.is_virtual && !p.balanced {
             continue;
+        }
+        if p.costs.is_some() {
+            has_costs = true;
         }
         match effective_amount(p) {
             Some(eff) => {
@@ -111,28 +127,35 @@ pub(super) fn balance_tx(
                 tx.postings.splice(idx..=idx, replacements);
             }
         }
-    } else if sums.len() == 1 {
-        // Balance check only applies when — after cost resolution — a
-        // single commodity remains. Multi-commodity transactions
-        // without costs cannot balance numerically and are accepted
-        // as-is; it is up to the author to add `@` / `@@` annotations
-        // when cross-commodity balance enforcement is wanted.
+    } else if sums.len() == 1 || has_costs {
+        // Enforce that EVERY commodity nets to (display) zero. This runs
+        // when a single commodity remains after cost resolution, or when
+        // any posting carries an `@`/`@@` cost — such a cost ties the
+        // commodities together, so a fee leg in a different unit (e.g.
+        // an LTC trade fee alongside a `LTC… @@ $…` leg) must balance too. A
+        // multi-commodity entry with NO costs stays accepted as-is
+        // (independent commodity streams); add `@`/`@@` to enforce.
         //
         // Tolerance: residuals that round to zero at the commodity's
         // display precision are accepted. Per-unit cost multiplication
         // (e.g. `0.26184800 BTC @ €11292.58`) produces trailing digits
         // beyond what the user wrote; any real bookkeeping error is
         // large enough to show up in the rounded display anyway.
-        let (commodity, sum) = sums.into_iter().next().unwrap();
-        let decimals = max_decimals.get(&commodity).copied().unwrap_or(0);
-        if !sum.is_display_zero(decimals) {
-            return Err(err(BookErrorKind::Unbalanced {
-                residuals: vec![Residual {
+        let mut residuals: Vec<Residual> = sums
+            .into_iter()
+            .filter_map(|(commodity, sum)| {
+                let decimals = max_decimals.get(&commodity).copied().unwrap_or(0);
+                (!sum.is_display_zero(decimals)).then_some(Residual {
                     commodity,
                     value: sum,
                     decimals,
-                }],
-            }));
+                })
+            })
+            .collect();
+        if !residuals.is_empty() {
+            // Deterministic order so the error message is stable.
+            residuals.sort_by(|a, b| a.commodity.cmp(&b.commodity));
+            return Err(err(BookErrorKind::Unbalanced { residuals }));
         }
     }
 
@@ -288,6 +311,47 @@ mod tests {
     #[test]
     fn multi_commodity_balanced_is_accepted() {
         let src = "2024-06-15 * X\n    a:x  5 USD\n    a:y  -5 USD\n    a:z  10 EUR\n    a:w  -10 EUR\n";
+        assert!(balance_one(src).is_ok());
+    }
+
+    #[test]
+    fn cost_present_enforces_every_commodity() {
+        // A trade with `@@` on one leg: the $ side nets via the cost,
+        // but the LTC fee legs don't sum to zero (0.123… − 0.0108975).
+        // The cost signals cross-commodity balance intent, so the LTC
+        // residual must error — not silently pass because $ balanced.
+        let src = "2025-08-25 * trade\n\
+                   \ta:x    LTC4.359 @@ $489.29775\n\
+                   \ta:x    $-489.29775\n\
+                   \ta:fee  LTC0.123123123123\n\
+                   \ta:x    LTC-0.0108975\n";
+        let err = balance_one(src).unwrap_err();
+        assert!(matches!(err.kind, BookErrorKind::Unbalanced { .. }));
+    }
+
+    #[test]
+    fn cost_present_multi_commodity_balanced_is_accepted() {
+        // The same trade with the correct fee: both $ and LTC net to
+        // zero, so the enforced multi-commodity check passes.
+        let src = "2025-08-25 * trade\n\
+                   \ta:x    LTC4.359 @@ $489.29775\n\
+                   \ta:x    $-489.29775\n\
+                   \ta:fee  LTC0.0108975\n\
+                   \ta:x    LTC-0.0108975\n";
+        assert!(balance_one(src).is_ok());
+    }
+
+    #[test]
+    fn lot_cost_counter_in_face_commodity_not_enforced() {
+        // A lot annotation whose counter sits in the lot's FACE
+        // commodity (FOO), not its cost ($): this balances in FOO
+        // (100 − 100). A lot cost must NOT promote it to enforced
+        // cross-commodity balance the way `@`/`@@` does — otherwise the
+        // $-converted lot leg would spuriously fail against the FOO
+        // counter (regression guard for `lot_date_annotation_is_ignored`).
+        let src = "2024-06-15 * x\n\
+                   \tassets:foo   FOO 100 {=$5}\n\
+                   \tincome:bar   FOO -100\n";
         assert!(balance_one(src).is_ok());
     }
 

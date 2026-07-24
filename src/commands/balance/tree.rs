@@ -28,6 +28,7 @@ struct Ctx<'a> {
 
 pub(super) fn print(journal: &Journal, show_empty: bool) {
     let root = Account::from_transactions(&journal.transactions);
+
     let ctx = Ctx {
         width: calculate_width(&root, &journal.precisions),
         precisions: &journal.precisions,

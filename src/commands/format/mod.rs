@@ -251,11 +251,15 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fil
                     out.push('\n');
                 }
             }
-            Entry::Commodity { symbol, aliases, precision } => {
+            Entry::Commodity { symbol, aliases, parities, precision } => {
                 out.push_str(&format!("commodity {}\n", symbol));
                 for a in aliases {
                     out.push_str(INDENT);
                     out.push_str(&format!("alias {}\n", a));
+                }
+                for t in parities {
+                    out.push_str(INDENT);
+                    out.push_str(&format!("parity {}\n", t));
                 }
                 if let Some(p) = precision {
                     out.push_str(INDENT);
@@ -277,12 +281,12 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fil
                     out.push('\n');
                 }
             }
-            Entry::AutoRule(_) => {
-                // Auto-rule blocks span multiple lines (header +
-                // postings) and the posting format here doesn't own
-                // multipliers — simpler to emit the source lines
-                // verbatim than rebuild the syntax. Find where this
-                // block ends: next line that isn't indented.
+            // Auto-rule / template / define blocks span multiple lines
+            // (header + indented children) and their body here doesn't own
+            // multipliers or lookup entries — simpler to emit the source lines
+            // verbatim than rebuild the syntax. The block ends at the next line
+            // that isn't indented.
+            Entry::AutoRule(_) | Entry::AutoTemplate { .. } | Entry::Define { .. } => {
                 let start = entry.line.saturating_sub(1);
                 let mut end = start + 1;
                 while end < source_lines.len() {
@@ -292,8 +296,15 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fil
                     }
                     end += 1;
                 }
-                for i in start..end {
-                    out.push_str(source_lines[i]);
+                for &line in &source_lines[start..end] {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+            Entry::AutoInstance { .. } => {
+                // A single-line directive (`= NAME a b`); emit it verbatim.
+                if let Some(line) = source_lines.get(entry.line.saturating_sub(1)) {
+                    out.push_str(line);
                     out.push('\n');
                 }
             }
@@ -580,11 +591,9 @@ fn extract_posting_parts(source_line: &str) -> PostingParts {
         tail.push_str(annotation);
     }
     if !comment.is_empty() {
-        if tail.is_empty() {
-            tail.push_str("  ");
-        } else {
-            tail.push(' ');
-        }
+        // Two spaces before an inline comment, whether or not a `@@`/`=`/`{`
+        // annotation precedes it — the annotation branch used to emit only one.
+        tail.push_str("  ");
         tail.push_str(comment);
     }
 
@@ -641,4 +650,23 @@ fn strip_inline_comment(body: &str) -> (&str, &str) {
         }
     }
     (body.trim_end(), "")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_comment_keeps_two_spaces_with_and_without_annotation() {
+        // With a `@@` cost annotation before the comment: two spaces, not one.
+        let p = extract_posting_parts("\trud:11:a  XMR4.314 @@ LTC10.38  ; €1000.00");
+        assert_eq!(p.amount_str, "XMR4.314");
+        assert_eq!(p.tail, " @@ LTC10.38  ; €1000.00");
+        // A one-space source is normalised up to two.
+        let p = extract_posting_parts("\trud:11:a  XMR4.314 @@ LTC10.38 ; €1000.00");
+        assert_eq!(p.tail, " @@ LTC10.38  ; €1000.00");
+        // Plain amount + comment (no annotation): still two spaces.
+        let p = extract_posting_parts("\trud:11:a  XMR4.314  ; note");
+        assert_eq!(p.tail, "  ; note");
+    }
 }
