@@ -116,7 +116,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         labels,
         labels_balance,
         labels_register,
-        defines,
+        lookups,
         templates,
     } = collect_declarations(&entries)?;
 
@@ -220,9 +220,9 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
             }
             Entry::AutoInstance { name, args } => {
                 // Instantiate a template into concrete auto-rules (one per
-                // transfer direction). Templates/defines were gathered in the
+                // transfer direction). Templates/lookups were gathered in the
                 // first pass, so ordering across files doesn't matter.
-                let rules = expand_instance(&name, &args, &templates, &defines, &file, line)?;
+                let rules = expand_instance(&name, &args, &templates, &lookups, &file, line)?;
                 auto_rules.extend(rules);
             }
             // Account/Lookup/AutoTemplate scaffolds and Comment entries carry
@@ -295,7 +295,7 @@ fn expand_instance(
     name: &str,
     args: &[String],
     templates: &HashMap<String, Template>,
-    defines: &HashMap<String, HashMap<String, String>>,
+    lookups: &HashMap<String, HashMap<String, String>>,
     file: &Arc<str>,
     line: usize,
 ) -> Result<Vec<AutoRule>, ResolveError> {
@@ -326,7 +326,7 @@ fn expand_instance(
         for tp in &template.postings {
             let account = resolve_lookup_calls(
                 &substitute_params(&tp.account, &bindings),
-                defines,
+                lookups,
                 file,
                 line,
             )?;
@@ -384,15 +384,15 @@ fn param_refs(text: &str) -> Vec<&str> {
 /// known table is an error — a typo in an instantiation pair should surface.
 fn resolve_lookup_calls(
     account: &str,
-    defines: &HashMap<String, HashMap<String, String>>,
+    lookups: &HashMap<String, HashMap<String, String>>,
     file: &Arc<str>,
     line: usize,
 ) -> Result<String, ResolveError> {
     let mut result = account.to_string();
     loop {
-        // Leftmost `table(` across all defined tables.
+        // Leftmost `table[` across all declared lookup tables.
         let mut hit: Option<(usize, String)> = None;
-        for tname in defines.keys() {
+        for tname in lookups.keys() {
             if let Some(start) = result.find(&format!("{tname}[")) {
                 match &hit {
                     Some((s, _)) if *s <= start => {}
@@ -407,7 +407,7 @@ fn resolve_lookup_calls(
         })?;
         let close = after + rel_close;
         let key = result[after..close].trim().to_string();
-        let value = defines
+        let value = lookups
             .get(&tname)
             .and_then(|t| t.get(&key))
             .cloned()
@@ -481,7 +481,7 @@ struct Declarations {
     labels_balance: LabelSet,
     labels_register: LabelSet,
     /// Lookup tables from `= NAME[key] :: value` entries: table → (key → value).
-    defines: HashMap<String, HashMap<String, String>>,
+    lookups: HashMap<String, HashMap<String, String>>,
     /// `= NAME :: /pattern/` auto-rule templates, by name.
     templates: HashMap<String, Template>,
 }
@@ -501,7 +501,7 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
     // Lookup tables (`= NAME[key] :: value`) and `= NAME :: /pattern/`
     // templates, both gathered here so an instantiation can reference either
     // regardless of source order.
-    let mut defines: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut lookups: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut templates: HashMap<String, Template> = HashMap::new();
 
     for e in entries {
@@ -571,7 +571,7 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
             Entry::Lookup { table, key, value } => {
                 // Each line is one entry; entries sharing a table name merge
                 // here. A duplicate key within one table is a conflict.
-                if defines
+                if lookups
                     .entry(table.clone())
                     .or_default()
                     .insert(key.clone(), value.clone())
@@ -642,7 +642,7 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
         labels,
         labels_balance,
         labels_register,
-        defines,
+        lookups,
         templates,
     })
 }
