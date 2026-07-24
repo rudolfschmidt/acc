@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.25.0 — 2026-07-24
+
+### Fri 24 Jul 2026 - Periodic transactions, date variables, and richer auto-rule amounts
+
+**Periodic transactions (`~`) — real, and split across the year.** A `~ YYYY
+[monthly|daily] [title]` block expands into ordinary transactions dated at each
+occurrence's start — one for `~ 2021`, twelve for `monthly`, one per day for
+`daily`. The written amounts are the period *total*; the cadence divides them
+across the occurrences, and the last occurrence absorbs the rounding remainder
+so the slices sum back exactly (a `daily` split of €1000 over 365 days lands on
+€1000.00 to the cent). Unlike ledger's `~` — an unbounded forecast that repeats
+the amount — acc's are bounded to the year and split the total; the generated
+entries are real, so they book, balance and auto-fill a bare posting like any
+hand-written one.
+
+**Date variables in account names.** `$year` / `$month` / `$day` in any posting
+account — hand-written or auto-injected — are replaced with the parts of that
+transaction's own date, so `assets:budget:$year` on a 2026 entry becomes
+`assets:budget:2026`. A plain textual replace, shared by ordinary transactions,
+periodic occurrences, and auto-rule injections (which fill from the triggering
+transaction's date).
+
+**Auto-rule amounts read better and can leave a balancing leg bare.** The amount
+slot after an account now accepts `amount` / `-amount` as readable synonyms for
+the factors `1` / `-1`, and a posting with *no* amount is the balancing leg —
+the expander fills it with the negated pool sum, exactly like the bare last
+posting of a hand-written transaction. So a flush rule can read `[assets:cash]
+-amount` + a bare `[expenses:cash]` instead of `-1` / `1`, and a rule's legs no
+longer have to sum to zero when a bare leg absorbs the rest. A preliminary
+`clamp(amount)` builtin also landed (the trigger clamped to a posting's own
+running-balance headroom); it stays undocumented for now — its pipeline
+interaction (auto-rule injections vs. balance assignments) is still being
+worked out.
+
 ## 0.24.0 — 2026-07-24
 
 ### Fri 24 Jul 2026 - Lookup tables move onto the `=` level: `= NAME[key] :: value`

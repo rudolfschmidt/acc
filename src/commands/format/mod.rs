@@ -281,11 +281,11 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fil
                     out.push('\n');
                 }
             }
-            // Auto-rule / template blocks span multiple lines (header +
-            // indented children) and their body here doesn't own multipliers —
-            // simpler to emit the source lines verbatim than rebuild the
-            // syntax. The block ends at the next line that isn't indented.
-            Entry::AutoRule(_) | Entry::AutoTemplate { .. } => {
+            // Auto-rule / template / periodic blocks span multiple lines (header
+            // + indented children); their body here needs no re-derivation —
+            // simpler to emit the source lines verbatim than rebuild the syntax.
+            // The block ends at the next line that isn't indented.
+            Entry::AutoRule(_) | Entry::AutoTemplate { .. } | Entry::Periodic { .. } => {
                 let start = entry.line.saturating_sub(1);
                 let mut end = start + 1;
                 while end < source_lines.len() {

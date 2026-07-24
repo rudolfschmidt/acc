@@ -116,6 +116,9 @@ fn dispatch(
         [b'=', b' ', ..] | [b'=', b'\t', ..] => {
             parse_auto_rule(text[1..].trim_start(), line, file, entries)
         }
+        [b'~', b' ', ..] | [b'~', b'\t', ..] => {
+            parse_periodic(text[1..].trim_start(), line, file, entries)
+        }
         _ => parse_directive(text, line, file, entries),
     }
 }
@@ -368,6 +371,63 @@ fn parse_price(
     Ok(())
 }
 
+/// Parse a `~ PERIOD` header — a periodic transaction. Only a bare year
+/// (`~ 2021`, optionally `~ 2021 description`) is supported; it expands in
+/// resolve into one real transaction dated `YYYY-01-01`. Indented postings
+/// attach via `extend_block`, parsed like a transaction's; `$year`/`$month`/
+/// `$day` in an account are filled from that date at resolve time.
+fn parse_periodic(
+    rest: &str,
+    line: usize,
+    file: &Arc<str>,
+    entries: &mut Vec<Located<Entry>>,
+) -> Result<(), ParseError> {
+    use crate::parser::entry::Cadence;
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Err(ParseError::new(line, 1, "periodic `~` block needs a period, e.g. `~ 2021`"));
+    }
+    let (period, after) = rest
+        .split_once(char::is_whitespace)
+        .map(|(p, d)| (p.trim(), d.trim()))
+        .unwrap_or((rest, ""));
+    // Optional cadence keyword right after the period; whatever follows (or the
+    // whole remainder, if it isn't a cadence word) is the title.
+    let (cadence, description) = match after.split_once(char::is_whitespace) {
+        Some((word, tail)) => match cadence_keyword(word) {
+            Some(c) => (c, tail.trim()),
+            None => (Cadence::Yearly, after),
+        },
+        None => match cadence_keyword(after) {
+            Some(c) => (c, ""),
+            None => (Cadence::Yearly, after),
+        },
+    };
+    entries.push(Located {
+        file: file.clone(),
+        line,
+        value: Entry::Periodic {
+            period: period.to_string(),
+            cadence,
+            description: description.to_string(),
+            postings: Vec::new(),
+        },
+    });
+    Ok(())
+}
+
+/// The optional cadence keyword after a `~ PERIOD` header (`monthly` / `daily`
+/// / `yearly`); `None` for anything else, which the caller treats as the title.
+fn cadence_keyword(word: &str) -> Option<crate::parser::entry::Cadence> {
+    use crate::parser::entry::Cadence;
+    match word {
+        "yearly" => Some(Cadence::Yearly),
+        "monthly" => Some(Cadence::Monthly),
+        "daily" => Some(Cadence::Daily),
+        _ => None,
+    }
+}
+
 /// Parse a transaction header. Format:
 ///   DATE [=AUXDATE] [* | !] [(CODE)] [DESCRIPTION]
 ///
@@ -595,6 +655,20 @@ fn extend_block(
             let auto_posting = parse_auto_posting(body, line)?;
             postings.push(auto_posting);
         }
+        Entry::Periodic { postings, .. } => {
+            // Periodic postings are ordinary postings (real, auto-filling),
+            // parsed exactly like a transaction's; `$year`/`$month`/`$day` in
+            // the account are filled at resolve time, not here.
+            let mut posting = parse_posting(body, line)?;
+            if let Some(text) = inline_comment {
+                posting.comments.push(Located {
+                    file: file.clone(),
+                    line,
+                    value: Comment { text },
+                });
+            }
+            postings.push(Located { file: file.clone(), line, value: posting });
+        }
         _ => return Err(ParseError::new(line, 1, "indented directive not expected here")),
     }
 
@@ -631,15 +705,14 @@ fn parse_auto_posting(
     body: &str,
     line: usize,
 ) -> Result<crate::parser::entry::AutoPosting, ParseError> {
-    // Separator between account and multiplier: tab or 2+ spaces,
-    // same rule as regular postings.
-    let (account_raw, multiplier_raw) = split_account_and_amount(body).ok_or_else(|| {
-        ParseError::new(
-            line,
-            1,
-            "auto-rule posting needs account and multiplier separated by 2+ spaces or a tab",
-        )
-    })?;
+    use crate::parser::entry::AutoAmount;
+    // Account and amount split on a tab / 2+ spaces (same rule as regular
+    // postings). A posting with no amount at all is the balancing `Fill` leg —
+    // then the whole body is the account.
+    let (account_raw, amount_raw) = match split_account_and_amount(body) {
+        Some((a, m)) => (a, Some(m.trim())),
+        None => (body.trim(), None),
+    };
     let (account, is_virtual, balanced) = if let Some(inner) =
         account_raw.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
     {
@@ -651,15 +724,37 @@ fn parse_auto_posting(
     } else {
         (account_raw.to_string(), false, true)
     };
-    let multiplier = crate::decimal::Decimal::parse(multiplier_raw.trim()).map_err(|e| {
-        ParseError::new(line, 1, format!("invalid auto-rule multiplier: {}", e))
-    })?;
+    let amount = match amount_raw {
+        None => AutoAmount::Fill,
+        Some(raw) => parse_auto_amount(raw, line)?,
+    };
     Ok(crate::parser::entry::AutoPosting {
         account,
-        multiplier,
+        amount,
         is_virtual,
         balanced,
     })
+}
+
+/// Parse the amount slot of an auto-rule posting. `amount` / `-amount` are
+/// readable synonyms for the factor `1` / `-1` (the full triggering amount);
+/// anything else is a bare decimal factor (`2`, `-1`, `0.19`). A missing
+/// amount never reaches here — the caller maps it to the `Fill` leg.
+fn parse_auto_amount(
+    raw: &str,
+    line: usize,
+) -> Result<crate::parser::entry::AutoAmount, ParseError> {
+    use crate::decimal::Decimal;
+    use crate::parser::entry::AutoAmount;
+    match raw {
+        "amount" => Ok(AutoAmount::Factor(Decimal::from(1))),
+        "-amount" => Ok(AutoAmount::Factor(Decimal::from(-1))),
+        "clamp(amount)" => Ok(AutoAmount::Clamp { negate: false }),
+        "-clamp(amount)" => Ok(AutoAmount::Clamp { negate: true }),
+        _ => Decimal::parse(raw)
+            .map(AutoAmount::Factor)
+            .map_err(|e| ParseError::new(line, 1, format!("invalid auto-rule amount: {}", e))),
+    }
 }
 
 /// Split a posting/auto-posting body into (account, amount) where the
@@ -1114,6 +1209,48 @@ mod tests {
         // `= /pattern/` must stay an anonymous auto-rule, not an instantiation.
         let got = parse("= /^assets:cash/\n\t[assets:cash]  -1\n\t[x]  1\n").unwrap();
         assert!(matches!(got[0].value, Entry::AutoRule(_)));
+    }
+
+    #[test]
+    fn parse_auto_posting_amount_forms() {
+        use crate::parser::entry::AutoAmount;
+        // `amount`/`-amount` are factor 1/-1; `clamp(amount)` a clamp; a leg with
+        // no amount is the bare Fill leg.
+        let got =
+            parse("= /^x/\n\t[a]  amount\n\t[b]  -amount\n\t[c]  -clamp(amount)\n\t[d]\n").unwrap();
+        let Entry::AutoRule(rule) = &got[0].value else { panic!("expected AutoRule") };
+        match &rule.postings[0].amount {
+            AutoAmount::Factor(f) => assert_eq!(*f, Decimal::from(1)),
+            other => panic!("amount → Factor(1), got {:?}", other),
+        }
+        match &rule.postings[1].amount {
+            AutoAmount::Factor(f) => assert_eq!(*f, Decimal::from(-1)),
+            other => panic!("-amount → Factor(-1), got {:?}", other),
+        }
+        assert!(matches!(rule.postings[2].amount, AutoAmount::Clamp { negate: true }));
+        assert!(matches!(rule.postings[3].amount, AutoAmount::Fill));
+    }
+
+    #[test]
+    fn parse_periodic_cadence_and_title() {
+        use crate::parser::entry::Cadence;
+        // `monthly` is peeled as the cadence; the rest is the title.
+        let got = parse("~ 2021 monthly some title\n\ta  1\n\tb\n").unwrap();
+        match &got[0].value {
+            Entry::Periodic { period, cadence, description, .. } => {
+                assert_eq!(period, "2021");
+                assert_eq!(*cadence, Cadence::Monthly);
+                assert_eq!(description, "some title");
+            }
+            other => panic!("expected Periodic, got {:?}", other),
+        }
+        // No cadence keyword → Yearly, and the whole remainder is the title.
+        let got = parse("~ 2021 just a title\n\ta  1\n\tb\n").unwrap();
+        let Entry::Periodic { cadence, description, .. } = &got[0].value else {
+            panic!("expected Periodic")
+        };
+        assert_eq!(*cadence, Cadence::Yearly);
+        assert_eq!(description, "just a title");
     }
 
     // --- Comments ---
