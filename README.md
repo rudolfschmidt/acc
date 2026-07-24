@@ -179,10 +179,10 @@ same-commodity transit accounts; `-R` real-only output.
 **Not in scope today:** `include` directive, `apply/end`, the
 short-form directives `D` / `Y` / `A` / `N`, `tag`, `payee`,
 periodic transactions (`~` blocks), a general value-expression
-language — including ledger's expression-valued `define` and the
-`= ... and expr "..."` conditional form of automated transactions
-(a *restricted* `= NAME[key] :: value` lookup table and an `amount <op> N`
-rule clause are supported instead), CSV import, query language, budget
+language — including the `= ... and expr "..."` conditional form of
+automated transactions (a *restricted* `= NAME[key] :: value` lookup table
+and an `amount <op> N` rule clause are supported instead), CSV import,
+query language, budget
 reports, web UI.
 
 Journals using any of those will fail to load — acc has no
@@ -1765,9 +1765,9 @@ match case-insensitively, as a user-friendliness convenience.
 A set of `= NAME[key] :: value` entries is a string→string **lookup table** on
 the auto-transaction level (leading `=`): each line maps one key, and
 `NAME[key]` — inside an automated-transaction template posting — expands to the
-value (an unknown key is an error). Deliberately a lookup *only*, not ledger's
-value-expression `define`; acc has no expression evaluator. See **Automated
-transactions** for how a template references it.
+value (an unknown key is an error). Deliberately a lookup *only*; acc has no
+expression evaluator. See **Automated transactions** for how a template
+references it.
 
 ### `account`
 
@@ -1897,15 +1897,11 @@ here so ledger-cli migrants know what to strip or rewrite:
 
 - `include` — multi-file journals compose via `-f DIR` (recursive)
   or multiple `-f PATH` arguments instead.
-- `apply` / `end`, `define` — scope-block and macro directives
-  (acc's string-lookup table is `= NAME[key] :: value` instead).
+- `apply` / `end` — scope-block directives.
 - `D`, `Y`, `A`, `N` — short-form defaults.
 - `tag`, `payee` — metadata directives.
 - `~` blocks (periodic transactions) — syntax is rejected at the
   parser level.
-- `=` blocks (automated transactions at the line-leading position)
-  — the line-leading `=` rejects. Note: the posting-level `=` for
-  balance assertions and assignments is unrelated and works fine.
 
 ---
 

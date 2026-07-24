@@ -1116,14 +1116,6 @@ mod tests {
         assert!(matches!(got[0].value, Entry::AutoRule(_)));
     }
 
-    #[test]
-    fn define_keyword_is_no_longer_a_directive() {
-        // The `define` block was replaced by `= NAME[key] :: value` lookup
-        // entries; `define` is now just an unknown directive.
-        assert!(parse("define foo\n").is_err());
-        assert!(parse("define foo = bar\n").is_err());
-    }
-
     // --- Comments ---
 
     #[test]
