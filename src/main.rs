@@ -428,12 +428,18 @@ enum Command {
     /// profile. Default is a dry-run (prints the additions as a diff);
     /// `--execute` appends them. Standalone — does not read the journal.
     Import {
-        /// The CSV export to import. Omit for RPC-source profiles (e.g.
-        /// `source monero-rpc`), which pull their data from a wallet daemon.
-        #[arg(value_hint = clap::ValueHint::FilePath)]
-        csv: Option<String>,
-        /// The bank import profile (e.g. `bank.conf`).
-        #[arg(short = 'c', long = "conf", value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+        /// The CSV export(s) to import — list several after the flag
+        /// (`--csv a.csv b.csv`), repeat it (`--csv a.csv --csv b.csv`), or
+        /// pass a directory (its `*.csv` are read). A named flag (not
+        /// positional) so the shell offers file completion, like `--conf`.
+        /// Note: zsh completes only the first file after each `--csv`, so
+        /// repeat the flag or pass a directory when you want completion for
+        /// each. Omit for RPC-source profiles (e.g. `wallet.coin monero`).
+        #[arg(long = "csv", value_name = "FILE", value_hint = clap::ValueHint::FilePath, num_args = 1..)]
+        csv: Vec<String>,
+        /// The import profile (e.g. `bank.conf`). Must be given as `--conf`
+        /// (no short flag) so it is never confused with a positional path.
+        #[arg(long = "conf", value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
         conf: String,
         /// Execute the import — append the new transactions to the ledger.
         /// Without it, the command only prints what it would add (dry-run).
@@ -704,9 +710,9 @@ fn try_standalone(
         // Import converts a bank CSV into ledger transactions. It reads the
         // target @cash file (for dedup) but never the journal as a whole.
         Command::Import { csv, conf, write } => {
-            let csv = csv.as_ref().map(|c| expand_tilde(c));
+            let csvs: Vec<String> = csv.iter().map(|c| expand_tilde(c)).collect();
             let conf = expand_tilde(conf);
-            Some(acc::commands::import::run(csv.as_deref(), &conf, *write))
+            Some(acc::commands::import::run(&csvs, &conf, *write))
         }
 
         // Completions just prints a static script for the target shell —

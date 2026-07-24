@@ -8,23 +8,26 @@
 
 mod bitcoin_lib;
 mod bitcoin_rpc;
+mod crypto_csv;
 mod crypto_lib;
+mod exchange_lib;
 mod fiat_csv;
+mod kraken_api;
 mod litecoin_rpc;
-mod monero_haveno_rpc;
+mod reto_rpc;
 mod monero_rpc;
-mod render;
-mod rpc;
+mod render_lib;
+mod rpc_lib;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 
-pub fn run(csv_path: Option<&str>, conf_path: &str, write: bool) -> Result<(), Error> {
-    // A `wallet.coin` directive routes to a wallet-RPC backend by coin;
-    // without it the profile is a classic CSV import.
-    if let Some(coin) = directive(&read(conf_path)?, "wallet.coin") {
+pub fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), Error> {
+    let conf = read(conf_path)?;
+    // A `wallet.coin` directive routes to a wallet-RPC backend by coin.
+    if let Some(coin) = directive(&conf, "wallet.coin") {
         return match coin.as_str() {
             "monero" => monero_rpc::run(conf_path, write),
             // bitcoind and litecoind speak the identical RPC; each coin has its
@@ -34,7 +37,22 @@ pub fn run(csv_path: Option<&str>, conf_path: &str, write: bool) -> Result<(), E
             other => Err(Error::from(format!("import: unknown wallet.coin '{}'", other))),
         };
     }
-    let csv_path = csv_path.ok_or_else(|| {
+    // An `exchange` directive routes to an exchange backend; kraken pulls its
+    // multi-asset ledger live from the REST API.
+    if let Some(exchange) = directive(&conf, "exchange") {
+        return match exchange.as_str() {
+            "kraken" => kraken_api::run(conf_path, write),
+            // crypto.com exports statement CSVs — pass one or more files or a directory.
+            "crypto" => {
+                if csvs.is_empty() {
+                    return Err(Error::from("import: crypto reads statement CSVs — pass one or more files or a directory"));
+                }
+                crypto_csv::run(csvs, conf_path, write)
+            }
+            other => Err(Error::from(format!("import: unknown exchange '{}'", other))),
+        };
+    }
+    let csv_path = csvs.first().ok_or_else(|| {
         Error::from("import: this profile reads a CSV — pass the CSV file as the argument")
     })?;
     fiat_csv::run(csv_path, conf_path, write)
@@ -218,20 +236,32 @@ fn emit(
     write: bool,
 ) -> Result<(), Error> {
     use colored::Colorize;
+    use std::io::IsTerminal;
+    // A pipe (stdout not a terminal) gets pure ledger, not the coloured diff —
+    // so `acc import … | acc print -f -` can parse the would-be additions.
+    let piped = !std::io::stdout().is_terminal();
     if blocks.is_empty() {
-        println!(
+        let msg = format!(
             "{} import: {} {} read, all already present — nothing new.",
             "!".yellow(),
             read,
             noun
         );
+        if piped { eprintln!("{}", msg) } else { println!("{}", msg) }
         return Ok(());
     }
     let added = crate::commands::format::format_source(&blocks.join("\n\n"), false)?;
     if write {
         append(output, &added)?;
     }
-    render::diff_preview(existing, &added, blocks.len(), output, skipped, write);
+    if piped {
+        // Plain ledger on stdout (parse it with `| acc print -f -`); the human
+        // ✓/! summary goes to stderr so it never pollutes the piped ledger.
+        println!("{}", added.trim_end());
+        eprintln!("{}", render_lib::summary(blocks.len(), output, skipped, write));
+    } else {
+        render_lib::diff_preview(existing, &added, blocks.len(), output, skipped, write);
+    }
     Ok(())
 }
 

@@ -120,79 +120,152 @@ fn dispatch(
     }
 }
 
-/// Parse an auto-transaction header line. Body is `/<pattern>/` —
-/// a ledger-cli style regex delimiter. V1 accepts only the simple
-/// form (no `and expr "..."` conditional). Indented `[account]
-/// multiplier` lines attach via `extend_block`.
+/// Parse a `=` directive — three forms, told apart syntactically:
+///
+/// - `= /pattern/` → an anonymous auto-rule (`AutoRule`), matched as-is.
+/// - `= NAME :: /pattern/` → a named auto-rule *template* (`AutoTemplate`);
+///   its pattern and posting accounts carry positional `$1`/`$2` placeholders
+///   and `lookup(key)` calls that an instantiation fills in.
+/// - `= NAME arg…` → instantiate template `NAME` with a pair (`AutoInstance`).
+///
+/// Indented `[account] multiplier` lines attach via `extend_block`.
 fn parse_auto_rule(
     rest: &str,
     line: usize,
     file: &Arc<str>,
     entries: &mut Vec<Located<Entry>>,
 ) -> Result<(), ParseError> {
-    if rest.contains("and expr") {
+    let body = rest.trim();
+
+    // Anonymous auto-rule — checked first so a `/pattern/` that happens to
+    // contain `::` is never mistaken for a named template.
+    if body.starts_with('/') {
+        let (inner, condition) = parse_predicate(body, line)?;
+        entries.push(Located {
+            file: file.clone(),
+            line,
+            value: Entry::AutoRule(crate::parser::entry::AutoRule {
+                pattern: crate::parser::entry::AutoPattern::parse_inner(&inner),
+                postings: Vec::new(),
+                condition,
+            }),
+        });
+        return Ok(());
+    }
+
+    // Named template: `NAME :: /pattern/ [amount <op> N]`.
+    if let Some((name_part, pattern_part)) = body.split_once("::") {
+        let name = name_part.trim();
+        if name.is_empty() {
+            return Err(ParseError::new(line, 1, "auto-rule template needs a name before `::`"));
+        }
+        if name.split_whitespace().count() > 1 {
+            return Err(ParseError::new(
+                line,
+                1,
+                "auto-rule template takes no parameter list; use positional `$1`/`$2` in the pattern",
+            ));
+        }
+        let (pattern, condition) = parse_predicate(pattern_part, line)?;
+        entries.push(Located {
+            file: file.clone(),
+            line,
+            value: Entry::AutoTemplate {
+                name: name.to_string(),
+                pattern,
+                postings: Vec::new(),
+                condition,
+            },
+        });
+        return Ok(());
+    }
+
+    // Instantiation: `NAME arg1 arg2 …`.
+    let mut tokens = body.split_whitespace();
+    let name = tokens
+        .next()
+        .ok_or_else(|| ParseError::new(line, 1, "empty `=` directive"))?
+        .to_string();
+    let args: Vec<String> = tokens.map(str::to_string).collect();
+    if args.is_empty() {
         return Err(ParseError::new(
             line,
             1,
-            "auto-rule conditional `and expr \"...\"` is not supported yet; \
-             use the simple `= /pattern/` form",
+            format!("`= {name}` needs arguments — a template instantiation is `= NAME a b`"),
         ));
     }
-    let pattern = parse_auto_pattern(rest, line)?;
     entries.push(Located {
         file: file.clone(),
         line,
-        value: Entry::AutoRule(crate::parser::entry::AutoRule {
-            pattern,
-            postings: Vec::new(),
-        }),
+        value: Entry::AutoInstance { name, args },
     });
     Ok(())
 }
 
-fn parse_auto_pattern(
-    rest: &str,
+/// Split a `= …` predicate into the `/pattern/` inner text and an optional
+/// trailing `amount <op> N` clause. Accounts never contain `/`, so the first
+/// `/` after the opening one closes the pattern; anything after it is the clause.
+fn parse_predicate(
+    body: &str,
     line: usize,
-) -> Result<crate::parser::entry::AutoPattern, ParseError> {
-    let body = rest.trim();
-    let inner = body
+) -> Result<(String, Option<crate::parser::entry::AmountCondition>), ParseError> {
+    let rest = body
+        .trim()
         .strip_prefix('/')
-        .and_then(|s| s.strip_suffix('/'))
-        .ok_or_else(|| {
-            ParseError::new(
-                line,
-                1,
-                "auto-rule pattern must be delimited by /…/",
-            )
-        })?;
+        .ok_or_else(|| ParseError::new(line, 1, "auto-rule pattern must be delimited by /…/"))?;
+    let close = rest
+        .find('/')
+        .ok_or_else(|| ParseError::new(line, 1, "auto-rule pattern must be delimited by /…/"))?;
+    let inner = rest[..close].to_string();
     if inner.is_empty() {
         return Err(ParseError::new(line, 1, "auto-rule pattern is empty"));
     }
-    let anchored_start = inner.starts_with('^');
-    let anchored_end = inner.ends_with('$');
-    let core = match (anchored_start, anchored_end) {
-        (true, true) => &inner[1..inner.len() - 1],
-        (true, false) => &inner[1..],
-        (false, true) => &inner[..inner.len() - 1],
-        (false, false) => inner,
+    let tail = rest[close + 1..].trim();
+    let condition = if tail.is_empty() {
+        None
+    } else {
+        Some(parse_amount_condition(tail, line)?)
     };
-    use crate::parser::entry::AutoPattern;
-    // `$segment` placeholder(s): split into literal chunks and match
-    // segment-wise. Not regex — the only token is the literal `$segment`.
-    if core.contains("$segment") {
-        let parts = core.split("$segment").map(str::to_string).collect();
-        return Ok(AutoPattern::Segmented {
-            parts,
-            anchored_start,
-            anchored_end,
-        });
-    }
-    Ok(match (anchored_start, anchored_end) {
-        (true, true) => AutoPattern::Exact(core.to_string()),
-        (true, false) => AutoPattern::Prefix(core.to_string()),
-        (false, true) => AutoPattern::Suffix(core.to_string()),
-        (false, false) => AutoPattern::Contains(core.to_string()),
-    })
+    Ok((inner, condition))
+}
+
+/// Parse an `amount <op> <number>` clause — the only condition kind, one
+/// comparison against a bare number. Boolean logic is deliberately absent
+/// (AND = more clauses, OR = more rules, NOT = flip the operator).
+fn parse_amount_condition(
+    text: &str,
+    line: usize,
+) -> Result<crate::parser::entry::AmountCondition, ParseError> {
+    use crate::parser::entry::CompareOp;
+    let rest = text.strip_prefix("amount").map(str::trim_start).ok_or_else(|| {
+        ParseError::new(
+            line,
+            1,
+            format!("only an `amount <op> N` clause may follow the pattern, got `{text}`"),
+        )
+    })?;
+    let (op, num) = if let Some(n) = rest.strip_prefix(">=") {
+        (CompareOp::Ge, n)
+    } else if let Some(n) = rest.strip_prefix("<=") {
+        (CompareOp::Le, n)
+    } else if let Some(n) = rest.strip_prefix("==") {
+        (CompareOp::Eq, n)
+    } else if let Some(n) = rest.strip_prefix("!=") {
+        (CompareOp::Ne, n)
+    } else if let Some(n) = rest.strip_prefix('>') {
+        (CompareOp::Gt, n)
+    } else if let Some(n) = rest.strip_prefix('<') {
+        (CompareOp::Lt, n)
+    } else {
+        return Err(ParseError::new(
+            line,
+            1,
+            "amount clause needs a comparison operator: >, <, >=, <=, ==, !=",
+        ));
+    };
+    let value = crate::decimal::Decimal::parse(num.trim())
+        .map_err(|e| ParseError::new(line, 1, format!("invalid number in amount clause: {e}")))?;
+    Ok(crate::parser::entry::AmountCondition { op, value })
 }
 
 /// Parse a `P DATE BASE QUOTE RATE` directive. The leading `P ` has
@@ -339,6 +412,7 @@ fn parse_directive(
                 value: Entry::Commodity {
                     symbol: arg.to_string(),
                     aliases: Vec::new(),
+                    parities: Vec::new(),
                     precision: None,
                 },
             });
@@ -352,6 +426,28 @@ fn parse_directive(
                 file: file.clone(),
                 line,
                 value: Entry::Account(arg.to_string()),
+            });
+            Ok(())
+        }
+        "define" => {
+            if arg.is_empty() {
+                return Err(ParseError::new(line, 1, "define directive missing a name"));
+            }
+            // Only the block-table form is supported: `define NAME` + indented
+            // `key = value` lines. Reject ledger's inline `define x = expr` —
+            // acc resolves a define by map lookup, it has no expression evaluator.
+            if arg.contains('=') || arg.split_whitespace().count() > 1 {
+                return Err(ParseError::new(
+                    line,
+                    1,
+                    "inline `define NAME = expr` is not supported; use a `define NAME` \
+                     block with indented `key = value` lookup entries",
+                ));
+            }
+            entries.push(Located {
+                file: file.clone(),
+                line,
+                value: Entry::Define { name: arg.to_string(), entries: Vec::new() },
             });
             Ok(())
         }
@@ -428,13 +524,19 @@ fn extend_block(
                 value: posting,
             });
         }
-        Entry::Commodity { aliases, precision, .. } => {
+        Entry::Commodity { aliases, parities, precision, .. } => {
             if let Some(rest) = body.strip_prefix("alias ") {
                 let alias = rest.trim();
                 if alias.is_empty() {
                     return Err(ParseError::new(line, 1, "alias missing name"));
                 }
                 aliases.push(alias.to_string());
+            } else if let Some(rest) = body.strip_prefix("parity ") {
+                let target = rest.trim();
+                if target.is_empty() {
+                    return Err(ParseError::new(line, 1, "parity missing commodity"));
+                }
+                parities.push(target.to_string());
             } else if let Some(rest) = body.strip_prefix("precision ") {
                 let digits = rest.trim();
                 let n: usize = digits.parse().map_err(|_| {
@@ -442,7 +544,7 @@ fn extend_block(
                 })?;
                 *precision = Some(n);
             } else {
-                return Err(ParseError::new(line, 1, "expected `alias NAME` or `precision N`"));
+                return Err(ParseError::new(line, 1, "expected `alias NAME`, `parity COMMODITY` or `precision N`"));
             }
         }
         Entry::Account(name) => {
@@ -464,6 +566,24 @@ fn extend_block(
         Entry::AutoRule(rule) => {
             let auto_posting = parse_auto_posting(body, line)?;
             rule.postings.push(auto_posting);
+        }
+        Entry::AutoTemplate { postings, .. } => {
+            // Template postings parse like auto-rule postings — the account
+            // just carries `${N}` / `lookup(key)` placeholders resolved later.
+            let auto_posting = parse_auto_posting(body, line)?;
+            postings.push(auto_posting);
+        }
+        Entry::Define { entries: kvs, .. } => {
+            // A lookup entry: `key = value`, split on the first `=`.
+            let (k, v) = body
+                .split_once('=')
+                .ok_or_else(|| ParseError::new(line, 1, "define entry must be `key = value`"))?;
+            let key = k.trim().to_string();
+            let value = v.trim().to_string();
+            if key.is_empty() || value.is_empty() {
+                return Err(ParseError::new(line, 1, "define entry must be `key = value`"));
+            }
+            kvs.push((key, value));
         }
         _ => return Err(ParseError::new(line, 1, "indented directive not expected here")),
     }
@@ -905,6 +1025,77 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_define_template_and_instance() {
+        let src = "define long\n\tfoo = foo-long\n\tbar = bar-long\n\
+                   = mirror :: /^x:$1:$segment:$2:$segment$/\n\
+                   \t[$1:z:long($2)]  -1\n\t[$2:z:long($1)]  1\n\
+                   = mirror foo bar\n";
+        let got = parse(src).unwrap();
+        match &got[0].value {
+            Entry::Define { name, entries } => {
+                assert_eq!(name, "long");
+                assert_eq!(
+                    entries,
+                    &vec![
+                        ("foo".to_string(), "foo-long".to_string()),
+                        ("bar".to_string(), "bar-long".to_string()),
+                    ]
+                );
+            }
+            other => panic!("expected Define, got {:?}", other),
+        }
+        match &got[1].value {
+            Entry::AutoTemplate { name, pattern, postings, condition } => {
+                assert_eq!(name, "mirror");
+                assert!(condition.is_none());
+                assert_eq!(pattern, "^x:$1:$segment:$2:$segment$");
+                assert_eq!(postings.len(), 2);
+                assert_eq!(postings[0].account, "$1:z:long($2)");
+                assert!(postings[0].is_virtual && postings[0].balanced);
+            }
+            other => panic!("expected AutoTemplate, got {:?}", other),
+        }
+        match &got[2].value {
+            Entry::AutoInstance { name, args } => {
+                assert_eq!(name, "mirror");
+                assert_eq!(args, &vec!["foo".to_string(), "bar".to_string()]);
+            }
+            other => panic!("expected AutoInstance, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_template_with_amount_clause_and_unbalanced_posting() {
+        use crate::parser::entry::CompareOp;
+        // `amount > 0` clause after the pattern; a lone `(...)` unbalanced posting.
+        let got = parse("= mirror :: /^x:$1-$segment:$2-$segment$/ amount > 0\n\t($1:z:$2)  1\n")
+            .unwrap();
+        match &got[0].value {
+            Entry::AutoTemplate { pattern, condition, postings, .. } => {
+                assert_eq!(pattern, "^x:$1-$segment:$2-$segment$");
+                let c = condition.as_ref().expect("amount clause parsed");
+                assert_eq!(c.op, CompareOp::Gt);
+                assert!(c.value.is_zero());
+                assert!(postings[0].is_virtual && !postings[0].balanced);
+            }
+            other => panic!("expected AutoTemplate, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn anonymous_auto_rule_still_parses_with_slash() {
+        // `= /pattern/` must stay an anonymous auto-rule, not an instantiation.
+        let got = parse("= /^assets:cash/\n\t[assets:cash]  -1\n\t[x]  1\n").unwrap();
+        assert!(matches!(got[0].value, Entry::AutoRule(_)));
+    }
+
+    #[test]
+    fn inline_define_is_rejected() {
+        // Only the block form is supported — no expression evaluator.
+        assert!(parse("define foo = bar\n").is_err());
+    }
+
     // --- Comments ---
 
     #[test]
@@ -1135,9 +1326,10 @@ mod tests {
         let src = "commodity USD\n    alias $\n    alias USdollar\n";
         let got = parse(src).unwrap();
         match &got[0].value {
-            Entry::Commodity { symbol, aliases, precision } => {
+            Entry::Commodity { symbol, aliases, parities, precision } => {
                 assert_eq!(symbol, "USD");
                 assert_eq!(aliases, &vec!["$".to_string(), "USdollar".to_string()]);
+                assert!(parities.is_empty());
                 assert_eq!(*precision, None);
             }
             _ => panic!("expected Commodity"),
@@ -1149,9 +1341,27 @@ mod tests {
         let src = "commodity EUR\n    alias €\n    precision 2\n";
         let got = parse(src).unwrap();
         match &got[0].value {
-            Entry::Commodity { symbol, aliases, precision } => {
+            Entry::Commodity { symbol, aliases, parities, precision } => {
                 assert_eq!(symbol, "EUR");
                 assert_eq!(aliases, &vec!["€".to_string()]);
+                assert!(parities.is_empty());
+                assert_eq!(*precision, Some(2));
+            }
+            _ => panic!("expected Commodity"),
+        }
+    }
+
+    #[test]
+    fn parse_commodity_with_parity() {
+        // `parity $` under a commodity records a fixed 1:1 target, distinct
+        // from an alias — the commodity keeps its own symbol.
+        let src = "commodity USDC\n    parity $\n    precision 2\n";
+        let got = parse(src).unwrap();
+        match &got[0].value {
+            Entry::Commodity { symbol, aliases, parities, precision } => {
+                assert_eq!(symbol, "USDC");
+                assert!(aliases.is_empty());
+                assert_eq!(parities, &vec!["$".to_string()]);
                 assert_eq!(*precision, Some(2));
             }
             _ => panic!("expected Commodity"),

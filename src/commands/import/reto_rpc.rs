@@ -95,23 +95,20 @@ fn xmr(atomic: i128) -> String {
     format!("{}.{:012}", a / ATOMIC, a % ATOMIC)
 }
 
-/// Format a swap-posting amount through acc's own commodity formatter, so fiat
-/// prints its 2 decimals (`$155.00`) exactly like every other amount. USD/EUR
-/// map to their symbols; other currencies (BTC) keep their code and 8-decimal
-/// precision. The sign goes into the value, so it lands after the symbol
-/// (`€-966.00`). `volume` is Haveno's `tradeVolume`.
+/// Render a swap-posting amount from Haveno's raw `tradeVolume`, verbatim.
+/// USD/EUR map to their symbols (`$`/`€`); any other currency (BTC) keeps its
+/// code. The sign lands after the symbol (`€-966`). The commodity formatter is
+/// deliberately NOT used here: it would re-precision whole fiat to `.00`, but
+/// the ledger mirrors the source exactly — the same way wallet amounts keep
+/// their reported precision — so `$354` stays `$354`.
 fn money(currency: &str, volume: &str, negative: bool) -> String {
     let commodity = match currency {
         "USD" => "$",
         "EUR" => "€",
         other => other,
     };
-    let signed = format!("{}{}", if negative { "-" } else { "" }, volume);
-    let value = crate::decimal::Decimal::parse(&signed).unwrap_or_default();
-    // Fiat commodities fall through to the formatter's 2-decimal default; BTC
-    // keeps its 8. (Reto trades only ever settle in USD/EUR/BTC.)
-    let precisions = HashMap::from([("BTC".to_string(), 8)]);
-    crate::commands::util::format_amount(commodity, &value, &precisions)
+    let sign = if negative { "-" } else { "" };
+    format!("{}{}{}", commodity, sign, volume)
 }
 
 // ---------------------------------------------------------------------
@@ -570,10 +567,10 @@ mod tests {
     }
 
     #[test]
-    fn money_formats_fiat_to_two_decimals_via_acc() {
-        assert_eq!(money("USD", "300", false), "$300.00"); // fiat → 2 decimals
-        assert_eq!(money("EUR", "500", true), "€-500.00"); // sign after symbol
-        assert_eq!(money("BTC", "0.00523640", false), "BTC0.00523640"); // crypto keeps its 8
+    fn money_renders_tradevolume_verbatim() {
+        assert_eq!(money("USD", "300", false), "$300"); // verbatim — no .00 padding
+        assert_eq!(money("EUR", "500", true), "€-500"); // sign after symbol
+        assert_eq!(money("BTC", "0.00523640", false), "BTC0.00523640"); // kept as reported
     }
 
     // A stand-in get_transfers object for the `; rpc:` line.
@@ -593,7 +590,7 @@ mod tests {
         assert!(s.contains("\tf  XMR0.000030000000\n"), "{s}"); // fee
         assert!(!s.contains("\ttf  "), "{s}"); // no trading-fee leg (not bundled)
         assert!(s.contains("\td  XMR0.100000000000\n"), "{s}"); // deposit set aside
-        assert!(s.contains("\ts  $300.00 @@ XMR1.000000000000"), "{s}"); // swap @@ tradeAmount
+        assert!(s.contains("\ts  $300 @@ XMR1.000000000000"), "{s}"); // swap @@ tradeAmount
         // The three XMR legs net to -tradeAmount, the @@ cost counterweighs → 0.
     }
 
@@ -609,7 +606,7 @@ mod tests {
         assert!(s.contains("\tf  XMR0.000030000000\n"), "{s}"); // network fee
         assert!(s.contains("\ttf  XMR0.010000000000\n"), "{s}"); // taker fee → taker-fee account
         assert!(s.contains("\td  XMR0.100000000000\n"), "{s}"); // deposit set aside
-        assert!(s.contains("\ts  $300.00 @@ XMR1.000000000000"), "{s}");
+        assert!(s.contains("\ts  $300 @@ XMR1.000000000000"), "{s}");
     }
 
     #[test]
@@ -649,7 +646,7 @@ mod tests {
         assert!(s.contains("\tw  XMR2.299980000000\n"), "{s}"); // bought XMR + deposit back
         assert!(s.contains("\tf  XMR0.000020000000\n"), "{s}"); // payout fee off the deposit
         assert!(s.contains("\td  XMR-0.300000000000\n"), "{s}"); // full deposit clears
-        assert!(s.contains("\ts  €-500.00 @@ XMR2.000000000000"), "{s}"); // paid €500 for 2 XMR
+        assert!(s.contains("\ts  €-500 @@ XMR2.000000000000"), "{s}"); // paid €500 for 2 XMR
     }
 
     // A refunded sell (the swap fell through — e.g. a reorg — so the WHOLE amount
@@ -685,7 +682,7 @@ mod tests {
         assert!(s.contains("\tw  XMR1.099900000000\n"), "{s}"); // full amount back
         assert!(s.contains("\tf  XMR0.000100000000\n"), "{s}"); // payout fee (0.1 - 0.0999)
         assert!(s.contains("\td  XMR-0.100000000000\n"), "{s}"); // full deposit clears
-        assert!(s.ends_with("\ts  $-300.00 @@ XMR1.000000000000"), "{s}"); // swap reversed
+        assert!(s.ends_with("\ts  $-300 @@ XMR1.000000000000"), "{s}"); // swap reversed
         // Over the trade: deposit funding +0.1, payout -0.1 → 0; swap +$300 (funding)
         // -$300 (here) = 0; only the two network fees remain as cost.
     }

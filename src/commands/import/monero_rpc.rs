@@ -53,7 +53,7 @@ pub fn run(conf_path: &str, write: bool) -> Result<(), Error> {
     // (a transfer matched by txid) then renders as a reto swap booking sourced
     // wholly from the trade. Every other transfer stays a plain monero booking.
     let enricher = match &profile.haveno {
-        Some(cfg) => Some(super::monero_haveno_rpc::Enricher::fetch(
+        Some(cfg) => Some(super::reto_rpc::Enricher::fetch(
             cfg,
             &profile.wallet.account,
             &profile.wallet.fee_account,
@@ -102,7 +102,7 @@ struct Profile {
     /// Haveno reto enrichment, present only when the profile carries a
     /// `haveno.*` block. Trade-leg transfers then render as reto swap bookings
     /// instead of plain transfers; everything else is unaffected.
-    haveno: Option<super::monero_haveno_rpc::Config>,
+    haveno: Option<super::reto_rpc::Config>,
     /// `user:pass` for wallet-rpcs behind an HTTP digest login (Haveno's
     /// internal one). Sent only on a `401`, so login-less wallets are unaffected.
     login: Option<String>,
@@ -196,7 +196,7 @@ impl Profile {
         let wallet_address = get("wallet.address")?;
         let scan_host = get("wallet.host")?;
         let scan_ports = parse_ports(&get("wallet.ports")?)?;
-        let haveno = super::monero_haveno_rpc::Config::parse(&directives)?;
+        let haveno = super::reto_rpc::Config::parse(&directives)?;
         let login = directives.get("wallet.login").cloned();
 
         let wallet = Wallet {
@@ -343,8 +343,8 @@ fn transit_maps(
 /// `login` (`user:pass`) drives the HTTP digest handshake for a login-protected
 /// wallet-rpc (Haveno's internal one); login-less wallets ignore it.
 fn rpc_call(url: &str, method: &str, params: Value, login: Option<&str>) -> Result<Value, Error> {
-    let auth = login.map(super::rpc::Auth::Digest).unwrap_or(super::rpc::Auth::None);
-    super::rpc::call(url, method, params, &auth, "2.0", Duration::from_secs(30))
+    let auth = login.map(super::rpc_lib::Auth::Digest).unwrap_or(super::rpc_lib::Auth::None);
+    super::rpc_lib::call(url, method, params, &auth, "2.0", Duration::from_secs(30))
 }
 
 /// The last 4 characters of an address — its short, human-readable tail (the
@@ -369,8 +369,8 @@ fn parse_ports(raw: &str) -> Result<(u16, u16), Error> {
 /// Probe a wallet-rpc for the primary address of its open wallet (account 0).
 /// Short timeout; `None` on any error so scanning closed ports stays cheap.
 fn probe_address(url: &str, login: Option<&str>) -> Option<String> {
-    let auth = login.map(super::rpc::Auth::Digest).unwrap_or(super::rpc::Auth::None);
-    let result = super::rpc::call(
+    let auth = login.map(super::rpc_lib::Auth::Digest).unwrap_or(super::rpc_lib::Auth::None);
+    let result = super::rpc_lib::call(
         url,
         "get_address",
         serde_json::json!({ "account_index": 0 }),

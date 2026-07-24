@@ -162,7 +162,9 @@ loss` / `holding gain` / `holding loss` / `cta gain`
 ledger-style **automated transactions**
 (line-leading `= /pattern/` rules that inject scaled postings
 into matching transactions, with `$account` / `$segment`
-placeholders); filter DSL across account /
+placeholders, plus named `= NAME :: /pattern/` templates
+instantiated per pair with positional `$1` / `$2` args, a `define`
+lookup table, and an `amount <op> N` rule clause); filter DSL across account /
 description / code / commodity plus `-r` sibling-posting view;
 per-posting currency conversion at `tx.date`; multi-hop price
 lookups; **FIFO realised capital gains** (`capital gain` /
@@ -174,12 +176,14 @@ latest rate on `holding gain` / `holding loss`;
 **automatic IAS 21 / ASC 830 translation adjustment** (CTA) for
 same-commodity transit accounts; `-R` real-only output.
 
-**Not in scope today:** `include` directive, `apply/end`,
-`define`, the short-form directives `D` / `Y` / `A` / `N`,
-`tag`, `payee`, periodic transactions (`~` blocks), the
-conditional form of automated transactions (`= ... and expr
-"..."`), CSV import, query language, budget reports, web UI,
-value expressions.
+**Not in scope today:** `include` directive, `apply/end`, the
+short-form directives `D` / `Y` / `A` / `N`, `tag`, `payee`,
+periodic transactions (`~` blocks), a general value-expression
+language — including expression-valued `define` and the
+`= ... and expr "..."` conditional form of automated transactions
+(a *restricted* lookup-table `define` and an `amount <op> N` rule
+clause are supported instead), CSV import, query language, budget
+reports, web UI.
 
 Journals using any of those will fail to load — acc has no
 silent-skip policy for directives it doesn't understand.
@@ -941,9 +945,11 @@ Expanded at load time to:
 Net effect: `assets:cash` back to zero, `assets:bank` down $100,
 `expenses:cash` up $100.
 
-Multipliers must sum to zero across the rule — the resolver
-validates this, so the expansion always leaves the transaction
-balanced. A VAT-split variant:
+Multipliers must sum to zero across each balance pool — real
+postings on their own, balanced-virtual `[...]` on their own
+(unbalanced `(...)` postings are exempt) — so the expansion always
+leaves the transaction balanced; the resolver validates this. A
+VAT-split variant:
 
 ```
 = /^income:gross/
@@ -993,6 +999,42 @@ the only metacharacters are the `^` / `$` anchors and the literal
 than once and in any position (`:cash:$segment:eur`); each occurrence
 consumes exactly one segment. Pair it with `$account` to flush every
 matched account to its own leg regardless of its leading segment.
+
+**Named templates + `define` lookups.** A named rule `= NAME :: /pattern/` is
+a *template* — it does nothing on its own, and is fired by instantiating it
+with a pair, `= NAME a b`. Positional `$1` / `$2` placeholders in the pattern
+and posting accounts are filled from the two arguments; because the pair is
+unordered, each instantiation emits *both* directions (one rule each), so a
+single `= NAME a b` mirrors `a→b` and `b→a`. A `define NAME` block is a
+string→string lookup table, called as `NAME(key)` inside a posting account to
+expand a key to its value (unknown key → error). Together they track a
+per-pair "who owes whom" position:
+
+```
+define fullname
+	a = alpha-corp
+	b = beta-llc
+
+= reconcile :: /^transit:$1-$segment:$2-$segment$/ amount > 0
+	($1:owed:fullname($2))    1
+	($2:owed:fullname($1))   -1
+
+= reconcile a b
+```
+
+`= reconcile a b` expands to two concrete rules, matching `transit:a-…:b-…`
+and `transit:b-…:a-…`. Only *listed* pairs fire; deleting the `= reconcile`
+line removes the position.
+
+**Unbalanced `(...)` postings and the `amount` clause.** Injected postings
+follow the normal balance rules: real and balanced-virtual `[...]` postings
+must each sum to zero across the rule (validated per pool), while unbalanced
+`(...)` postings take part in no balance — a lone `(...)` posting is valid. An
+optional `amount <op> N` clause after the pattern (`op` one of `>` `<` `>=`
+`<=` `==` `!=`) fires the rule only when the matched posting's amount satisfies
+it: `amount > 0` above counts a positive outflow (a send) but skips the
+negative counter-posting that clears it. There is no boolean expression
+language — AND is more clauses, OR is more rules, NOT flips the operator.
 
 ### Error output
 
@@ -1712,6 +1754,21 @@ aggregator all treat them as distinct. If a journal mixes cases
 accidentally, declare the minority spelling as an `alias` so it
 folds into the canonical form. Only filter patterns (`com usd`)
 match case-insensitively, as a user-friendliness convenience.
+
+### `define`
+
+```
+define fullname
+	a = alpha-corp
+	b = beta-llc
+```
+
+A `define NAME` block is a string→string **lookup table**: each indented
+`key = value` line maps a key, and `NAME(key)` — inside an
+automated-transaction template posting — expands to the value (an unknown key
+is an error). It is deliberately a lookup *only*, not ledger's value-expression
+`define`; acc has no expression evaluator. See **Automated transactions** for
+how a template calls it.
 
 ### `account`
 

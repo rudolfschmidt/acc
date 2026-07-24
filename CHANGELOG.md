@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.23.0 — 2026-07-24
+
+### Fri 24 Jul 2026 - Who-owes-whom over auto-transaction templates, and exchange imports
+
+**Automated transactions gain named templates.** A rule can now be *named* and
+*parameterized*: `= NAME :: /pattern/` declares a template that does nothing on
+its own, and `= NAME a b` instantiates it with a pair. Positional `$1` / `$2`
+placeholders in the pattern and posting accounts are filled from the two
+arguments, and — because the pair is unordered — each instantiation emits *both*
+directions (one concrete rule each), so a single `= NAME a b` mirrors `a→b` and
+`b→a`. This grew out of a "who owes whom" need: an inter-entity transfer nets in
+the real transit account, but is, per person, a claim that must stand until it
+is returned. A template over the transit accounts injects that claim
+automatically — and only for the pairs you list; remove the `= NAME a b` line
+and the position disappears.
+
+**A restricted `define`, `(...)` postings, and an `amount` clause carry it.**
+Three smaller pieces make the templates expressive without an expression
+evaluator. `define NAME` is a string→string lookup table, called `NAME(key)`
+inside a posting account to expand a short slug to a full counterparty name — a
+deliberate lookup only, not ledger's value-expression `define`. The balance
+check now runs *per pool* — real postings and balanced-virtual `[...]` each sum
+to zero on their own, while unbalanced `(...)` postings take part in no balance,
+so a lone `(...)` posting is valid (a one-sided attribution). And an optional
+`amount <op> N` clause after the pattern fires the rule only when the matched
+amount satisfies it — `amount > 0` counts a transit *send* but skips the
+negative counter-posting that clears it. The clause carries no boolean logic by
+design: AND is more clauses, OR is more rules, NOT flips the operator — the same
+job ledger hands to `expr`, avoided here because acc's rules are config, not
+command-line queries.
+
+**Two exchange imports: Kraken (API) and crypto.com (CSV).** Both are
+multi-asset cash accounts — fiat deposited, traded into crypto, withdrawn
+onward, several commodities held at once. Kraken pulls every entry from the
+private `Ledgers` REST endpoint, dedups by entry id, and groups a trade's two
+legs by `refid`; crypto.com reads its "journals" statement CSVs by
+`journal_type`, addressing columns by header name so both export layouts parse.
+Each in-account conversion books the crypto leg `@@` the fiat magnitude, and a
+leg's fee stays in its own commodity on the `fee` account. A shared
+`exchange_lib` does signed decimal-string arithmetic — so a fee nets at each
+amount's own natural precision — and reads the currency-code → ledger-symbol
+aliases. The import backends were also renamed to one convention — shared code
+in `<domain>_lib.rs`, each backend `<source>_<method>.rs` — so a file's name
+states how it imports.
+
+**A `~` periodic-block experiment, reverted.** An earlier attempt to model a
+per-year allowance with `~ YYYY` blocks — a computed "remaining" line folded
+into the balance — was built and then removed: it conflated a declaration with a
+report and did not generalize. The auto-transaction templates above cover the
+underlying need cleanly instead.
+
 ## 0.22.0 — 2026-07-21
 
 ### Tue 21 Jul 2026 - Haveno trade import, and one shared wallet-RPC core

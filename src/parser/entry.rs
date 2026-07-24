@@ -26,11 +26,16 @@ pub enum Entry {
 
     /// `commodity SYMBOL` + any number of indented children:
     /// - `alias OTHER` → adds OTHER to `aliases`
+    /// - `parity OTHER` → adds OTHER to `parities`: SYMBOL keeps its own
+    ///   display (no alias fold) but converts 1:1 to OTHER — a *fixed*
+    ///   rate, unlike a dated `P` price. Resolve emits it as a synthetic
+    ///   1:1 price so the normal valuation path can chain it.
     /// - `precision N` → sets the display precision override, overriding
     ///   the precision inferred from posting amounts in reports.
     Commodity {
         symbol: String,
         aliases: Vec<String>,
+        parities: Vec<String>,
         precision: Option<usize>,
     },
 
@@ -59,6 +64,72 @@ pub enum Entry {
     /// Line-leading `=` at column 0, followed by `/pattern/`; indented
     /// children provide the postings with their multipliers.
     AutoRule(AutoRule),
+
+    /// `define NAME` block + indented `key = value` lines: a named
+    /// string→string lookup table. Called as `NAME(key)` inside an
+    /// auto-template posting account to expand a key to its value. A
+    /// deliberately restricted `define` — pure lookup, no expressions — so
+    /// resolving it is a map access, not an evaluator.
+    Define {
+        name: String,
+        entries: Vec<(String, String)>,
+    },
+
+    /// `= NAME :: /pattern/` — a named auto-rule *template*. Its pattern and
+    /// posting accounts carry positional `$1` / `$2` placeholders (and
+    /// `NAME(key)` lookup calls); an `AutoInstance` substitutes a pair in. Kept
+    /// apart from `AutoRule` because it isn't matchable until filled.
+    AutoTemplate {
+        name: String,
+        /// Pattern inner text (no surrounding `/…/`), placeholders intact.
+        pattern: String,
+        postings: Vec<AutoPosting>,
+        /// Optional `amount <op> N` filter, applied to every instantiation.
+        condition: Option<AmountCondition>,
+    },
+
+    /// `= NAME arg1 arg2` — instantiate template `NAME` with a pair. The
+    /// resolver substitutes the args in both orderings (one rule per
+    /// direction) and emits concrete `AutoRule`s.
+    AutoInstance {
+        name: String,
+        args: Vec<String>,
+    },
+}
+
+/// Comparison operator for an `amount` clause on an auto-rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareOp {
+    Gt,
+    Lt,
+    Ge,
+    Le,
+    Eq,
+    Ne,
+}
+
+/// An optional `amount <op> <value>` clause after an auto-rule pattern — the
+/// rule fires only when the matched posting's amount satisfies it. A composable
+/// filter, deliberately limited to one comparison against a bare number (no
+/// expression language): AND is more clauses, OR is more rules, NOT flips the op.
+#[derive(Debug, Clone)]
+pub struct AmountCondition {
+    pub op: CompareOp,
+    pub value: Decimal,
+}
+
+impl AmountCondition {
+    /// Whether `value` — a matched posting's amount — satisfies the clause.
+    pub fn matches(&self, value: &Decimal) -> bool {
+        match self.op {
+            CompareOp::Gt => *value > self.value,
+            CompareOp::Lt => *value < self.value,
+            CompareOp::Ge => *value >= self.value,
+            CompareOp::Le => *value <= self.value,
+            CompareOp::Eq => *value == self.value,
+            CompareOp::Ne => *value != self.value,
+        }
+    }
 }
 
 /// An auto-transaction (`= /pattern/`) block.
@@ -66,6 +137,8 @@ pub enum Entry {
 pub struct AutoRule {
     pub pattern: AutoPattern,
     pub postings: Vec<AutoPosting>,
+    /// Optional `amount <op> N` filter on the matched posting's amount.
+    pub condition: Option<AmountCondition>,
 }
 
 /// Pattern kinds supported in V1 — a subset of ledger-cli regex
@@ -104,6 +177,39 @@ impl AutoPattern {
                 anchored_start,
                 anchored_end,
             } => matches_segments(account, parts, *anchored_start, *anchored_end),
+        }
+    }
+
+    /// Build a pattern from its inner text — the part between the `/…/`
+    /// delimiters, already stripped. `^` anchors the start, `$` the end,
+    /// and each `$segment` token stands for exactly one account segment.
+    /// Shared by the parser (`= /pattern/`) and the resolver, which calls
+    /// it on a template pattern after substituting a pair in. The caller
+    /// guarantees `inner` is non-empty.
+    pub fn parse_inner(inner: &str) -> AutoPattern {
+        let anchored_start = inner.starts_with('^');
+        let anchored_end = inner.ends_with('$');
+        let core = match (anchored_start, anchored_end) {
+            (true, true) => &inner[1..inner.len() - 1],
+            (true, false) => &inner[1..],
+            (false, true) => &inner[..inner.len() - 1],
+            (false, false) => inner,
+        };
+        // `$segment` placeholder(s): split into literal chunks matched
+        // segment-wise. Not regex — the only token is the literal `$segment`.
+        if core.contains("$segment") {
+            let parts = core.split("$segment").map(str::to_string).collect();
+            return AutoPattern::Segmented {
+                parts,
+                anchored_start,
+                anchored_end,
+            };
+        }
+        match (anchored_start, anchored_end) {
+            (true, true) => AutoPattern::Exact(core.to_string()),
+            (true, false) => AutoPattern::Prefix(core.to_string()),
+            (false, true) => AutoPattern::Suffix(core.to_string()),
+            (false, false) => AutoPattern::Contains(core.to_string()),
         }
     }
 }

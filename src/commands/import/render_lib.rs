@@ -45,12 +45,10 @@ pub fn diff_preview(existing: &str, added: &str, count: usize, file: &Path, skip
     };
     let new_lines: Vec<&str> = new_text.lines().collect();
 
-    // Full-width green band: pad every addition out to the terminal width
-    // so the highlight spans the whole line like the editor diff. A long
-    // `; csv:` comment keeps its full (green) content and simply wraps.
-    // Body starts after the gutter + 1 space.
-    let cols = crossterm::terminal::size().map(|(c, _)| c as usize).unwrap_or(100);
-    let band = cols.saturating_sub(GUTTER + 1).max(1);
+    // Full-width green band: pad every addition so the highlight spans the
+    // whole line like the editor diff — including a long `; csv:` comment that
+    // wraps, where the pad must also fill the last visual row (see below).
+    let cols = crossterm::terminal::size().map(|(c, _)| c as usize).unwrap_or(100).max(1);
 
     // Context: trailing existing lines, dim line numbers, grey content
     // (#a3a39f) — the unchanged surroundings. Tabs are expanded so the
@@ -69,7 +67,12 @@ pub fn diff_preview(existing: &str, added: &str, count: usize, file: &Path, skip
     for (i, line) in new_lines.iter().enumerate() {
         let line = untab(line);
         let n = total + i + 1;
-        let pad = band.saturating_sub(1 + line.chars().count());
+        // Pad to the next full terminal row so the band spans the whole line
+        // even when the content wraps — a single-row pad would leave a wrapped
+        // remainder un-highlighted. Visible cells = gutter + " " + "+" (2) +
+        // content; `% cols` gives the fill needed to reach a row boundary.
+        let visible = GUTTER + 2 + line.chars().count();
+        let pad = (cols - visible % cols) % cols;
         println!(
             "{}{}{}{}{}",
             gutter(n).truecolor(80, 200, 80).on_truecolor(BAND.0, BAND.1, BAND.2),
@@ -83,19 +86,26 @@ pub fn diff_preview(existing: &str, added: &str, count: usize, file: &Path, skip
     // Standardised result line at the end, matching the other commands'
     // ✓ / ! summaries.
     println!();
+    println!("{}", summary(count, file, skipped, written));
+}
+
+/// The standardised ✓/! result line the diff preview ends on. Returned as a
+/// string so the piped path can send it to stderr (keeping stdout pure ledger)
+/// while the terminal path prints it to stdout.
+pub fn summary(count: usize, file: &Path, skipped: usize, written: bool) -> String {
     let path = display_path(file);
     let t = if count == 1 { "transaction" } else { "transactions" };
     if written {
-        println!(
+        format!(
             "{} Added {} {} to {} ({} already present).",
             "✓".green(),
             count,
             t,
             path,
             skipped,
-        );
+        )
     } else {
-        println!(
+        format!(
             "{} {} {} would be added to {} ({} already present). Re-run with {} to apply.",
             "!".yellow(),
             count,
@@ -103,7 +113,7 @@ pub fn diff_preview(existing: &str, added: &str, count: usize, file: &Path, skip
             path,
             skipped,
             "-e".bold(),
-        );
+        )
     }
 }
 

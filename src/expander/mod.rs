@@ -44,6 +44,14 @@ pub fn expand(transactions: &mut [Located<Transaction>], auto_rules: &[AutoRule]
                 if !rule.pattern.matches(&trigger_account) {
                     continue;
                 }
+                // Optional `amount <op> N` clause: only fire when the matched
+                // posting's amount satisfies it — e.g. reconcile's `amount > 0`
+                // counts a send but skips the negative transit-clearing posting.
+                if let Some(cond) = &rule.condition
+                    && !cond.matches(&trigger_amount.value)
+                {
+                    continue;
+                }
                 for auto_posting in &rule.postings {
                     let scaled_value = trigger_amount.value.mul_rounded(auto_posting.multiplier);
                     let new_posting = Posting {
