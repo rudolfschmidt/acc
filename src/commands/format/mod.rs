@@ -474,9 +474,9 @@ fn render_transaction(
 /// are stable), but **everything after the account separator** —
 /// the amount, any `@`/`@@` cost, `{…}` lot annotation, `= ASSERT`
 /// and inline `; comment` — is pulled **verbatim from the source
-/// line**. This preserves expressions like `@ (€1/212)` that would
+/// line**. This preserves expressions like `@ ($1/212)` that would
 /// otherwise be re-emitted from their evaluated `Decimal` and lose
-/// their source form (rendering as `€0` because the expression
+/// their source form (rendering as `$0` because the expression
 /// parser records `decimals = 0`).
 fn render_posting(
     p: &Posting,
@@ -689,14 +689,14 @@ mod tests {
     #[test]
     fn inline_comment_keeps_two_spaces_with_and_without_annotation() {
         // With a `@@` cost annotation before the comment: two spaces, not one.
-        let p = extract_posting_parts("\tfoo:11:a  XMR4.314 @@ LTC10.38  ; €1000.00");
+        let p = extract_posting_parts("\tfoo:bar:a  XMR4.314 @@ LTC10.38  ; $1000.00");
         assert_eq!(p.amount_str, "XMR4.314");
-        assert_eq!(p.tail, " @@ LTC10.38  ; €1000.00");
+        assert_eq!(p.tail, " @@ LTC10.38  ; $1000.00");
         // A one-space source is normalised up to two.
-        let p = extract_posting_parts("\tfoo:11:a  XMR4.314 @@ LTC10.38 ; €1000.00");
-        assert_eq!(p.tail, " @@ LTC10.38  ; €1000.00");
+        let p = extract_posting_parts("\tfoo:bar:a  XMR4.314 @@ LTC10.38 ; $1000.00");
+        assert_eq!(p.tail, " @@ LTC10.38  ; $1000.00");
         // Plain amount + comment (no annotation): still two spaces.
-        let p = extract_posting_parts("\tfoo:11:a  XMR4.314  ; note");
+        let p = extract_posting_parts("\tfoo:bar:a  XMR4.314  ; note");
         assert_eq!(p.tail, "  ; note");
     }
 }

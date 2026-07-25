@@ -230,15 +230,15 @@ mod tests {
         // The account is the leading token, so the same text appearing
         // later in a comment on the line must survive untouched, and other
         // lines (and the trailing newline) stay byte-identical.
-        let src = "2024-01-01 * x\n    a:11:cash   €5  ; note a:11:cash\n    equity   €-5\n";
+        let src = "2024-01-01 * x\n    a:bar:cash   $5  ; note a:bar:cash\n    equity   $-5\n";
         let hits = vec![Hit {
             line: 2,
-            old: "a:11:cash".to_string(),
-            new: "a:12:cash".to_string(),
+            old: "a:bar:cash".to_string(),
+            new: "a:baz:cash".to_string(),
         }];
         assert_eq!(
             apply(src, &hits),
-            "2024-01-01 * x\n    a:12:cash   €5  ; note a:11:cash\n    equity   €-5\n"
+            "2024-01-01 * x\n    a:baz:cash   $5  ; note a:bar:cash\n    equity   $-5\n"
         );
     }
 }

@@ -1063,10 +1063,42 @@ mod tests {
         parser::parse(src).unwrap()
     }
 
+    fn loc(value: Entry) -> Located<Entry> {
+        Located { file: std::sync::Arc::from("<test>"), line: 0, value }
+    }
+
+    /// A synthetic commodity entry — as `CONFIG_DIR` TOML would produce it.
+    fn commodity(
+        symbol: &str,
+        aliases: &[&str],
+        parities: &[&str],
+        precision: Option<usize>,
+    ) -> Located<Entry> {
+        loc(Entry::Commodity {
+            symbol: symbol.to_string(),
+            aliases: aliases.iter().map(|s| s.to_string()).collect(),
+            parities: parities.iter().map(|s| s.to_string()).collect(),
+            precision,
+        })
+    }
+
+    /// A synthetic role / label account entry (`slippage gain`, `label X`, …).
+    fn role(role: &str, account: &str) -> Located<Entry> {
+        loc(Entry::RoleAccount { role: role.to_string(), account: account.to_string() })
+    }
+
+    /// Config entries (commodities / roles) followed by a parsed ledger — the
+    /// exact order `read_and_parse` builds in production.
+    fn with(config: Vec<Located<Entry>>, ledger: &str) -> Vec<Located<Entry>> {
+        let mut entries = config;
+        entries.extend(parser::parse(ledger).unwrap());
+        entries
+    }
+
     #[test]
     fn applies_alias_to_price() {
-        let src = "commodity USD\n    alias $\nP 2024-06-15 $ EUR 0.92\n";
-        let out = resolve(parsed(src)).unwrap();
+        let entries = with(vec![commodity("USD", &["$"], &[], None)], "P 2024-06-15 $ EUR 0.92\n");
+        let out = resolve(entries).unwrap();
         assert_eq!(out.prices.len(), 1);
         assert_eq!(&*out.prices[0].value.base, "USD");
         assert_eq!(&*out.prices[0].value.quote, "EUR");
@@ -1077,9 +1109,11 @@ mod tests {
         // `commodity USDC / parity $` values USDC 1:1 as $ but keeps USDC's
         // own symbol (unlike alias, which folds). A held-USDC posting stays
         // USDC, and a synthetic USDC→$ price of 1 is emitted.
-        let src = "commodity $\n    alias USD\ncommodity USDC\n    parity $\n\
-                   2024-06-15 * x\n    assets:kraken  USDC5\n    equity  USDC-5\n";
-        let out = resolve(parsed(src)).unwrap();
+        let entries = with(
+            vec![commodity("$", &["USD"], &[], None), commodity("USDC", &[], &["$"], None)],
+            "2024-06-15 * x\n    assets:exchange  USDC5\n    equity  USDC-5\n",
+        );
+        let out = resolve(entries).unwrap();
         // Posting keeps USDC (not folded to $).
         let amt = out.transactions[0].value.postings[0].value.amount.as_ref().unwrap();
         assert_eq!(amt.commodity, "USDC");
@@ -1091,25 +1125,33 @@ mod tests {
 
     #[test]
     fn applies_alias_to_posting_amount() {
-        let src = "commodity USD\n    alias $\n2024-06-15 * X\n    expenses:food   $5\n    assets:cash  $-5\n";
-        let out = resolve(parsed(src)).unwrap();
+        let entries = with(
+            vec![commodity("USD", &["$"], &[], None)],
+            "2024-06-15 * X\n    expenses:food   $5\n    assets:cash  $-5\n",
+        );
+        let out = resolve(entries).unwrap();
         let amt = out.transactions[0].value.postings[0].value.amount.as_ref().unwrap();
         assert_eq!(amt.commodity, "USD");
     }
 
     #[test]
     fn extracts_slippage_accounts() {
-        let src = "account Equity:SlippageGain\n    slippage gain\naccount Equity:SlippageLoss\n    slippage loss\n";
-        let out = resolve(parsed(src)).unwrap();
+        let out = resolve(vec![
+            role("slippage gain", "Equity:SlippageGain"),
+            role("slippage loss", "Equity:SlippageLoss"),
+        ])
+        .unwrap();
         assert_eq!(out.slippage_gain.as_deref(), Some("Equity:SlippageGain"));
         assert_eq!(out.slippage_loss.as_deref(), Some("Equity:SlippageLoss"));
     }
 
     #[test]
     fn splits_exact_and_segment_labels() {
-        let src = "account assets:cash\n    label liquid\n\
-                   account $segment:baz\n    label tag\n";
-        let out = resolve(parsed(src)).unwrap();
+        let out = resolve(vec![
+            role("label liquid", "assets:cash"),
+            role("label tag", "$segment:baz"),
+        ])
+        .unwrap();
         // Exact name and `$segment` pattern both resolve via the base set;
         // the pattern is anchored to the whole account name.
         assert_eq!(out.labels.get("assets:cash"), Some("liquid"));
@@ -1119,9 +1161,12 @@ mod tests {
 
     #[test]
     fn view_labels_and_multiple_sub_directives() {
-        let src = "account a:1\n    label base\n    label-register reg-only\n\
-                   account a:2\n    label-balance bal-only\n";
-        let out = resolve(parsed(src)).unwrap();
+        let out = resolve(vec![
+            role("label base", "a:1"),
+            role("label-register reg-only", "a:1"),
+            role("label-balance bal-only", "a:2"),
+        ])
+        .unwrap();
         // a:1 declares two sub-directives: a shared fallback and a
         // register-specific override; no balance-specific label.
         assert_eq!(out.labels.get("a:1"), Some("base"));
@@ -1143,26 +1188,36 @@ mod tests {
 
     #[test]
     fn conflicting_aliases_error() {
-        let src = "commodity USD\n    alias $\ncommodity EUR\n    alias $\n";
-        let err = resolve(parsed(src)).unwrap_err();
+        let err = resolve(vec![
+            commodity("USD", &["$"], &[], None),
+            commodity("EUR", &["$"], &[], None),
+        ])
+        .unwrap_err();
         assert!(err.message.contains("alias"));
         assert!(err.message.contains("$"));
     }
 
     #[test]
     fn conflicting_slippage_gain_error() {
-        let src = "account Equity:A\n    slippage gain\naccount Equity:B\n    slippage gain\n";
-        let err = resolve(parsed(src)).unwrap_err();
+        let err = resolve(vec![
+            role("slippage gain", "Equity:A"),
+            role("slippage gain", "Equity:B"),
+        ])
+        .unwrap_err();
         assert!(err.message.contains("slippage gain"));
     }
 
     #[test]
     fn resolves_role_account_references() {
-        let src = "account income:cap:market\n    capital gain\n\
-                   account expenses:cap:market\n    capital loss\n\
-                   account income:cap:cta\n    cta gain\n\
-                   2024-06-15 * sell\n    assets:eth  -6 EUR\n    $capital:gain  2 EUR\n    $capital:loss  2 EUR\n    $cta:gain  2 EUR\n";
-        let out = resolve(parsed(src)).unwrap();
+        let entries = with(
+            vec![
+                role("capital gain", "income:cap:market"),
+                role("capital loss", "expenses:cap:market"),
+                role("cta gain", "income:cap:cta"),
+            ],
+            "2024-06-15 * sell\n    assets:eth  -6 EUR\n    $capital:gain  2 EUR\n    $capital:loss  2 EUR\n    $cta:gain  2 EUR\n",
+        );
+        let out = resolve(entries).unwrap();
         let acct = |i: usize| out.transactions[0].value.postings[i].value.account.as_str();
         assert_eq!(acct(1), "income:cap:market"); // $capital:gain
         assert_eq!(acct(2), "expenses:cap:market"); // $capital:loss
@@ -1175,9 +1230,11 @@ mod tests {
         // typo) is left verbatim, not an error — so `acc format` can
         // round-trip a single file without the central config. `acc lint`
         // is what flags the leftover `$…` account.
-        let src = "account income:cap\n    capital gain\n\
-                   2024-06-15 * x\n    a  -2 EUR\n    $unknown:gain  1 EUR\n    $captial:gain  1 EUR\n";
-        let out = resolve(parsed(src)).unwrap();
+        let entries = with(
+            vec![role("capital gain", "income:cap")],
+            "2024-06-15 * x\n    a  -2 EUR\n    $unknown:gain  1 EUR\n    $captial:gain  1 EUR\n",
+        );
+        let out = resolve(entries).unwrap();
         let acct = |i: usize| out.transactions[0].value.postings[i].value.account.as_str();
         assert_eq!(acct(1), "$unknown:gain");
         assert_eq!(acct(2), "$captial:gain");
@@ -1185,8 +1242,11 @@ mod tests {
 
     #[test]
     fn plain_account_and_commodity_are_dropped() {
-        let src = "commodity USD\naccount Assets:Bank\n";
-        let out = resolve(parsed(src)).unwrap();
+        let out = resolve(vec![
+            commodity("USD", &[], &[], None),
+            loc(Entry::Account("Assets:Bank".to_string())),
+        ])
+        .unwrap();
         assert!(out.transactions.is_empty());
         assert!(out.prices.is_empty());
         assert!(out.slippage_gain.is_none());

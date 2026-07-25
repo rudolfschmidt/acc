@@ -11,6 +11,7 @@
 //!                                        Journal
 //! ```
 
+pub(crate) mod config;
 pub mod error;
 pub mod journal;
 
@@ -137,7 +138,7 @@ fn finish_load(entries: Vec<Located<Entry>>, expand: bool) -> Result<Journal, Lo
         precisions.insert(commodity, p);
     }
 
-    Ok(Journal {
+    let journal = Journal {
         transactions,
         prices,
         slippage_gain: resolved.slippage_gain,
@@ -154,7 +155,8 @@ fn finish_load(entries: Vec<Located<Entry>>, expand: bool) -> Result<Journal, Lo
         labels: resolved.labels,
         labels_balance: resolved.labels_balance,
         labels_register: resolved.labels_register,
-    })
+    };
+    Ok(journal)
 }
 
 /// Commodities a `-X` report can touch: every commodity that appears in a
@@ -470,13 +472,39 @@ where
 {
     use rayon::prelude::*;
 
-    let per_file: Result<Vec<Vec<Located<Entry>>>, LoadError> = files
+    // The `CONFIG_DIR` `.toml` files (commodities / roles / labels) join the
+    // same parallel read as the ledgers — like the old wrapper's leading config
+    // `-f` files. `read_and_parse_one` dispatches each file by extension; order
+    // is irrelevant, the resolver evaluates the whole stream afterwards.
+    let mut paths: Vec<std::path::PathBuf> = config_toml_paths();
+    paths.extend(files.iter().map(|f| f.as_ref().to_path_buf()));
+    let per_file: Result<Vec<Vec<Located<Entry>>>, LoadError> = paths
         .par_iter()
-        .map(|file| read_and_parse_one(file.as_ref()))
+        .map(|p| read_and_parse_one(p))
         .collect();
     Ok(per_file?.into_iter().flatten().collect())
 }
 
+/// The `.toml` config files under `CONFIG_DIR`, sorted. Empty when the variable
+/// is unset — a standalone acc without config still runs.
+fn config_toml_paths() -> Vec<std::path::PathBuf> {
+    let Ok(dir) = std::env::var("CONFIG_DIR") else {
+        return Vec::new();
+    };
+    let Ok(read_dir) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<std::path::PathBuf> = read_dir
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("toml"))
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// Read one input file and parse it into entries. The extension picks the
+/// parser: `.toml` is a config file (commodities / roles / labels), everything
+/// else is a ledger.
 fn read_and_parse_one(file: &Path) -> Result<Vec<Located<Entry>>, LoadError> {
     let path = file.display().to_string();
     let source = if path == "-" {
@@ -496,10 +524,15 @@ fn read_and_parse_one(file: &Path) -> Result<Vec<Located<Entry>>, LoadError> {
         })?
     };
     let file_arc: Arc<str> = Arc::from(path.as_str());
-    parser::parse_with_file(&source, file_arc).map_err(|e| LoadError::Parse {
-        path,
-        source: e,
-    })
+    if file.extension().and_then(|e| e.to_str()) == Some("toml") {
+        config::entries_from_str(&source, &file_arc)
+            .map_err(|e| LoadError::Config { path, message: e.to_string() })
+    } else {
+        parser::parse_with_file(&source, file_arc).map_err(|e| LoadError::Parse {
+            path,
+            source: e,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -508,12 +541,22 @@ mod tests {
     use std::io::Write;
 
     fn with_tmp(name: &str, contents: &str, f: impl FnOnce(&Path)) {
+        with_ext("ledger", name, contents, f);
+    }
+
+    /// Like [`with_tmp`] but writes a `.toml` config file, so the loader's
+    /// extension dispatch parses it as commodities / roles / labels.
+    fn with_toml(name: &str, contents: &str, f: impl FnOnce(&Path)) {
+        with_ext("toml", name, contents, f);
+    }
+
+    fn with_ext(ext: &str, name: &str, contents: &str, f: impl FnOnce(&Path)) {
         let dir = std::env::temp_dir().join(format!(
             "acc-loader-test-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("{}.ledger", name));
+        let path = dir.join(format!("{}.{}", name, ext));
         let mut file = std::fs::File::create(&path).unwrap();
         file.write_all(contents.as_bytes()).unwrap();
         f(&path);
@@ -559,26 +602,28 @@ mod tests {
         // route XMR → $ → €. The hub `$` (and its raw spellings USD / USDT) is
         // neither a posting commodity nor the target, so it must be pulled in
         // explicitly or the bridge rates get filtered out.
-        let journal = "commodity $\n    alias USD\n    alias USDT\n\
-                       commodity €\n    alias EUR\n\
-                       2026-07-19 * x\n    a  1 XMR\n    b\n";
+        let cfg = "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\", \"USDT\"]\nprecision = 2\n\
+                   [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n";
+        let journal = "2026-07-19 * x\n    a  1 XMR\n    b\n";
         let xmr = "P 2026-07-19 XMR USDT 335.22\n";
         let fiat = "P 2026-07-19 USD EUR 0.874355\n";
-        with_tmp("bridge-j", journal, |j| {
-            with_tmp("bridge-x", xmr, |x| {
-                with_tmp("bridge-e", fiat, |e| {
-                    let entries = read_and_parse(&[j]).unwrap();
-                    let mut needed = needed_commodities(&entries, Some("€"));
-                    assert!(!needed.contains("$"), "hub must not be needed yet");
-                    add_bridge_commodities(
-                        &mut needed,
-                        &entries,
-                        &[x.to_path_buf(), e.to_path_buf()],
-                        "€",
-                    );
-                    assert!(needed.contains("$"), "hub $ pulled onto the path");
-                    assert!(needed.contains("USDT"), "raw alias pulled in for the filter");
-                    assert!(needed.contains("USD"), "raw alias pulled in for the filter");
+        with_toml("bridge-c", cfg, |c| {
+            with_tmp("bridge-j", journal, |j| {
+                with_tmp("bridge-x", xmr, |x| {
+                    with_tmp("bridge-e", fiat, |e| {
+                        let entries = read_and_parse(&[c, j]).unwrap();
+                        let mut needed = needed_commodities(&entries, Some("€"));
+                        assert!(!needed.contains("$"), "hub must not be needed yet");
+                        add_bridge_commodities(
+                            &mut needed,
+                            &entries,
+                            &[x.to_path_buf(), e.to_path_buf()],
+                            "€",
+                        );
+                        assert!(needed.contains("$"), "hub $ pulled onto the path");
+                        assert!(needed.contains("USDT"), "raw alias pulled in for the filter");
+                        assert!(needed.contains("USD"), "raw alias pulled in for the filter");
+                    });
                 });
             });
         });
@@ -590,30 +635,35 @@ mod tests {
         // of $ — it is `parity $`, its own commodity — and there is no USDC/…
         // pair in the price DB. The parity edge must feed the bridge graph so
         // the route USDC → $ → € is found and the hub $ pulled into `needed`.
-        let journal = "commodity $\n    alias USD\n\
-                       commodity USDC\n    parity $\n\
-                       commodity €\n    alias EUR\n\
-                       2026-07-19 * x\n    a  1 USDC\n    b\n";
+        let cfg = "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\"]\nprecision = 2\n\
+                   [[commodity]]\nsymbol = \"USDC\"\nparities = [\"$\"]\nprecision = 2\n\
+                   [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n";
+        let journal = "2026-07-19 * x\n    a  1 USDC\n    b\n";
         let fiat = "P 2026-07-19 USD EUR 0.874355\n";
-        with_tmp("parity-j", journal, |j| {
-            with_tmp("parity-e", fiat, |e| {
-                let entries = read_and_parse(&[j]).unwrap();
-                let mut needed = needed_commodities(&entries, Some("€"));
-                assert!(!needed.contains("$"), "hub must not be needed yet");
-                add_bridge_commodities(&mut needed, &entries, &[e.to_path_buf()], "€");
-                assert!(needed.contains("$"), "hub $ pulled onto the parity path");
-                assert!(needed.contains("USD"), "raw alias pulled in for the filter");
+        with_toml("parity-c", cfg, |c| {
+            with_tmp("parity-j", journal, |j| {
+                with_tmp("parity-e", fiat, |e| {
+                    let entries = read_and_parse(&[c, j]).unwrap();
+                    let mut needed = needed_commodities(&entries, Some("€"));
+                    assert!(!needed.contains("$"), "hub must not be needed yet");
+                    add_bridge_commodities(&mut needed, &entries, &[e.to_path_buf()], "€");
+                    assert!(needed.contains("$"), "hub $ pulled onto the parity path");
+                    assert!(needed.contains("USD"), "raw alias pulled in for the filter");
+                });
             });
         });
     }
 
     #[test]
     fn extracts_slippage_accounts() {
-        let src = "account Equity:SlippageGain\n    slippage gain\naccount Equity:SlippageLoss\n    slippage loss\n";
-        with_tmp("slippage", src, |path| {
-            let journal = load(&[path]).unwrap();
-            assert_eq!(journal.slippage_gain.as_deref(), Some("Equity:SlippageGain"));
-            assert_eq!(journal.slippage_loss.as_deref(), Some("Equity:SlippageLoss"));
+        let cfg = "[slippage]\ngain = \"Equity:SlippageGain\"\nloss = \"Equity:SlippageLoss\"\n";
+        let src = "2024-06-15 * x\n    a  1 USD\n    b\n";
+        with_toml("slippage-c", cfg, |c| {
+            with_tmp("slippage-j", src, |j| {
+                let journal = load(&[c, j]).unwrap();
+                assert_eq!(journal.slippage_gain.as_deref(), Some("Equity:SlippageGain"));
+                assert_eq!(journal.slippage_loss.as_deref(), Some("Equity:SlippageLoss"));
+            });
         });
     }
 
@@ -631,13 +681,17 @@ mod tests {
 
     #[test]
     fn errors_on_alias_conflict() {
-        let src = "commodity USD\n    alias $\ncommodity EUR\n    alias $\n";
-        with_tmp("alias_conflict", src, |path| {
-            let err = load(&[path]).unwrap_err();
-            match err {
-                LoadError::Resolve(_) => {}
-                other => panic!("expected Resolve error, got {:?}", other),
-            }
+        let cfg = "[[commodity]]\nsymbol = \"USD\"\naliases = [\"$\"]\nprecision = 2\n\
+                   [[commodity]]\nsymbol = \"EUR\"\naliases = [\"$\"]\nprecision = 2\n";
+        let src = "2024-06-15 * x\n    a  1 USD\n    b\n";
+        with_toml("alias_conflict-c", cfg, |c| {
+            with_tmp("alias_conflict-j", src, |j| {
+                let err = load(&[c, j]).unwrap_err();
+                match err {
+                    LoadError::Resolve(_) => {}
+                    other => panic!("expected Resolve error, got {:?}", other),
+                }
+            });
         });
     }
 
@@ -656,15 +710,16 @@ mod tests {
         // useful USD/EUR + ABC/USDT pairs plus a noise pair (XYZ/USDT) for a
         // commodity the journal never touches. Eager keeps everything;
         // selective must drop the noise but reach the same valuations.
-        let config = "commodity $\n    alias USD\n    alias USDT\ncommodity €\n    alias EUR\n";
+        let cfg = "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\", \"USDT\"]\nprecision = 2\n\
+                   [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n";
         let journal = "2024-01-10 * buy\n    assets:crypto  ABC2 @ $30000\n    assets:bank\n";
         let prices = "P 2024-01-10 USD EUR 0.9\nP 2024-01-10 ABC USDT 30000\nP 2024-01-10 XYZ USDT 2000\n";
 
-        with_tmp("sel_cfg", config, |cfg| {
+        with_toml("sel_cfg", cfg, |c| {
             with_tmp("sel_jrn", journal, |jrn| {
                 with_tmp("sel_prc", prices, |prc| {
-                    let eager = load(&[cfg, prc, jrn]).unwrap();
-                    let sel = load_selective(&[cfg, jrn], &[prc], Some("€")).unwrap();
+                    let eager = load(&[c, prc, jrn]).unwrap();
+                    let sel = load_selective(&[c, jrn], &[prc], Some("€")).unwrap();
 
                     // Both reach the held commodity's valuation chain. The
                     // index stores resolved alias forms, so the `USD EUR`
@@ -687,14 +742,15 @@ mod tests {
         // The `-X` target is given as the canonical `€`, but the price file
         // spells the pair `USD EUR`. Alias expansion of the target must pull
         // `EUR` into the needed set so the pair survives the filter.
-        let config = "commodity $\n    alias USD\ncommodity €\n    alias EUR\n";
+        let cfg = "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\"]\nprecision = 2\n\
+                   [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n";
         let journal = "2024-01-10 * spend\n    expenses:x  $10\n    assets:bank\n";
         let prices = "P 2024-01-10 USD EUR 0.9\n";
 
-        with_tmp("ali_cfg", config, |cfg| {
+        with_toml("ali_cfg", cfg, |c| {
             with_tmp("ali_jrn", journal, |jrn| {
                 with_tmp("ali_prc", prices, |prc| {
-                    let sel = load_selective(&[cfg, jrn], &[prc], Some("€")).unwrap();
+                    let sel = load_selective(&[c, jrn], &[prc], Some("€")).unwrap();
                     assert!(sel.prices.find("$", "€", "2024-01-11").is_some());
                 });
             });
@@ -706,13 +762,15 @@ mod tests {
         // USDC declared `parity $`; the DB has only USD/EUR. `-X €` must reach
         // USDC → € by chaining the synthetic 1:1 parity edge (USDC→$) with the
         // fiat hub ($→€), and the selective loader must keep the $→€ pair.
-        let config = "commodity $\n    alias USD\ncommodity USDC\n    parity $\ncommodity €\n    alias EUR\n";
-        let journal = "2024-01-10 * in\n    assets:kraken  USDC10\n    equity\n";
+        let cfg = "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\"]\nprecision = 2\n\
+                   [[commodity]]\nsymbol = \"USDC\"\nparities = [\"$\"]\nprecision = 2\n\
+                   [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n";
+        let journal = "2024-01-10 * in\n    assets:exchange  USDC10\n    equity\n";
         let prices = "P 2024-01-10 USD EUR 0.9\n";
-        with_tmp("par_cfg", config, |cfg| {
+        with_toml("par_cfg", cfg, |c| {
             with_tmp("par_jrn", journal, |jrn| {
                 with_tmp("par_prc", prices, |prc| {
-                    let sel = load_selective(&[cfg, jrn], &[prc], Some("€")).unwrap();
+                    let sel = load_selective(&[c, jrn], &[prc], Some("€")).unwrap();
                     // USDC → € chains: USDC→$ (parity, ×1) then $→€ (×0.9).
                     assert_eq!(
                         sel.prices.find("USDC", "€", "2024-01-11"),

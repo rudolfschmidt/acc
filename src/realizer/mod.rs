@@ -169,7 +169,15 @@ mod tests {
     use crate::resolver;
 
     fn build(src: &str) -> (Vec<Located<Transaction>>, Index) {
-        let entries = parser::parse(src).unwrap();
+        build_cfg("", src)
+    }
+
+    /// Like [`build`], but with `cfg` config TOML (commodities) leading the
+    /// entry stream — the loader's extension dispatch in miniature.
+    fn build_cfg(cfg: &str, src: &str) -> (Vec<Located<Transaction>>, Index) {
+        let mut entries =
+            crate::loader::config::entries_from_str(cfg, &std::sync::Arc::from("<test>")).unwrap();
+        entries.extend(parser::parse(src).unwrap());
         let resolved = resolver::resolve(entries).unwrap();
         let prices = crate::indexer::index(resolved.prices);
         let txs = crate::booker::book(resolved.transactions).unwrap();
@@ -254,16 +262,15 @@ mod tests {
         // and the rebalancer weights the lot leg by its cost basis, not the
         // market rate. The realizer must leave it alone — injecting a
         // market-based slippage here would unbalance the `-X` books.
+        let cfg = "[[commodity]]\nsymbol = \"$\"\nprecision = 2\n\
+                   [[commodity]]\nsymbol = \"BTC\"\nprecision = 8\n";
         let src = "\
-            commodity $\n\
-            commodity BTC\n\
-            \tprecision 8\n\
             P 2024-06-15 BTC $ 50000\n\
             2024-06-15 * sell\n\
             \tassets:btc   BTC -1 {$30000} @ $50000\n\
             \tassets:cash   $50000\n\
             \tincome:gain   $-20000\n";
-        let (mut txs, db) = build(src);
+        let (mut txs, db) = build_cfg(cfg, src);
         realize(&mut txs, "$", &db, &HashMap::new(), "income:gain", "expenses:loss");
         // No slippage posting injected — the three source postings are untouched.
         assert_eq!(txs[0].value.postings.len(), 3);

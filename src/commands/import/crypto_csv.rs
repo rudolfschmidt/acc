@@ -197,7 +197,7 @@ fn rows_from_csv(src: &str) -> Result<Vec<Row>, Error> {
 struct Profile {
     output_file: PathBuf,
     title: String,
-    account: String, // usmec:11:crypto
+    account: String, // foo:bar:crypto
     fee_account: String,
     rules: Vec<Rule>,
     default_account: String,
@@ -359,10 +359,10 @@ mod tests {
         Profile {
             output_file: PathBuf::new(),
             title: "crypto | me".to_string(),
-            account: "usmec:11:crypto".to_string(),
-            fee_account: "usmec:12:crypto-fee".to_string(),
+            account: "foo:bar:crypto".to_string(),
+            fee_account: "foo:bar:crypto-fee".to_string(),
             rules: Vec::new(),
-            default_account: "usmec:12:crypto-uncategorized".to_string(),
+            default_account: "foo:bar:crypto-uncategorized".to_string(),
             aliases,
         }
     }
@@ -405,14 +405,14 @@ mod tests {
     #[test]
     fn single_deposit_two_postings_bare_counter() {
         let s = profile().render_single(&row("FIAT_DEPOSIT", "USD", "", "500", "", "111"));
-        assert!(s.contains("usmec:11:crypto  $500"));
-        assert!(s.trim_end().ends_with("usmec:12:crypto-uncategorized"));
+        assert!(s.contains("foo:bar:crypto  $500"));
+        assert!(s.trim_end().ends_with("foo:bar:crypto-uncategorized"));
     }
 
     #[test]
     fn withdrawal_keeps_sign_and_symbol() {
         let s = profile().render_single(&row("ONCHAIN_WITHDRAWAL", "BTC", "", "-0.02818253", "", "222"));
-        assert!(s.contains("usmec:11:crypto  BTC-0.02818253"));
+        assert!(s.contains("foo:bar:crypto  BTC-0.02818253"));
     }
 
     #[test]
@@ -423,9 +423,9 @@ mod tests {
             row("TRADE_FEE", "LTC", "", "-0.0002275", "T1", "3"),
         ];
         let (_, s) = profile().render_trade("T1", &legs).unwrap();
-        assert!(s.contains("usmec:11:crypto  LTC0.091 @@ $10.21475"));
-        assert!(s.contains("usmec:11:crypto  $-10.21475"));
-        assert!(s.contains("usmec:12:crypto-fee  LTC0.0002275"));
-        assert!(s.contains("usmec:11:crypto  LTC-0.0002275"));
+        assert!(s.contains("foo:bar:crypto  LTC0.091 @@ $10.21475"));
+        assert!(s.contains("foo:bar:crypto  $-10.21475"));
+        assert!(s.contains("foo:bar:crypto-fee  LTC0.0002275"));
+        assert!(s.contains("foo:bar:crypto  LTC-0.0002275"));
     }
 }

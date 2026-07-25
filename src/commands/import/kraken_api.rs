@@ -144,7 +144,7 @@ fn render_and_emit(mut entries: Vec<Entry>, conf_path: &str, write: bool) -> Res
 struct Profile {
     output_file: PathBuf,
     title: String,
-    account: String,              // foo:11:kraken
+    account: String,              // foo:bar:kraken
     fee_account: String,
     rules: Vec<Rule>,
     default_account: String,

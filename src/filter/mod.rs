@@ -238,19 +238,15 @@ fn filter_transactions(
                 (String::new(), String::new())
             };
 
-            // Transaction selection: a positional pattern keeps the entry
-            // only if at least one posting matches it (the pattern may match
-            // a tx-wide field shared by every posting). Sign/amount narrow
-            // further below, gating survival via the final empty check.
-            if let Some(m) = &matcher {
-                let any = lt
-                    .value
-                    .postings
-                    .iter()
-                    .any(|lp| m.matches_full(&lp.value, &desc_lower, &code_lower));
-                if !any {
-                    return None;
-                }
+            // Transaction selection: every `with`-conjunct must be satisfied by
+            // some posting (a lone conjunct is the ordinary "at least one posting
+            // matches"; `A with B` needs a posting for each on sibling legs). The
+            // pattern may match a tx-wide field shared by every posting. Sign/
+            // amount narrow further below, gating survival via the empty check.
+            if let Some(m) = &matcher
+                && !m.matches_transaction(&lt.value.postings, &desc_lower, &code_lower)
+            {
+                return None;
             }
 
             // A posting is "matched" by the query when it satisfies every
@@ -314,24 +310,21 @@ fn filter_transactions(
         .collect()
 }
 
-/// Parsed pattern expression. `None` query means "match anything" —
-/// empty input produces this, so callers do not need to special-case
-/// an absent pattern.
+/// Parsed pattern expression as a list of `with`-separated conjuncts. An empty
+/// list means "match anything". Each conjunct is a per-posting [`Query`]; a
+/// transaction is selected when *every* conjunct matches *some* posting — so
+/// `A with B` needs one posting for `A` and a sibling posting for `B` in the
+/// *same* transaction. A single conjunct (no `with`) is the ordinary
+/// "any posting matches" case.
 #[derive(Debug, Clone)]
 pub struct PatternMatcher {
-    query: Option<Query>,
+    conjuncts: Vec<Query>,
 }
 
 impl PatternMatcher {
     /// Parse a token list as delivered by the CLI.
     pub fn from_parts(parts: &[String]) -> Self {
-        if parts.is_empty() {
-            return Self { query: None };
-        }
-        let mut parser = Parser::new(parts);
-        Self {
-            query: parser.parse_or(),
-        }
+        Self { conjuncts: Parser::new(parts).parse_with() }
     }
 
     /// Convenience: parse a single pattern string.
@@ -339,29 +332,39 @@ impl PatternMatcher {
         Self::from_parts(&[pattern.to_string()])
     }
 
-    /// Full posting match — used during the filter pass where all
-    /// context (posting + transaction description + code) is
-    /// available.
+    /// Whether a whole transaction is selected: every `with`-conjunct must be
+    /// satisfied by at least one of the transaction's postings.
+    pub(crate) fn matches_transaction(
+        &self,
+        postings: &[Located<Posting>],
+        desc_lower: &str,
+        code_lower: &str,
+    ) -> bool {
+        self.conjuncts
+            .iter()
+            .all(|q| postings.iter().any(|lp| q.eval(&lp.value, desc_lower, code_lower)))
+    }
+
+    /// Whether this one posting satisfies any conjunct — used to project which
+    /// postings count as "matched" (for `-r` / display) once a transaction has
+    /// been selected. No conjuncts (empty pattern) matches everything.
     pub(crate) fn matches_full(
         &self,
         posting: &Posting,
         desc_lower: &str,
         code_lower: &str,
     ) -> bool {
-        match &self.query {
-            None => true,
-            Some(q) => q.eval(posting, desc_lower, code_lower),
-        }
+        self.conjuncts.is_empty()
+            || self.conjuncts.iter().any(|q| q.eval(posting, desc_lower, code_lower))
     }
 
     /// Account-only check: non-account dimensions are treated as
     /// unconstrained (always match). Suitable for post-filter use
     /// where only a bare account name is available.
     pub fn matches(&self, account: &str) -> bool {
-        match &self.query {
-            None => true,
-            Some(q) => q.eval_account_only(&account.to_lowercase()),
-        }
+        let account_lower = account.to_lowercase();
+        self.conjuncts.is_empty()
+            || self.conjuncts.iter().any(|q| q.eval_account_only(&account_lower))
     }
 }
 
@@ -453,6 +456,7 @@ impl Query {
 /// Grammar (EBNF-ish):
 ///
 /// ```text
+/// with_expr := or_expr ( "with" or_expr )*     # transaction-wide: each part on a sibling posting
 /// or_expr  := and_expr ( ("or" | ε) and_expr )*
 /// and_expr := not_expr ( "and" not_expr )*
 /// not_expr := "not" not_expr | primary
@@ -501,8 +505,30 @@ impl<'a> Parser<'a> {
     fn at_primary_start(&self) -> bool {
         match self.peek() {
             None => false,
-            Some(t) => !t.eq_ignore_ascii_case("and") && !t.eq_ignore_ascii_case("or"),
+            Some(t) => {
+                !t.eq_ignore_ascii_case("and")
+                    && !t.eq_ignore_ascii_case("or")
+                    && !t.eq_ignore_ascii_case("with")
+            }
         }
+    }
+
+    /// Top level: `or_expr ( "with" or_expr )*`. Each `with`-separated part is a
+    /// per-posting query that must be satisfied by *some* posting of the
+    /// transaction — so `with` pairs a posting with a sibling, looser than the
+    /// per-posting `and` / `or`.
+    fn parse_with(&mut self) -> Vec<Query> {
+        let mut conjuncts = Vec::new();
+        if let Some(q) = self.parse_or() {
+            conjuncts.push(q);
+        }
+        while self.peek_kw("with") {
+            self.advance();
+            if let Some(q) = self.parse_or() {
+                conjuncts.push(q);
+            }
+        }
+        conjuncts
     }
 
     fn parse_or(&mut self) -> Option<Query> {
@@ -1043,6 +1069,34 @@ mod tests {
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value.date.to_string(), "2025-02-01");
+    }
+
+    #[test]
+    fn with_selects_transactions_holding_both_accounts() {
+        let txs = vec![
+            tx(
+                "2025-01-01",
+                "both",
+                vec![posting("foo:aa", "USD", -150), posting("bar:bb", "USD", 150)],
+            ),
+            tx(
+                "2025-02-01",
+                "only foo",
+                vec![posting("foo:aa", "USD", -50), posting("assets:cash", "USD", 50)],
+            ),
+            tx(
+                "2025-03-01",
+                "only bar",
+                vec![posting("bar:bb", "USD", 100), posting("income:z", "USD", -100)],
+            ),
+        ];
+        // `foo:aa with bar:bb` keeps only the transaction that has BOTH on
+        // sibling postings.
+        let out = run(&["foo:aa", "with", "bar:bb"], txs.clone());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value.date.to_string(), "2025-01-01");
+        // A bare `foo:aa` keeps both foo transactions — `with` is stricter.
+        assert_eq!(run(&["foo:aa"], txs).len(), 2);
     }
 
     #[test]

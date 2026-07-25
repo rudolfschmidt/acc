@@ -25,15 +25,12 @@ use acc::decimal::Decimal;
 use acc::parser::located::Located;
 use acc::parser::transaction::Transaction;
 
-/// The full real-mode account set: capital, slippage and CTA all declared —
-/// the configuration the new model is built for.
+/// The full real-mode account set as config TOML: capital, slippage and CTA all
+/// declared — the configuration the new model is built for.
 const ACCOUNTS: &str = "\
-    account income:cap\n    capital gain\n\
-    account expenses:cap\n    capital loss\n\
-    account income:slippage\n    slippage gain\n\
-    account expenses:slippage\n    slippage loss\n\
-    account income:cta\n    cta gain\n\
-    account expenses:cta\n    cta loss\n";
+    [capital]\ngain = \"income:cap\"\nloss = \"expenses:cap\"\n\
+    [slippage]\ngain = \"income:slippage\"\nloss = \"expenses:slippage\"\n\
+    [cta]\ngain = \"income:cta\"\nloss = \"expenses:cta\"\n";
 
 fn dec(s: &str) -> Decimal {
     Decimal::parse(s).unwrap()
@@ -61,8 +58,7 @@ fn capital_is_the_market_move() {
     // Buy and sell exactly at market (30000 → 50000): no execution
     // spread, so slippage is zero and the whole holding gain is the market
     // move — 20000 capital. The asset account nets to zero.
-    let src = format!(
-        "{ACCOUNTS}\
+    let src = "\
          P 2024-01-01 BTC EUR 30000\n\
          P 2024-06-01 BTC EUR 50000\n\
          2024-01-01 * buy\n\
@@ -70,9 +66,8 @@ fn capital_is_the_market_move() {
          \tassets:cash  -30000 EUR\n\
          2024-06-01 * sell\n\
          \tassets:btc      -1 BTC\n\
-         \tassets:cash   50000 EUR\n"
-    );
-    let txs = common::run_x(&src, "EUR");
+         \tassets:cash   50000 EUR\n";
+    let txs = common::run_x_cfg(ACCOUNTS, src, "EUR");
     assert_eq!(capital(&txs), dec("-20000"), "market move 30000→50000");
     assert_eq!(slippage(&txs), Decimal::zero(), "traded at market → no slippage");
     assert_eq!(common::balance(&txs, "assets:btc", "EUR"), Decimal::zero());
@@ -82,8 +77,7 @@ fn capital_is_the_market_move() {
 fn market_loss_routes_to_loss_account() {
     // Market fell 50000 → 30000: a 20000 capital loss, routed to the
     // expense account (positive), nothing on income.
-    let src = format!(
-        "{ACCOUNTS}\
+    let src = "\
          P 2024-01-01 BTC EUR 50000\n\
          P 2024-06-01 BTC EUR 30000\n\
          2024-01-01 * buy\n\
@@ -91,9 +85,8 @@ fn market_loss_routes_to_loss_account() {
          \tassets:cash  -50000 EUR\n\
          2024-06-01 * sell\n\
          \tassets:btc      -1 BTC\n\
-         \tassets:cash   30000 EUR\n"
-    );
-    let txs = common::run_x(&src, "EUR");
+         \tassets:cash   30000 EUR\n";
+    let txs = common::run_x_cfg(ACCOUNTS, src, "EUR");
     assert_eq!(common::balance(&txs, "expenses:cap", "EUR"), dec("20000"));
     assert_eq!(common::balance(&txs, "income:cap", "EUR"), Decimal::zero());
     assert_eq!(common::balance(&txs, "assets:btc", "EUR"), Decimal::zero());
@@ -107,8 +100,7 @@ fn slippage_booked_on_buy_and_sell() {
     // sold 1000 *above* market (got 51000): a 1000 slippage gain on each trade
     // → 2000 slippage total. The market move (20000) stays on capital — the
     // realizer and the lotter split the 22000 total cleanly.
-    let src = format!(
-        "{ACCOUNTS}\
+    let src = "\
          P 2024-01-01 BTC EUR 30000\n\
          P 2024-06-01 BTC EUR 50000\n\
          2024-01-01 * buy\n\
@@ -116,9 +108,8 @@ fn slippage_booked_on_buy_and_sell() {
          \tassets:cash  -29000 EUR\n\
          2024-06-01 * sell\n\
          \tassets:btc      -1 BTC\n\
-         \tassets:cash   51000 EUR\n"
-    );
-    let txs = common::run_x(&src, "EUR");
+         \tassets:cash   51000 EUR\n";
+    let txs = common::run_x_cfg(ACCOUNTS, src, "EUR");
     assert_eq!(slippage(&txs), dec("-2000"), "1000 below on buy + 1000 above on sell");
     assert_eq!(capital(&txs), dec("-20000"), "market move untouched by slippage");
 }
@@ -129,8 +120,7 @@ fn disposal_account_zeroes_and_journal_balances() {
     // leaves at its `{cost}`, so assets:btc nets to zero — and capital +
     // slippage make every converted transaction balance, so the whole journal
     // sums to zero.
-    let src = format!(
-        "{ACCOUNTS}\
+    let src = "\
          P 2024-01-01 BTC EUR 30000\n\
          P 2024-06-01 BTC EUR 50000\n\
          2024-01-01 * buy\n\
@@ -138,9 +128,8 @@ fn disposal_account_zeroes_and_journal_balances() {
          \tassets:cash  -29000 EUR\n\
          2024-06-01 * sell\n\
          \tassets:btc      -1 BTC\n\
-         \tassets:cash   51000 EUR\n"
-    );
-    let txs = common::run_x(&src, "EUR");
+         \tassets:cash   51000 EUR\n";
+    let txs = common::run_x_cfg(ACCOUNTS, src, "EUR");
     assert_eq!(common::balance(&txs, "assets:btc", "EUR"), Decimal::zero());
     assert!(
         common::balance(&txs, "", "EUR").is_display_zero(2),
@@ -156,14 +145,12 @@ fn realizer_runs_alongside_capital_tracking() {
     // 2000 below market books a 2000 slippage gain. The buy only opens a lot,
     // so no capital is realized yet — proving the realizer is no longer
     // skipped when capital tracking is active. No transfer → no CTA.
-    let src = format!(
-        "{ACCOUNTS}\
+    let src = "\
          P 2024-06-01 BTC EUR 50000\n\
          2024-06-01 * buy\n\
          \tassets:btc       1 BTC\n\
-         \tassets:cash  -48000 EUR\n"
-    );
-    let txs = common::run_x(&src, "EUR");
+         \tassets:cash  -48000 EUR\n";
+    let txs = common::run_x_cfg(ACCOUNTS, src, "EUR");
     assert_eq!(slippage(&txs), dec("-2000"), "realizer books the buy spread");
     assert_eq!(capital(&txs), Decimal::zero(), "an opening buy realizes nothing");
     assert_eq!(cta(&txs), Decimal::zero(), "no same-commodity transfer → no CTA");
@@ -177,8 +164,7 @@ fn same_commodity_transfer_is_cta_not_capital() {
     // no trade to realize, but the holding-period rate moved 0.83 → 0.85,
     // so the translator books the drift as CTA and the account zeroes.
     // The lotter and realizer (both need ≥2 commodities) stay out of it.
-    let src = format!(
-        "{ACCOUNTS}\
+    let src = "\
          P 2024-01-01 USD EUR 0.83\n\
          P 2024-06-01 USD EUR 0.85\n\
          2024-01-01 * fund\n\
@@ -186,9 +172,8 @@ fn same_commodity_transfer_is_cta_not_capital() {
          \tcounterparty:t         100 USD\n\
          2024-06-01 * out\n\
          \tcounterparty:t        -100 USD\n\
-         \texpenses:s   100 USD\n"
-    );
-    let txs = common::run_x(&src, "EUR");
+         \texpenses:s   100 USD\n";
+    let txs = common::run_x_cfg(ACCOUNTS, src, "EUR");
     assert_eq!(common::balance(&txs, "counterparty:t", "EUR"), Decimal::zero());
     assert_eq!(capital(&txs), Decimal::zero(), "no trade → no capital");
     assert_eq!(slippage(&txs), Decimal::zero(), "no trade → no slippage");
@@ -201,15 +186,13 @@ fn same_commodity_transfer_is_cta_not_capital() {
 fn native_capital_gain_no_conversion() {
     // BTC bought for 30000 USD, sold for 50000 USD, no -X: the native
     // realized gain is 20000 USD on the capital account.
-    let src = format!(
-        "{ACCOUNTS}\
+    let src = "\
          2024-01-01 * buy\n\
          \tassets:btc       1 BTC @ 30000 USD\n\
          \tassets:cash  -30000 USD\n\
          2024-06-01 * sell\n\
          \tassets:btc      -1 BTC @ 50000 USD\n\
-         \tassets:cash   50000 USD\n"
-    );
-    let txs = common::run_native(&src);
+         \tassets:cash   50000 USD\n";
+    let txs = common::run_native_cfg(ACCOUNTS, src);
     assert_eq!(common::balance(&txs, "income:cap", "USD"), dec("-20000"));
 }

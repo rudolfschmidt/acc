@@ -16,6 +16,7 @@
 //! driven by CLI flags and run last, per command.
 
 pub mod booker;
+pub mod cli;
 pub mod commands;
 pub mod date;
 pub mod decimal;

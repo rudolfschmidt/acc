@@ -31,13 +31,17 @@ use crate::loader::Journal;
 use crate::parser::located::Located;
 use crate::parser::transaction::Transaction;
 
-pub fn run(
+/// Generate the offsetting entries for the pass-through `account` — already
+/// aligned and date-sorted — plus their count. Returns an empty string and `0`
+/// when there is nothing to sweep. The caller decides where the text goes
+/// (stdout, a per-account file); this keeps the command embeddable.
+pub fn entries(
     journal: Journal,
     account: &str,
     segment: &str,
     income: &str,
     expense: &str,
-) -> Result<(), Error> {
+) -> Result<(String, usize), Error> {
     // Precisions are needed by `format_amount` after `filter` consumes
     // the journal, so clone them out first.
     let precisions = journal.precisions.clone();
@@ -67,21 +71,42 @@ pub fn run(
 
     let (out, count) =
         render_entries(&scoped.transactions, &title, segment, income, expense, &precisions);
+    if count == 0 {
+        return Ok((String::new(), 0));
+    }
+    let formatted = crate::commands::format::format_source(&out, true)?;
+    Ok((formatted, count))
+}
 
-    // Status goes to stderr so stdout carries only the ledger entries.
+/// Print the sweep result line to stderr, in acc's icon convention: yellow `!`
+/// when nothing was open, green `✓` otherwise. Exposed so a caller that routes
+/// the entries elsewhere emits the exact same status acc does, without
+/// rebuilding it. acc knows nothing about where the entries end up — the store
+/// (and any message about it) is the caller's concern.
+pub fn report(count: usize) {
     if count == 0 {
         eprintln!("{} nothing to sweep", "!".yellow());
-        return Ok(());
+        return;
     }
-
-    // Print the offsetting entries, already aligned and date-sorted in
-    // memory, so they can be appended as-is — the caller only decides the
-    // file name, e.g.  acc sweep <account> >> <file>
-    let formatted = crate::commands::format::format_source(&out, true)?;
-    print!("{}", formatted);
-
     let label = if count == 1 { "transaction" } else { "transactions" };
     eprintln!("{} swept {} {}", "✓".green(), count, label);
+}
+
+pub fn run(
+    journal: Journal,
+    account: &str,
+    segment: &str,
+    income: &str,
+    expense: &str,
+) -> Result<(), Error> {
+    let (formatted, count) = entries(journal, account, segment, income, expense)?;
+
+    // stdout carries only the ledger entries (aligned, date-sorted, so they can
+    // be appended as-is); the status line goes to stderr via `report`.
+    if count > 0 {
+        print!("{}", formatted);
+    }
+    report(count);
     Ok(())
 }
 

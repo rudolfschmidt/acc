@@ -1,5 +1,4 @@
 mod cli;
-mod env;
 mod fetch;
 mod fiat;
 mod file;

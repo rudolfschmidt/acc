@@ -42,29 +42,28 @@ impl Drop for TempTree {
 
 #[test]
 fn lint_dir_category_flags_future_dated_posting() {
-    // 2099 is well past today, so a report would hide this entry. Its `in:`
+    // 2099 is well past today, so a report would hide this entry. Its `cat:`
     // posting miscategorises — folder `foo-bar` maps to segments `foo:bar`,
-    // so `in:wrong` should read `in:foo:bar`. lint must catch it anyway.
+    // so `cat:wrong` should read `cat:foo:bar`. lint must catch it anyway.
     let tree = TempTree::new(
         "foo-bar",
         "2099-01-01 future\n\
-         \tin:wrong     -10 EUR\n\
-         \tassets:cash   10 EUR\n",
+         \tcat:wrong     -10 USD\n\
+         \tassets:cash   10 USD\n",
     );
 
     let out = Command::new(env!("CARGO_BIN_EXE_acc"))
         .arg("-f")
         .arg(&tree.file)
         .args(["lint", "dir-category"])
-        .arg("--base")
-        .arg(&tree.base)
-        .args(["--categories", "^in:"])
+        .env("BASE", &tree.base)
+        .args(["--categories", "^cat:"])
         .output()
         .expect("run acc");
     let stdout = String::from_utf8_lossy(&out.stdout);
 
     assert!(
-        stdout.contains("in:foo:bar") && stdout.contains("in:wrong"),
+        stdout.contains("cat:foo:bar") && stdout.contains("cat:wrong"),
         "lint must flag the future-dated miscategorised posting, got:\n{stdout}"
     );
 }

@@ -108,12 +108,9 @@ fn rebalance_lot_posting_converts_via_cost_weight() {
 /// multi-commodity transactions.
 #[test]
 fn cta_labels_transit_drift_on_declared_account() {
-    let mut j = common::load(
-        "account income:cta\n\
-         \tcta gain\n\
-         account expenses:cta\n\
-         \tcta loss\n\
-         P 2024-01-15 EUR USD 1.10\n\
+    let mut j = common::load_cfg(
+        "[cta]\ngain = \"income:cta\"\nloss = \"expenses:cta\"\n",
+        "P 2024-01-15 EUR USD 1.10\n\
          P 2024-06-15 EUR USD 1.05\n\
          P 2024-12-15 EUR USD 1.08\n\
          2024-01-15 * salary arrives\n\

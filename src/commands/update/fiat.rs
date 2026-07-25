@@ -2,11 +2,9 @@ use colored::Colorize;
 
 use crate::error::Error;
 
-use super::env::load_api_key;
 use super::file;
 
 const OXR_BASE: &str = "https://openexchangerates.org/api/historical";
-const KEY_VAR: &str = "OPENEXCHANGERATES_API_KEY";
 
 /// Entry point: update fiat rate files.
 /// Fetches **all** currencies OXR returns for USD base — no symbol filter.
@@ -21,7 +19,9 @@ pub fn run(
     cadence: super::Cadence,
     skip: bool,
 ) -> Result<(), Error> {
-    let app_id = load_api_key(KEY_VAR)?;
+    let app_id = crate::loader::config::openexchangerates().ok_or_else(|| {
+        Error::new("no `[exchange] openexchangerates` key in the CONFIG_DIR config".to_string())
+    })?;
 
     if let Some(d) = date {
         if skip && file::fiat_path_for(d)?.exists() {

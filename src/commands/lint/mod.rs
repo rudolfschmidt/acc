@@ -464,6 +464,16 @@ mod tests {
         booker::book(resolved.transactions).unwrap()
     }
 
+    /// Like [`setup`], but with `cfg` config TOML (roles) leading the entry
+    /// stream — the loader's extension dispatch in miniature.
+    fn setup_cfg(cfg: &str, src: &str) -> Vec<Located<Transaction>> {
+        let mut entries =
+            crate::loader::config::entries_from_str(cfg, &std::sync::Arc::from("<test>")).unwrap();
+        entries.extend(parser::parse(src).unwrap());
+        let resolved = resolver::resolve(entries).unwrap();
+        booker::book(resolved.transactions).unwrap()
+    }
+
     fn setup_file(src: &str, file: &str) -> Vec<Located<Transaction>> {
         let entries = parser::parse_with_file(src, std::sync::Arc::from(file)).unwrap();
         let resolved = resolver::resolve(entries).unwrap();
@@ -535,9 +545,9 @@ mod tests {
     #[test]
     fn role_refs_accept_resolved() {
         // Declared → the reference resolves before lint ever sees it.
-        let txs = setup(
-            "account income:cap\n    capital gain\n\
-             2024-01-01 * x\n\
+        let txs = setup_cfg(
+            "[capital]\ngain = \"income:cap\"\n",
+            "2024-01-01 * x\n\
              \tassets:a       -1 EUR\n\
              \t$capital:gain   1 EUR\n",
         );
@@ -659,6 +669,6 @@ mod tests {
         // BASE (e.g. a config file, or `base-x/` matching `base` by string).
         assert_eq!(dir("/ledger/@cash/x.ledger", "/x"), None);
         assert_eq!(dir("/ledger/x.ledger", "/x"), None);
-        assert_eq!(dir("/ledger-config/x.ledger", "/x"), None);
+        assert_eq!(dir("/ledger-x/x.ledger", "/x"), None);
     }
 }

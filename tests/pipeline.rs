@@ -53,9 +53,9 @@ fn expands_missing_amount_into_per_commodity_postings() {
 
 #[test]
 fn resolves_commodity_aliases() {
-    let j = common::load(
-        "commodity USD\n    alias $\n\
-         2024-06-15 * X\n\
+    let j = common::load_cfg(
+        "[[commodity]]\nsymbol = \"USD\"\naliases = [\"$\"]\nprecision = 2\n",
+        "2024-06-15 * X\n\
          \tassets:usd   $100\n\
          \tequity       $-100\n",
     );
@@ -79,9 +79,9 @@ fn sorts_transactions_by_date() {
 
 #[test]
 fn slippage_accounts_extracted_into_journal() {
-    let j = common::load(
-        "account Equity:SlippageGain\n    slippage gain\n\
-         account Equity:SlippageLoss\n    slippage loss\n",
+    let j = common::load_cfg(
+        "[slippage]\ngain = \"Equity:SlippageGain\"\nloss = \"Equity:SlippageLoss\"\n",
+        "",
     );
     assert_eq!(j.slippage_gain.as_deref(), Some("Equity:SlippageGain"));
     assert_eq!(j.slippage_loss.as_deref(), Some("Equity:SlippageLoss"));
@@ -111,9 +111,9 @@ fn price_directives_land_in_index() {
 #[test]
 fn precision_directive_overrides_observed() {
     // Source has a 5-decimal amount but `precision 2` pins EUR at 2.
-    let j = common::load(
-        "commodity EUR\n    precision 2\n\
-         2024-06-15 * x\n\
+    let j = common::load_cfg(
+        "[[commodity]]\nsymbol = \"EUR\"\nprecision = 2\n",
+        "2024-06-15 * x\n\
          \tassets:bank   123.12345 EUR\n\
          \tequity:open  -123.12345 EUR\n",
     );

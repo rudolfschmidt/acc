@@ -11,6 +11,7 @@ use crate::error;
 pub enum LoadError {
     Io { path: String, source: std::io::Error },
     Parse { path: String, source: ParseError },
+    Config { path: String, message: String },
     Resolve(ResolveError),
     Book(BookError),
 }
@@ -21,6 +22,9 @@ impl fmt::Display for LoadError {
             LoadError::Io { path, source } => write!(f, "reading `{}`: {}", path, source),
             LoadError::Parse { path, source } => {
                 error::render_at_line(f, path, source.line, &source.message)
+            }
+            LoadError::Config { path, message } => {
+                write!(f, "config `{}`: {}", path, message)
             }
             LoadError::Resolve(e) => write!(f, "{}", e),
             LoadError::Book(e) => write!(f, "{}", e),

@@ -96,9 +96,9 @@ fn intern(commodities: &mut HashSet<Arc<str>>, s: &str) -> Arc<str> {
 /// **The journal's one indentation rule.** A line is *nested under* the
 /// directive above it when it starts with a **tab** or **two or more spaces**
 /// (Ledger's convention). This is the single definition used everywhere a line
-/// continues an entry: transaction postings, `commodity` / `account`
-/// sub-directives, and — inside a `= NAME ::` auto-template — the `/pattern/`
-/// rule blocks and the postings under each. Deeper nesting is just another unit
+/// continues an entry: transaction postings and — inside a `= NAME ::`
+/// auto-template — the `/pattern/` rule blocks and the postings under each,
+/// plus periodic postings. Deeper nesting is just another unit
 /// (a template's postings sit one level below their `/pattern/`). Keep this the
 /// sole source of truth so the "tab or spaces, how deep?" question never
 /// recurs per feature.
@@ -135,7 +135,14 @@ fn dispatch(
         [b'~', b' ', ..] | [b'~', b'\t', ..] => {
             parse_periodic(text[1..].trim_start(), line, file, entries)
         }
-        _ => parse_directive(text, line, file, entries),
+        // A `-f` file is a pure ledger: transactions, prices, comments, auto
+        // rules, periodics. Commodities / accounts / roles / labels are no
+        // longer directives — they come from the `CONFIG_DIR` TOML, prepended
+        // as synthetic entries before parsing.
+        _ => {
+            let keyword = text.split_whitespace().next().unwrap_or(text);
+            Err(ParseError::new(line, 1, format!("unknown directive: {}", keyword)))
+        }
     }
 }
 
@@ -510,57 +517,10 @@ fn parse_code(rest: &str, line: usize) -> Result<(Option<String>, &str), ParseEr
     Ok((if code.is_empty() { None } else { Some(code.to_string()) }, after))
 }
 
-/// Parse a top-level keyword directive. Recognised: `commodity`,
-/// `account`. Unknown keywords raise an error — acc has no silent-skip
-/// policy for directives it doesn't understand.
-fn parse_directive(
-    text: &str,
-    line: usize,
-    file: &Arc<str>,
-    entries: &mut Vec<Located<Entry>>,
-) -> Result<(), ParseError> {
-    let (keyword, after) = text
-        .split_once(|c: char| c.is_whitespace())
-        .unwrap_or((text, ""));
-    let arg = after.trim();
-
-    match keyword {
-        "commodity" => {
-            if arg.is_empty() {
-                return Err(ParseError::new(line, 1, "commodity directive missing symbol"));
-            }
-            entries.push(Located {
-                file: file.clone(),
-                line,
-                value: Entry::Commodity {
-                    symbol: arg.to_string(),
-                    aliases: Vec::new(),
-                    parities: Vec::new(),
-                    precision: None,
-                },
-            });
-            Ok(())
-        }
-        "account" => {
-            if arg.is_empty() {
-                return Err(ParseError::new(line, 1, "account directive missing name"));
-            }
-            entries.push(Located {
-                file: file.clone(),
-                line,
-                value: Entry::Account(arg.to_string()),
-            });
-            Ok(())
-        }
-        other => Err(ParseError::new(line, 1, format!("unknown directive: {}", other))),
-    }
-}
-
 /// Attach the content of an indented line to the last emitted entry:
 ///
 /// - under `Transaction` → a posting or an indented comment
-/// - under `Commodity`   → append an `alias X` sub-directive
-/// - under `Account`     → upgrade to `RoleAccount` (any role directive)
+/// - under `AutoRule` / `AutoTemplate` / `Periodic` → its bindings / postings
 /// - anything else       → error (indented line with no valid parent)
 fn extend_block(
     text: &str,
@@ -602,13 +562,6 @@ fn extend_block(
         None => (content, None),
     };
 
-    // In the `Account` case we need to swap the variant entirely; collect
-    // the replacement here and apply it after the match ends. A further
-    // sub-directive under an already-upgraded account is collected in
-    // `push_new` and appended as a sibling entry instead.
-    let mut upgrade: Option<Entry> = None;
-    let mut push_new: Option<Entry> = None;
-
     match &mut last.value {
         Entry::Transaction(tx) => {
             let mut posting = parse_posting(body, line)?;
@@ -624,45 +577,6 @@ fn extend_block(
                 line,
                 value: posting,
             });
-        }
-        Entry::Commodity { aliases, parities, precision, .. } => {
-            if let Some(rest) = body.strip_prefix("alias ") {
-                let alias = rest.trim();
-                if alias.is_empty() {
-                    return Err(ParseError::new(line, 1, "alias missing name"));
-                }
-                aliases.push(alias.to_string());
-            } else if let Some(rest) = body.strip_prefix("parity ") {
-                let target = rest.trim();
-                if target.is_empty() {
-                    return Err(ParseError::new(line, 1, "parity missing commodity"));
-                }
-                parities.push(target.to_string());
-            } else if let Some(rest) = body.strip_prefix("precision ") {
-                let digits = rest.trim();
-                let n: usize = digits.parse().map_err(|_| {
-                    ParseError::new(line, 1, format!("precision requires a non-negative integer, got `{}`", digits))
-                })?;
-                *precision = Some(n);
-            } else {
-                return Err(ParseError::new(line, 1, "expected `alias NAME`, `parity COMMODITY` or `precision N`"));
-            }
-        }
-        Entry::Account(name) => {
-            // A role sub-directive is any indented two-or-more-word line
-            // under `account`. The words verbatim (e.g. `capital gain`)
-            // become the role key; the resolver and `$role:slot`
-            // references match on it, so no role names are baked in here.
-            let role = parse_role_directive(body, line)?;
-            upgrade = Some(Entry::RoleAccount { role, account: std::mem::take(name) });
-        }
-        Entry::RoleAccount { account, .. } => {
-            // A further sub-directive under the same `account` (e.g. a
-            // shared `label` plus a view-specific `label-register`): emit
-            // another RoleAccount that shares the account name. The first
-            // sub-directive already upgraded `Account` → `RoleAccount`.
-            let role = parse_role_directive(body, line)?;
-            push_new = Some(Entry::RoleAccount { role, account: account.clone() });
         }
         Entry::AutoRule(rule) => {
             // A `NAME := EXPR` line is an intermediate binding; anything else is
@@ -719,29 +633,7 @@ fn extend_block(
         _ => return Err(ParseError::new(line, 1, "indented directive not expected here")),
     }
 
-    if let Some(new_value) = upgrade {
-        last.value = new_value;
-    }
-    if let Some(entry) = push_new {
-        entries.push(Located { file: file.clone(), line, value: entry });
-    }
     Ok(())
-}
-
-/// Parse an indented `account` sub-directive into its role key: the
-/// whitespace-normalised words (e.g. `capital gain`, `label-register X`).
-/// At least two words are required.
-fn parse_role_directive(body: &str, line: usize) -> Result<String, ParseError> {
-    let role = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    if role.split(' ').count() < 2 {
-        return Err(ParseError::new(
-            line,
-            1,
-            "expected a role sub-directive of two or more words, \
-             e.g. `slippage gain`, `cta loss`, or `capital gain`",
-        ));
-    }
-    Ok(role)
 }
 
 /// If `body` is a `NAME := EXPR` binding line, parse and return `(name, expr)`;
@@ -1822,106 +1714,13 @@ mod tests {
     // --- Directives ---
 
     #[test]
-    fn parse_commodity_with_aliases() {
-        let src = "commodity USD\n    alias $\n    alias USdollar\n";
-        let got = parse(src).unwrap();
-        match &got[0].value {
-            Entry::Commodity { symbol, aliases, parities, precision } => {
-                assert_eq!(symbol, "USD");
-                assert_eq!(aliases, &vec!["$".to_string(), "USdollar".to_string()]);
-                assert!(parities.is_empty());
-                assert_eq!(*precision, None);
-            }
-            _ => panic!("expected Commodity"),
-        }
-    }
-
-    #[test]
-    fn parse_commodity_with_precision() {
-        let src = "commodity EUR\n    alias €\n    precision 2\n";
-        let got = parse(src).unwrap();
-        match &got[0].value {
-            Entry::Commodity { symbol, aliases, parities, precision } => {
-                assert_eq!(symbol, "EUR");
-                assert_eq!(aliases, &vec!["€".to_string()]);
-                assert!(parities.is_empty());
-                assert_eq!(*precision, Some(2));
-            }
-            _ => panic!("expected Commodity"),
-        }
-    }
-
-    #[test]
-    fn parse_commodity_with_parity() {
-        // `parity $` under a commodity records a fixed 1:1 target, distinct
-        // from an alias — the commodity keeps its own symbol.
-        let src = "commodity USDC\n    parity $\n    precision 2\n";
-        let got = parse(src).unwrap();
-        match &got[0].value {
-            Entry::Commodity { symbol, aliases, parities, precision } => {
-                assert_eq!(symbol, "USDC");
-                assert!(aliases.is_empty());
-                assert_eq!(parities, &vec!["$".to_string()]);
-                assert_eq!(*precision, Some(2));
-            }
-            _ => panic!("expected Commodity"),
-        }
-    }
-
-    #[test]
-    fn parse_account_with_slippage_gain() {
-        let src = "account Equity:SlippageGain\n    slippage gain\n";
-        let got = parse(src).unwrap();
-        assert!(matches!(&got[0].value,
-            Entry::RoleAccount { role, account } if role == "slippage gain" && account == "Equity:SlippageGain"));
-    }
-
-    #[test]
-    fn parse_account_with_multiword_role() {
-        // Roles are matched generically — a three-word role parses too.
-        let src = "account Equity:Foo\n    capital gain longterm\n";
-        let got = parse(src).unwrap();
-        assert!(matches!(&got[0].value,
-            Entry::RoleAccount { role, account }
-                if role == "capital gain longterm" && account == "Equity:Foo"));
-    }
-
-    #[test]
-    fn parse_account_role_needs_two_words() {
-        let src = "account Equity:Foo\n    capital\n";
-        assert!(parse(src).is_err());
-    }
-
-    #[test]
-    fn parse_account_with_multiple_sub_directives() {
-        // An account may carry more than one sub-directive; each becomes
-        // its own RoleAccount sharing the account name.
-        let src = "account foo:1\n    label base\n    label-register reg\n";
-        let got = parse(src).unwrap();
-        let roles: Vec<_> = got
-            .iter()
-            .filter_map(|e| match &e.value {
-                Entry::RoleAccount { role, account } => Some((role.as_str(), account.as_str())),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            roles,
-            vec![("label base", "foo:1"), ("label-register reg", "foo:1")]
-        );
-    }
-
-    #[test]
-    fn parse_account_without_sub_directive() {
-        let src = "account Assets:Bank\n";
-        let got = parse(src).unwrap();
-        assert!(matches!(got[0].value, Entry::Account(ref n) if n == "Assets:Bank"));
-    }
-
-    #[test]
     fn unknown_directive_errors() {
         assert!(parse("year 2024\n").is_err());
         assert!(parse("something weird\n").is_err());
+        // `commodity` / `account` are no longer directives — they come from
+        // the `CONFIG_DIR` TOML, so in a `-f` ledger they are unknown.
+        assert!(parse("commodity USD\n").is_err());
+        assert!(parse("account Assets:Bank\n").is_err());
     }
 
     // --- Indent rules ---

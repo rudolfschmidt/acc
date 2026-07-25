@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.28.0 — 2026-07-26
+
+### Fri 26 Jul 2026 - Commodities, roles and labels move to TOML config; the `commodity` / `account` DSL is gone
+
+**Config is data, read from TOML — not a bespoke ledger DSL.** Commodity
+declarations (`commodity SYM` with `alias` / `precision` / `parity`), the
+valuation-role accounts (`account X` with `slippage gain` / `holding loss` / `cta
+gain` / `capital loss`), and cosmetic display labels used to be directives inside
+the `.ledger` files. They are TOML now: every `.toml` file in the directory named
+by the `CONFIG_DIR` environment variable is read and merged — `[[commodity]]`
+tables (`symbol`, `aliases`, `parities`, `precision`), the `[slippage]` /
+`[holding]` / `[cta]` / `[capital]` role pairs (`gain` / `loss`), and `[[label]]`
+tables. acc is a general tool; keeping the shape of a commodity or a role as
+plain data a caller writes, rather than a syntax only acc parses, is the right
+seam. The parser lost its `commodity` / `account` directive recognition entirely
+— a `-f` ledger is now purely transactions, `P` prices, `=` auto-rules, `~`
+periodics and comments; a stray `commodity …` line is an "unknown directive"
+error.
+
+**The loader dispatches by file extension, in one parallel read.** The
+`CONFIG_DIR` `.toml` files join the same rayon pass as the journal `.ledger`
+files; each file is parsed by its extension (`.toml` → config, everything else →
+ledger) into one `Entry` stream, and the resolver evaluates the whole thing
+afterwards. Order is irrelevant — a commodity's alias is in scope for a price
+whether its config was read first or last — so nothing is sequenced beyond the
+selective price filter, which still runs as its own second phase because it needs
+the journal's commodities before it can drop the bulk of the price DB a report
+never touches. `.toml` is only ever looked for in `CONFIG_DIR`; the journal-tree
+walk still collects `.ledger` only.
+
+**`[exchange]` carries the `-X` default and the rate-API key.** The default
+valuation target (`default`) and the openexchangerates.org app id
+(`openexchangerates`) live in an `[exchange]` table, read before a load to decide
+the `-X` target and, for `acc update`, to reach the fiat API. The provider is
+named by its own key so a second rate source can be added as its own field rather
+than a generic `api_key`. This replaces the old `OPENEXCHANGERATES_API_KEY` /
+`DEFAULT_EXCHANGE` environment variables and the module that read them.
+
+**No injectable config API.** An earlier iteration exposed `set_*` methods to
+push commodities / roles into a `Journal` from Rust; that is removed. Config has
+one source now — the TOML — so a standalone acc and any embedder configure the
+same way, with no second path to keep in sync.
+
+**Docs moved out.** The worked examples and the long-form reference are moving to
+a dedicated site (under construction); the README is now a quick-start plus a
+pointer, and `acc --help` documents every command in the meantime.
+
 ## 0.27.0 — 2026-07-25
 
 ### Thu 25 Jul 2026 - An amount-expression language for auto-rules, `:=` bindings, and `= *0`
@@ -3130,7 +3177,7 @@ the display precision across all reports. `$` kept its 2 decimals
 ### Sat 11 Apr 2026 - Multi-pattern filter without quoting
 
 Positional filter arguments had previously been treated as a
-single substring — `acc bal ^rud ait` was one two-word pattern,
+single substring — `acc bal ^foo bar` was one two-word pattern,
 not two independent filters. It was changed so each positional
 argument becomes a separate filter pattern, combined with AND.
 `acc bal ^assets ^2024` now finds assets accounts accessed in

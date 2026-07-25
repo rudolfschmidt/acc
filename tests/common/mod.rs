@@ -15,15 +15,22 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-/// Write `contents` to a fresh `.ledger` file in a per-test temp dir
-/// and return the path. The caller owns cleanup via `TempJournal::drop`.
+/// Write a journal `.ledger` (and an optional config `.toml`) into a fresh
+/// per-test temp dir. The caller owns cleanup via `TempJournal::drop`. The
+/// `.toml` lets a test supply commodities / roles the way the real config does,
+/// loaded via the loader's extension dispatch.
 pub struct TempJournal {
     pub path: PathBuf,
+    config: Option<PathBuf>,
     dir: PathBuf,
 }
 
 impl TempJournal {
     pub fn new(contents: &str) -> Self {
+        Self::with_config("", contents)
+    }
+
+    pub fn with_config(cfg: &str, contents: &str) -> Self {
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!(
             "acc-it-{}-{}",
@@ -34,7 +41,23 @@ impl TempJournal {
         let path = dir.join("journal.ledger");
         let mut f = std::fs::File::create(&path).expect("create journal file");
         f.write_all(contents.as_bytes()).expect("write journal");
-        TempJournal { path, dir }
+        let config = (!cfg.is_empty()).then(|| {
+            let c = dir.join("config.toml");
+            std::fs::write(&c, cfg).expect("write config");
+            c
+        });
+        TempJournal { path, config, dir }
+    }
+
+    /// Config `.toml` first (if any), then the journal — the loader dispatches
+    /// each by extension and the resolver evaluates the whole stream.
+    pub fn files(&self) -> Vec<PathBuf> {
+        let mut v = Vec::new();
+        if let Some(c) = &self.config {
+            v.push(c.clone());
+        }
+        v.push(self.path.clone());
+        v
     }
 }
 
@@ -47,8 +70,14 @@ impl Drop for TempJournal {
 /// Load a journal from an inline source string. Panics on any error —
 /// use the error-path tests for failure cases.
 pub fn load(src: &str) -> acc::Journal {
-    let tmp = TempJournal::new(src);
-    acc::load(&[&tmp.path]).expect("load should succeed")
+    load_cfg("", src)
+}
+
+/// Like [`load`], but with `cfg` config TOML (commodities / roles / labels)
+/// loaded alongside the journal.
+pub fn load_cfg(cfg: &str, src: &str) -> acc::Journal {
+    let tmp = TempJournal::with_config(cfg, src);
+    acc::load(&tmp.files()).expect("load should succeed")
 }
 
 use acc::decimal::Decimal;
@@ -61,7 +90,12 @@ use acc::parser::transaction::Transaction;
 /// so a change to any enrichment phase is exercised here directly.
 /// Returns the transformed transactions for target-currency assertions.
 pub fn run_x(src: &str, target: &str) -> Vec<Located<Transaction>> {
-    let mut j = load(src);
+    run_x_cfg("", src, target)
+}
+
+/// [`run_x`] with `cfg` config TOML (commodities / roles) alongside the journal.
+pub fn run_x_cfg(cfg: &str, src: &str, target: &str) -> Vec<Located<Transaction>> {
+    let mut j = load_cfg(cfg, src);
     acc::pipeline::enrich(&mut j, Some(target), false);
     acc::rebalancer::rebalance(&mut j.transactions, target, &j.prices);
     j.transactions
@@ -70,7 +104,12 @@ pub fn run_x(src: &str, target: &str) -> Vec<Located<Transaction>> {
 /// Like [`run_x`] but with `--unrealized` on: open foreign positions are
 /// marked to the latest available rate (the revaluator runs).
 pub fn run_unrealized(src: &str, target: &str) -> Vec<Located<Transaction>> {
-    let mut j = load(src);
+    run_unrealized_cfg("", src, target)
+}
+
+/// [`run_unrealized`] with `cfg` config TOML alongside the journal.
+pub fn run_unrealized_cfg(cfg: &str, src: &str, target: &str) -> Vec<Located<Transaction>> {
+    let mut j = load_cfg(cfg, src);
     acc::pipeline::enrich(&mut j, Some(target), true);
     acc::rebalancer::rebalance(&mut j.transactions, target, &j.prices);
     j.transactions
@@ -80,7 +119,12 @@ pub fn run_unrealized(src: &str, target: &str) -> Vec<Located<Transaction>> {
 /// anything here (realizing in the booked commodity). For native-mode
 /// capital-gain assertions.
 pub fn run_native(src: &str) -> Vec<Located<Transaction>> {
-    let mut j = load(src);
+    run_native_cfg("", src)
+}
+
+/// [`run_native`] with `cfg` config TOML alongside the journal.
+pub fn run_native_cfg(cfg: &str, src: &str) -> Vec<Located<Transaction>> {
+    let mut j = load_cfg(cfg, src);
     acc::pipeline::enrich(&mut j, None, false);
     j.transactions
 }

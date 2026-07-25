@@ -32,19 +32,26 @@ fn balance_assertion_mismatch() {
 
 #[test]
 fn conflicting_commodity_aliases() {
-    let e = load_err(
-        "commodity USD\n    alias $\n\
-         commodity EUR\n    alias $\n",
+    // Two commodities claiming the same `$` alias — a single config file.
+    let tmp = TempJournal::with_config(
+        "[[commodity]]\nsymbol = \"USD\"\naliases = [\"$\"]\nprecision = 2\n\
+         [[commodity]]\nsymbol = \"EUR\"\naliases = [\"$\"]\nprecision = 2\n",
+        "",
     );
+    let e = acc::load(&tmp.files()).expect_err("load should fail");
     assert!(matches!(e, acc::LoadError::Resolve(_)));
 }
 
 #[test]
 fn duplicate_slippage_gain_accounts() {
-    let e = load_err(
-        "account Equity:A\n    slippage gain\n\
-         account Equity:B\n    slippage gain\n",
-    );
+    // The same role declared to different accounts across two config files —
+    // within one file `[slippage] gain` is a single key, so the conflict only
+    // arises when two files each set it.
+    let a = TempJournal::with_config("[slippage]\ngain = \"Equity:A\"\n", "");
+    let b = TempJournal::with_config("[slippage]\ngain = \"Equity:B\"\n", "");
+    let mut files = a.files();
+    files.extend(b.files());
+    let e = acc::load(&files).expect_err("load should fail");
     assert!(matches!(e, acc::LoadError::Resolve(_)));
 }
 

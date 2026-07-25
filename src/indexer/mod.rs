@@ -38,7 +38,15 @@ mod tests {
     use crate::parser;
 
     fn build(src: &str) -> Index {
-        let entries = parser::parse(src).unwrap();
+        build_cfg("", src)
+    }
+
+    /// Like [`build`], but with `cfg` config TOML (commodities / roles) leading
+    /// the entry stream — the loader's extension dispatch in miniature.
+    fn build_cfg(cfg: &str, src: &str) -> Index {
+        let mut entries =
+            crate::loader::config::entries_from_str(cfg, &std::sync::Arc::from("<test>")).unwrap();
+        entries.extend(parser::parse(src).unwrap());
         let resolved = crate::resolver::resolve(entries).unwrap();
         index(resolved.prices)
     }
@@ -120,8 +128,8 @@ mod tests {
 
     #[test]
     fn applies_aliases_from_resolver() {
-        let src = "commodity USD\n    alias $\nP 2024-06-15 $ EUR 0.92\n";
-        let db = build(src);
+        let cfg = "[[commodity]]\nsymbol = \"USD\"\naliases = [\"$\"]\nprecision = 2\n";
+        let db = build_cfg(cfg, "P 2024-06-15 $ EUR 0.92\n");
         // Resolver should have replaced $ with USD before indexing
         assert_eq!(db.find("USD", "EUR", "2024-06-16"), Some(Decimal::parse("0.92").unwrap()));
     }
