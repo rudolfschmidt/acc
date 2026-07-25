@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::date::Date;
 use crate::decimal::Decimal;
 use crate::parser::entry::{
-    AutoAmount, AutoPattern, AutoPosting, AutoRule, Cadence, Entry, TemplateRule,
+    AmountExpr, AutoPattern, AutoPosting, AutoRule, Cadence, Entry, TemplateRule,
 };
 use crate::parser::located::Located;
 use crate::parser::posting::{Costs, Posting};
@@ -182,13 +182,23 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                     ));
                 }
                 // Injected postings must keep the transaction balanced: each pool
-                // (real, balanced-virtual `[...]`) either has a bare leg that
-                // fills to balance it, or its factors sum to zero. `(...)`
-                // postings are exempt, like everywhere in acc.
-                if let Err(msg) = check_multiplier_balance(&rule.postings) {
+                // (real, balanced-virtual `[...]`) has at most one bare leg that
+                // fills to balance it; `(...)` postings are exempt, like
+                // everywhere in acc.
+                if let Err(msg) = check_injected_balance(&rule.postings) {
                     return Err(ResolveError::new(file.clone(), line, format!("auto-rule: {msg}")));
                 }
-                auto_rules.push(rule);
+                // Expand `:=` bindings and resolve value lookups; no `$1`/`$2`
+                // params (an anonymous rule has no arguments — a stray `$n`
+                // surfaces here as an unbound-parameter error).
+                let postings =
+                    resolve_postings(&[], &rule.bindings, &rule.postings, &lookups, &file, line)?;
+                auto_rules.push(AutoRule {
+                    pattern: rule.pattern,
+                    postings,
+                    condition: rule.condition,
+                    bindings: Vec::new(),
+                });
             }
             Entry::Commodity { symbol, parities, .. } => {
                 // A `parity T` on commodity S declares a *fixed* 1 S = 1 T
@@ -278,16 +288,16 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
 }
 
 /// An auto-rule's injected postings must keep the transaction balanced. Each
-/// balance pool (real, balanced-virtual `[...]`) is checked on its own: at most
-/// one bare `Fill` leg, which balances the pool by absorbing the rest; with no
-/// `Fill`, the `Factor` multipliers must sum to zero. Unbalanced-virtual `(...)`
-/// postings take part in no balance — exempt — so a bare `(...)` has nothing to
-/// fill and is rejected. Returns a human-readable reason on failure.
-fn check_multiplier_balance(postings: &[AutoPosting]) -> Result<(), String> {
-    if postings
-        .iter()
-        .any(|p| p.is_virtual && !p.balanced && matches!(p.amount, AutoAmount::Fill))
-    {
+/// balance pool (real, balanced-virtual `[...]`) may carry at most one bare
+/// `Fill` leg (`amount: None`), which balances the pool by absorbing the rest.
+/// The amount *expressions* are dynamic — they read the trigger and running
+/// balances — so a pool with no `Fill` can't be summed to zero statically; that
+/// it nets to zero is enforced when the expanded transaction is booked.
+/// Unbalanced-virtual `(...)` postings take part in no balance — exempt — so a
+/// bare `(...)` leg has nothing to fill and is rejected. Returns a
+/// human-readable reason on failure.
+fn check_injected_balance(postings: &[AutoPosting]) -> Result<(), String> {
+    if postings.iter().any(|p| p.is_virtual && !p.balanced && p.amount.is_none()) {
         return Err("a bare `(...)` posting has no pool to balance".to_string());
     }
     check_pool(postings, false, "real")?;
@@ -295,44 +305,31 @@ fn check_multiplier_balance(postings: &[AutoPosting]) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate one balance pool. `balanced_virtual = false` selects the real pool
-/// (non-virtual postings), `true` the balanced-virtual `[...]` pool. At most one
-/// bare `Fill` leg (it fills the pool); with a `Fill` present the other factors
-/// may sum to anything, otherwise they must sum to zero.
+/// Validate one balance pool: at most one bare `Fill` leg (`amount: None`), which
+/// fills the pool by absorbing the rest. `balanced_virtual = false` selects the
+/// real pool (non-virtual postings), `true` the balanced-virtual `[...]` pool.
+/// Whether the pool nets to zero is left to the booker — the amounts are only
+/// known at expansion time.
 fn check_pool(postings: &[AutoPosting], balanced_virtual: bool, pool: &str) -> Result<(), String> {
-    let mut sum = Decimal::zero();
-    let mut fills = 0usize;
-    let mut clamps = 0usize;
-    for p in postings {
-        let in_pool = if balanced_virtual { p.is_virtual && p.balanced } else { !p.is_virtual };
-        if !in_pool {
-            continue;
-        }
-        match &p.amount {
-            AutoAmount::Factor(f) => sum += *f,
-            AutoAmount::Clamp { .. } => clamps += 1,
-            AutoAmount::Fill => fills += 1,
-        }
-    }
+    let fills = postings
+        .iter()
+        .filter(|p| {
+            let in_pool = if balanced_virtual { p.is_virtual && p.balanced } else { !p.is_virtual };
+            in_pool && p.amount.is_none()
+        })
+        .count();
     if fills > 1 {
         return Err(format!("more than one bare posting in the {pool} pool"));
-    }
-    // A clamp value is only known at expansion time, so it can't be summed to
-    // zero statically — the pool needs a bare leg to absorb whatever it clamps to.
-    if clamps > 0 && fills == 0 {
-        return Err(format!("a clamp posting in the {pool} pool needs a bare leg to balance it"));
-    }
-    if fills == 0 && clamps == 0 && !sum.is_zero() {
-        return Err(format!("{pool} multipliers must sum to zero, got {sum}"));
     }
     Ok(())
 }
 
-/// Expand a `= NAME a b` instantiation into concrete `AutoRule`s — one per rule
-/// in template `NAME`, with `$1`/`$2` bound to `a`/`b` in the pattern and the
-/// posting accounts. The rules are independent (a second transfer direction is
-/// just another rule in the template), so this is a straight per-rule map; any
-/// `table[key]` lookup in an account is resolved against the lookup tables.
+/// Expand a `= NAME a b …` instantiation into concrete `AutoRule`s — one per
+/// rule in template `NAME`, with `$1`/`$2`/… bound to the args in the pattern,
+/// the posting accounts, and the amount expressions. The rules are independent
+/// (a second transfer direction is just another rule in the template), so this
+/// is a straight per-rule map; any `table[key]` lookup in an account is resolved
+/// against the lookup tables.
 fn expand_instance(
     name: &str,
     args: &[String],
@@ -344,15 +341,23 @@ fn expand_instance(
     let template = templates.get(name).ok_or_else(|| {
         ResolveError::new(file.clone(), line, format!("no auto-rule template named `{name}`"))
     })?;
-    // An instance takes exactly two positional args, bound to `$1`/`$2`.
-    if args.len() != 2 {
+    // An instance supplies one arg per positional `$n` the template references
+    // (the highest index used). `$1`/`$2` are typically the entity pair; a later
+    // `$3` is a number (e.g. a share-capital cap) read in an amount expression.
+    let arity = template_arity(&template.rules);
+    if args.len() != arity {
         return Err(ResolveError::new(
             file.clone(),
             line,
-            format!("`= {name}` takes exactly two arguments ($1 and $2), got {}", args.len()),
+            format!(
+                "`= {name}` takes {arity} argument{}, got {}",
+                if arity == 1 { "" } else { "s" },
+                args.len()
+            ),
         ));
     }
-    let bindings = [("1", args[0].as_str()), ("2", args[1].as_str())];
+    let bindings: Vec<(usize, &str)> =
+        args.iter().enumerate().map(|(i, a)| (i + 1, a.as_str())).collect();
     template
         .rules
         .iter()
@@ -360,38 +365,237 @@ fn expand_instance(
         .collect()
 }
 
-/// Build one concrete `AutoRule` from a template rule: substitute the `$1`/`$2`
-/// `bindings` into the pattern and every posting account, resolve any
-/// `table[key]` lookup, and carry the rule's amounts and condition through.
+/// The number of positional args a template needs: the highest `$n` referenced
+/// across every rule's pattern, posting account, and amount expression. A
+/// template with no `$n` has arity 0.
+fn template_arity(rules: &[TemplateRule]) -> usize {
+    let mut params: Vec<usize> = Vec::new();
+    for rule in rules {
+        params.extend(param_refs(&rule.pattern).iter().filter_map(|r| r.parse::<usize>().ok()));
+        for (_, expr) in &rule.bindings {
+            collect_expr_params(expr, &mut params);
+        }
+        for tp in &rule.postings {
+            params
+                .extend(param_refs(&tp.account).iter().filter_map(|r| r.parse::<usize>().ok()));
+            if let Some(expr) = &tp.amount {
+                collect_expr_params(expr, &mut params);
+            }
+        }
+    }
+    params.into_iter().max().unwrap_or(0)
+}
+
+/// Collect every positional parameter index `$n` referenced in an amount
+/// expression — the `Param` atoms plus any `$n` inside a `total(ACCOUNT)` or a
+/// `table[key]` lookup. `Var` references are ignored: the binding they name is
+/// walked separately, so its own `$n` are already counted.
+fn collect_expr_params(expr: &AmountExpr, out: &mut Vec<usize>) {
+    match expr {
+        AmountExpr::Param(n) => out.push(*n),
+        AmountExpr::Total(s) | AmountExpr::Lookup(s) => {
+            out.extend(param_refs(s).iter().filter_map(|r| r.parse::<usize>().ok()));
+        }
+        AmountExpr::Amount | AmountExpr::Literal(_) | AmountExpr::Var(_) => {}
+        AmountExpr::Neg(a) => collect_expr_params(a, out),
+        AmountExpr::Min(a, b)
+        | AmountExpr::Max(a, b)
+        | AmountExpr::Add(a, b)
+        | AmountExpr::Sub(a, b)
+        | AmountExpr::Mul(a, b) => {
+            collect_expr_params(a, out);
+            collect_expr_params(b, out);
+        }
+    }
+}
+
+/// Build one concrete `AutoRule` from a template rule: substitute the `$1`/`$2`/…
+/// `bindings` into the pattern, then resolve the rule's `:=` bindings and every
+/// posting (account + amount) via [`resolve_postings`].
 fn build_instance_rule(
     rule: &TemplateRule,
-    bindings: &[(&str, &str)],
+    bindings: &[(usize, &str)],
     lookups: &HashMap<String, HashMap<String, String>>,
     file: &Arc<str>,
     line: usize,
 ) -> Result<AutoRule, ResolveError> {
     let pattern = AutoPattern::parse_inner(&substitute_params(&rule.pattern, bindings));
-    let mut postings = Vec::new();
-    for tp in &rule.postings {
-        let account =
-            resolve_lookup_calls(&substitute_params(&tp.account, bindings), lookups, file, line)?;
-        postings.push(AutoPosting {
-            account,
-            amount: tp.amount.clone(),
-            is_virtual: tp.is_virtual,
-            balanced: tp.balanced,
-        });
+    let postings = resolve_postings(bindings, &rule.bindings, &rule.postings, lookups, file, line)?;
+    Ok(AutoRule { pattern, postings, condition: rule.condition.clone(), bindings: Vec::new() })
+}
+
+/// Resolve a rule's postings for one concrete instance: expand the `:=`
+/// bindings (`\def`-style, in declaration order) into every posting, then
+/// resolve each posting's account (params + `table[key]` lookups) and amount
+/// expression (params, value lookups, `total(…)` account lookups). `param_bindings`
+/// is empty for an anonymous rule.
+fn resolve_postings(
+    param_bindings: &[(usize, &str)],
+    let_bindings: &[(String, AmountExpr)],
+    postings: &[AutoPosting],
+    lookups: &HashMap<String, HashMap<String, String>>,
+    file: &Arc<str>,
+    line: usize,
+) -> Result<Vec<AutoPosting>, ResolveError> {
+    // Resolve `:=` bindings among themselves first, in order — each may
+    // reference an earlier one.
+    let mut vars: HashMap<String, AmountExpr> = HashMap::new();
+    for (name, expr) in let_bindings {
+        if vars.contains_key(name) {
+            return Err(ResolveError::new(
+                file.clone(),
+                line,
+                format!("binding `{name}` is defined more than once"),
+            ));
+        }
+        let resolved = substitute_vars(expr, &vars, file, line)?;
+        vars.insert(name.clone(), resolved);
     }
-    Ok(AutoRule { pattern, postings, condition: rule.condition.clone() })
+    let mut out = Vec::with_capacity(postings.len());
+    for tp in postings {
+        let account =
+            resolve_lookup_calls(&substitute_params(&tp.account, param_bindings), lookups, file, line)?;
+        let amount = match &tp.amount {
+            Some(e) => {
+                let expanded = substitute_vars(e, &vars, file, line)?;
+                Some(resolve_expr(&expanded, param_bindings, lookups, file, line)?)
+            }
+            None => None,
+        };
+        out.push(AutoPosting { account, amount, is_virtual: tp.is_virtual, balanced: tp.balanced });
+    }
+    Ok(out)
+}
+
+/// Replace every `Var` (`:=` binding reference) in an amount expression with the
+/// binding's already-resolved expression — `\def`-style substitution. An unknown
+/// name is an error.
+fn substitute_vars(
+    expr: &AmountExpr,
+    vars: &HashMap<String, AmountExpr>,
+    file: &Arc<str>,
+    line: usize,
+) -> Result<AmountExpr, ResolveError> {
+    let recur = |e: &AmountExpr| substitute_vars(e, vars, file, line);
+    Ok(match expr {
+        AmountExpr::Var(name) => vars.get(name).cloned().ok_or_else(|| {
+            ResolveError::new(
+                file.clone(),
+                line,
+                format!("unknown binding `{name}` — define it with `{name} := …` above"),
+            )
+        })?,
+        AmountExpr::Amount
+        | AmountExpr::Literal(_)
+        | AmountExpr::Param(_)
+        | AmountExpr::Total(_)
+        | AmountExpr::Lookup(_) => expr.clone(),
+        AmountExpr::Neg(a) => AmountExpr::Neg(Box::new(recur(a)?)),
+        AmountExpr::Min(a, b) => AmountExpr::Min(Box::new(recur(a)?), Box::new(recur(b)?)),
+        AmountExpr::Max(a, b) => AmountExpr::Max(Box::new(recur(a)?), Box::new(recur(b)?)),
+        AmountExpr::Add(a, b) => AmountExpr::Add(Box::new(recur(a)?), Box::new(recur(b)?)),
+        AmountExpr::Sub(a, b) => AmountExpr::Sub(Box::new(recur(a)?), Box::new(recur(b)?)),
+        AmountExpr::Mul(a, b) => AmountExpr::Mul(Box::new(recur(a)?), Box::new(recur(b)?)),
+    })
+}
+
+/// Look up a `table[key]` reference as a *value* — returns the raw string, or
+/// `None` if the table or key is undeclared. Unlike [`resolve_lookup_calls`]
+/// (account context, a missing key is an error) a value lookup is lenient: the
+/// caller defaults a miss to `0`.
+fn lookup_value(text: &str, lookups: &HashMap<String, HashMap<String, String>>) -> Option<String> {
+    let open = text.find('[')?;
+    let close = text.rfind(']')?;
+    lookups.get(&text[..open])?.get(text[open + 1..close].trim()).cloned()
+}
+
+/// Resolve a template amount expression for one instance: rewrite each `$n`
+/// [`Param`](AmountExpr::Param) to a [`Literal`](AmountExpr::Literal) from the
+/// bound argument, and substitute `$1`/`$2` / `table[key]` inside every
+/// `total(ACCOUNT)`. `$self`, `$account` and the date placeholders survive —
+/// they resolve per posting at expansion time.
+fn resolve_expr(
+    expr: &AmountExpr,
+    bindings: &[(usize, &str)],
+    lookups: &HashMap<String, HashMap<String, String>>,
+    file: &Arc<str>,
+    line: usize,
+) -> Result<AmountExpr, ResolveError> {
+    Ok(match expr {
+        AmountExpr::Amount => AmountExpr::Amount,
+        AmountExpr::Literal(d) => AmountExpr::Literal(*d),
+        AmountExpr::Param(n) => {
+            let value = bindings.iter().find(|(k, _)| k == n).map(|(_, v)| *v).ok_or_else(|| {
+                ResolveError::new(file.clone(), line, format!("template parameter `${n}` is not bound"))
+            })?;
+            let d = Decimal::parse(value).map_err(|e| {
+                ResolveError::new(
+                    file.clone(),
+                    line,
+                    format!("template parameter `${n}` = `{value}` is not a number: {e}"),
+                )
+            })?;
+            AmountExpr::Literal(d)
+        }
+        // A `:=` binding reference — already substituted away in
+        // `resolve_postings`; reaching here means a stray one.
+        AmountExpr::Var(name) => {
+            return Err(ResolveError::new(file.clone(), line, format!("unresolved binding `{name}`")));
+        }
+        // `table[key]` as a value — resolve to a literal (missing table/key → 0).
+        AmountExpr::Lookup(text) => {
+            let resolved = substitute_params(text, bindings);
+            let d = match lookup_value(&resolved, lookups) {
+                Some(v) => Decimal::parse(&v).map_err(|e| {
+                    ResolveError::new(
+                        file.clone(),
+                        line,
+                        format!("lookup `{resolved}` = `{v}` is not a number: {e}"),
+                    )
+                })?,
+                None => Decimal::zero(),
+            };
+            AmountExpr::Literal(d)
+        }
+        AmountExpr::Total(s) => AmountExpr::Total(resolve_lookup_calls(
+            &substitute_params(s, bindings),
+            lookups,
+            file,
+            line,
+        )?),
+        AmountExpr::Neg(a) => {
+            AmountExpr::Neg(Box::new(resolve_expr(a, bindings, lookups, file, line)?))
+        }
+        AmountExpr::Min(a, b) => AmountExpr::Min(
+            Box::new(resolve_expr(a, bindings, lookups, file, line)?),
+            Box::new(resolve_expr(b, bindings, lookups, file, line)?),
+        ),
+        AmountExpr::Max(a, b) => AmountExpr::Max(
+            Box::new(resolve_expr(a, bindings, lookups, file, line)?),
+            Box::new(resolve_expr(b, bindings, lookups, file, line)?),
+        ),
+        AmountExpr::Add(a, b) => AmountExpr::Add(
+            Box::new(resolve_expr(a, bindings, lookups, file, line)?),
+            Box::new(resolve_expr(b, bindings, lookups, file, line)?),
+        ),
+        AmountExpr::Sub(a, b) => AmountExpr::Sub(
+            Box::new(resolve_expr(a, bindings, lookups, file, line)?),
+            Box::new(resolve_expr(b, bindings, lookups, file, line)?),
+        ),
+        AmountExpr::Mul(a, b) => AmountExpr::Mul(
+            Box::new(resolve_expr(a, bindings, lookups, file, line)?),
+            Box::new(resolve_expr(b, bindings, lookups, file, line)?),
+        ),
+    })
 }
 
 /// Replace each positional placeholder `$n` with its bound value. `$segment`
 /// (the match wildcard) and any other `$word` are left alone — a numbered
 /// `$1`/`$2` is never a substring of `$segment`, so the replace can't touch it.
-fn substitute_params(s: &str, bindings: &[(&str, &str)]) -> String {
+fn substitute_params(s: &str, bindings: &[(usize, &str)]) -> String {
     let mut out = s.to_string();
-    for (name, value) in bindings {
-        out = out.replace(&format!("${name}"), value);
+    for (n, value) in bindings {
+        out = out.replace(&format!("${n}"), value);
     }
     out
 }
@@ -643,31 +847,17 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
                             format!("template `{name}`: a `/pattern/` rule has no postings"),
                         ));
                     }
-                    // Each balance pool must balance — a bare leg fills it, or the
-                    // factors sum to zero; `(...)` postings are exempt.
-                    if let Err(msg) = check_multiplier_balance(&rule.postings) {
+                    // Each balance pool needs at most one bare leg to fill it;
+                    // `(...)` postings are exempt. The pool nets to zero at
+                    // expansion time (the amounts are dynamic), checked by the
+                    // booker. Positional `$n` are validated per instance in
+                    // `expand_instance`, once the argument count is known.
+                    if let Err(msg) = check_injected_balance(&rule.postings) {
                         return Err(ResolveError::new(
                             e.file.clone(),
                             e.line,
                             format!("template `{name}`: {msg}"),
                         ));
-                    }
-                    // Only positional `$1` / `$2` are valid — catch `$3`, a name,
-                    // or a typo, in the pattern or any account.
-                    for text in std::iter::once(rule.pattern.as_str())
-                        .chain(rule.postings.iter().map(|p| p.account.as_str()))
-                    {
-                        for r in param_refs(text) {
-                            if r != "1" && r != "2" {
-                                return Err(ResolveError::new(
-                                    e.file.clone(),
-                                    e.line,
-                                    format!(
-                                        "template `{name}` uses `${r}` — only positional `$1` and `$2` are valid"
-                                    ),
-                                ));
-                            }
-                        }
                     }
                 }
                 let template = Template { rules: rules.clone() };
@@ -1056,18 +1246,41 @@ mod tests {
     }
 
     #[test]
-    fn template_multipliers_must_sum_to_zero() {
+    fn template_pool_rejects_two_fill_legs() {
+        // A balance pool may carry at most one bare (Fill) leg — two is
+        // ambiguous. (The old "multipliers sum to zero" check is gone: amounts
+        // are dynamic expressions now, so imbalance is caught when booked.)
         let src = "= mirror ::\n\t/^x:$1:$segment:$2:$segment$/\n\
-                   \t\t[$1:z:$2]  -1\n\t\t[$2:z:$1]  2\n";
+                   \t\t[$1:z:$2]\n\t\t[$2:z:$1]\n";
         assert!(resolve(parsed(src)).is_err());
     }
 
     #[test]
-    fn out_of_range_placeholder_is_rejected() {
-        // Only `$1` and `$2` are valid; `$3` has no argument.
-        let src = "= mirror ::\n\t/^x:$1:$segment:$3:$segment$/\n\
-                   \t\t[$1:z:$2]  -1\n\t\t[$2:z:$1]  1\n";
+    fn non_numeric_argument_for_amount_param_is_rejected() {
+        // `$2` is used as a number in an amount, but the instance passes a
+        // non-number for it — surfaced when the expression is resolved.
+        let src = "= cap ::\n\t/^x:$1:$segment$/\n\
+                   \t\t[$1:z:held]  min(amount, $2)\n\t\t[$1:z:rest]\n\
+                   = cap foo notanumber\n";
         assert!(resolve(parsed(src)).is_err());
+    }
+
+    #[test]
+    fn value_lookup_resolves_and_missing_is_zero() {
+        // `cap[$2]` reads the array as a value; a missing key resolves to 0. A
+        // `:=` binding is substituted into the posting before resolution.
+        let src = "= cap[bar] :: 7\n\
+                   = t ::\n\t/^x:$1:$2$/\n\t\tstake := cap[$2]\n\
+                   \t\t[$1:held]  stake\n\t\t[$1:rest]\n\
+                   = t foo bar\n= t foo other\n";
+        let out = resolve(parsed(src)).unwrap();
+        assert_eq!(out.auto_rules.len(), 2);
+        let held = |rule: &AutoRule| match &rule.postings[0].amount {
+            Some(AmountExpr::Literal(d)) => *d,
+            other => panic!("expected a resolved literal, got {:?}", other),
+        };
+        assert_eq!(held(&out.auto_rules[0]), Decimal::from(7)); // cap[bar]
+        assert_eq!(held(&out.auto_rules[1]), Decimal::zero()); // cap[other] missing → 0
     }
 
     #[test]

@@ -29,6 +29,9 @@ pub fn assert_balances(
     transactions: Vec<Located<Transaction>>,
 ) -> Result<Vec<Located<Transaction>>, BookError> {
     let mut balances: HashMap<(String, String), Decimal> = HashMap::new();
+    // Max fractional digits seen per commodity, so a `= *0` correction posting
+    // carries the same display precision as the balance it zeroes.
+    let mut decimals: HashMap<String, usize> = HashMap::new();
     let mut result = Vec::with_capacity(transactions.len());
 
     for Located { file, line, mut value } in transactions {
@@ -38,6 +41,9 @@ pub fn assert_balances(
             .map(|p| p.line)
             .max()
             .unwrap_or(line);
+        // 0. Expand any `= *0` all-commodity zero into one correction posting per
+        // non-zero commodity the account currently holds.
+        expand_all_commodity_zero(&mut value, &balances, &decimals, &file, line, end_line)?;
         // 1. Resolve balance-assignment postings (amount from running
         // balance vs target).
         for lp in &mut value.postings {
@@ -50,11 +56,86 @@ pub fn assert_balances(
         // assertion targets.
         for lp in &value.postings {
             apply_and_check(&lp.value, &file, line, end_line, &mut balances)?;
+            if let Some(amt) = &lp.value.amount {
+                let seen = decimals.entry(amt.commodity.clone()).or_insert(0);
+                *seen = (*seen).max(amt.decimals);
+            }
         }
         result.push(Located { file, line, value });
     }
 
     Ok(result)
+}
+
+/// Expand every `= *0` posting (all-commodity zero, commodity `*`) into one
+/// correction posting per commodity the account currently holds a *non-zero*
+/// balance in, each driven to zero. Commodities already at zero produce no
+/// posting — a mixed account flattens with no `0`-amount clutter. A non-zero
+/// `= *N` target is rejected: you cannot set every commodity to one value.
+fn expand_all_commodity_zero(
+    tx: &mut Transaction,
+    balances: &HashMap<(String, String), Decimal>,
+    decimals: &HashMap<String, usize>,
+    file: &Arc<str>,
+    start_line: usize,
+    end_line: usize,
+) -> Result<(), BookError> {
+    if !tx.postings.iter().any(|lp| is_all_commodity_zero(&lp.value)) {
+        return Ok(());
+    }
+    let mut out: Vec<Located<Posting>> = Vec::with_capacity(tx.postings.len());
+    for lp in tx.postings.drain(..) {
+        if !is_all_commodity_zero(&lp.value) {
+            out.push(lp);
+            continue;
+        }
+        if let Some(target) = &lp.value.balance_assertion
+            && !target.value.is_zero()
+        {
+            return Err(BookError::new(
+                file.clone(),
+                start_line,
+                end_line,
+                BookErrorKind::AllCommodityNonZero { account: lp.value.account.clone() },
+            ));
+        }
+        // One correction posting per non-zero commodity of this account, in a
+        // deterministic order so output is stable.
+        let mut held: Vec<(String, Decimal)> = balances
+            .iter()
+            .filter(|((acc, _), bal)| acc == &lp.value.account && !bal.is_zero())
+            .map(|((_, com), bal)| (com.clone(), *bal))
+            .collect();
+        held.sort_by(|a, b| a.0.cmp(&b.0));
+        if held.is_empty() {
+            // Account already flat in every commodity — nothing to correct.
+            // Degrade to a plain empty-commodity `= 0` so the transaction keeps
+            // a balancing basis (its bare counter infers 0) instead of vanishing
+            // and leaving that counter with no amounts to infer from.
+            let mut p = lp;
+            p.value.balance_assertion =
+                Some(Amount { commodity: String::new(), value: Decimal::zero(), decimals: 0 });
+            out.push(p);
+            continue;
+        }
+        for (commodity, bal) in held {
+            let dec = decimals.get(&commodity).copied().unwrap_or(0);
+            let mut p = lp.clone();
+            p.value.amount = Some(Amount { commodity: commodity.clone(), value: -bal, decimals: dec });
+            p.value.balance_assertion =
+                Some(Amount { commodity, value: Decimal::zero(), decimals: dec });
+            out.push(p);
+        }
+    }
+    tx.postings = out;
+    Ok(())
+}
+
+/// True if a posting is a bare `= *…` all-commodity zero assignment (commodity
+/// `*`, no explicit amount).
+fn is_all_commodity_zero(posting: &Posting) -> bool {
+    posting.amount.is_none()
+        && posting.balance_assertion.as_ref().is_some_and(|a| a.commodity == "*")
 }
 
 /// If the posting is a balance-assignment (`= TARGET` with no amount),
@@ -200,5 +281,58 @@ mod tests {
         let src = "2024-01-01 * A\n    assets:bank   100 USD\n    equity:a  -100 USD\n\
                    2024-01-02 * B\n    assets:bank   50 EUR = 50 EUR\n    equity:b  -50 EUR\n";
         assert!(asserted(src).is_ok());
+    }
+
+    #[test]
+    fn star_zero_flattens_every_commodity_skipping_zeros() {
+        // `= *0` zeroes each non-zero commodity of the account; a commodity
+        // already at zero produces no correction posting.
+        let src = "2024-01-01 * build\n    assets:w   30 USD\n    assets:w   2 EUR\n\
+                   \tassets:w   0 GBP\n    equity:o\n\
+                   2024-02-01 * flatten\n    assets:w   = *0\n    equity:reset\n";
+        let out = asserted(src).unwrap();
+        let flatten = &out[1].value;
+        // Two corrections (USD, EUR) + the bare counter expanded per commodity.
+        let corrections: Vec<_> = flatten
+            .postings
+            .iter()
+            .filter(|lp| lp.value.account == "assets:w")
+            .collect();
+        assert_eq!(corrections.len(), 2, "USD + EUR zeroed, GBP (already 0) skipped");
+        // The account is flat afterwards in every commodity.
+        for c in ["USD", "EUR"] {
+            let mut out2 = out.clone();
+            // running balance check: apply everything and confirm zero.
+            let bal: Decimal = out2
+                .iter_mut()
+                .flat_map(|t| t.value.postings.iter())
+                .filter(|lp| lp.value.account == "assets:w")
+                .filter_map(|lp| lp.value.amount.as_ref())
+                .filter(|a| a.commodity == c)
+                .map(|a| a.value)
+                .fold(Decimal::zero(), |acc, v| acc + v);
+            assert!(bal.is_zero(), "{c} balance should net to zero, got {bal}");
+        }
+    }
+
+    #[test]
+    fn star_zero_on_flat_account_is_a_balanced_noop() {
+        // `= *0` on an account with no balance must not vanish and strand its
+        // bare counter — it degrades to a plain `= 0` (empty commodity) no-op.
+        let src = "2021-12-31 * correction\n    assets:w   = *0\n    equity:reset\n";
+        let out = asserted(src).unwrap();
+        let tx = &out[0].value;
+        assert_eq!(tx.postings.len(), 2);
+        for lp in &tx.postings {
+            assert!(lp.value.amount.as_ref().unwrap().value.is_zero());
+        }
+    }
+
+    #[test]
+    fn star_nonzero_target_is_rejected() {
+        let src = "2024-01-01 * seed\n    foo   10 USD\n    bar\n\
+                   2024-02-01 * bad\n    foo   = *5\n    bar\n";
+        let err = asserted(src).unwrap_err();
+        assert!(matches!(err.kind, BookErrorKind::AllCommodityNonZero { .. }));
     }
 }

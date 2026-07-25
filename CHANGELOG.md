@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.27.0 — 2026-07-25
+
+### Thu 25 Jul 2026 - An amount-expression language for auto-rules, `:=` bindings, and `= *0`
+
+**Auto-rule amounts are a small expression language.** The amount slot after an
+injected posting's account used to be a bare factor on the trigger (`0.1`,
+`-1`), with one hard-wired `clamp(amount)` builtin for "fill to zero". That is
+gone: an amount is now an expression — `amount`, literals, `min(a, b)` /
+`max(a, b)`, `+` / `-` / `*`, unary minus, parentheses — plus two readers of
+running state, `total(ACCOUNT)` (an account's balance up to the current
+transaction) and `$self` (inside a `total(...)`, the leg's own account). `clamp`
+becomes the plain `min(amount, total($self))`, and "fill this account up to `C`"
+is `min(amount, max(0, C - total($self)))` — written out, not hidden behind an
+opaque name. Named builtins were considered and rejected for exactly that reason:
+a formula you can read beats a word you have to look up. The 0.26.0 `MatchContext`
+/ `eval_amount` groundwork paid off — the AST evaluator is one function.
+
+**Positional numeric args and value lookups supply the constants.** A template
+argument can now be a *number* used in arithmetic: `= NAME a b 500` binds `$3` to
+`500` for use as `max(0, $3 - total(…))`. Better, a `= NAME[key] :: value` lookup
+— previously text-only, resolved inside a posting account — now also resolves
+inside an **amount expression** as a number, with a lenient `0` for a missing
+table or key. That makes a per-entity constant (a share-capital cap, a rate) a
+single `cap[entity] :: N` line that every rule reads as `cap[$2]`, instead of
+repeating the number in each instance; an unlisted entity gets `0` and the rule
+degrades cleanly. Account-context lookups stay strict (an unknown key is an
+error) — a value is missing-tolerant, a name is not.
+
+**`NAME := EXPR` bindings.** When a value feeds more than one leg — capture a
+capped amount, book it, and exclude that same amount from a running total
+elsewhere — repeating the formula (and its nesting) is a maintenance trap. A `:=`
+binding computes it once and refers to it by name. Substitution is `\def`-style
+and textual, so `$self` inside a binding resolves at the *use* site: a value
+shared across legs names its account explicitly rather than using `$self`, which
+would otherwise silently read the wrong account. Reserved names (`amount`,
+`total`, `min`, `max`) and duplicate bindings are rejected.
+
+**Spent rules inject nothing.** A leg whose amount evaluates to zero is now
+dropped rather than emitted as a `$0.00` posting, so a capped rule goes quiet once
+its cap is reached instead of cluttering every later transaction — while still
+honouring "overlapping matchers are OR": every matching rule that still has work
+to do fires.
+
+**`= *0` zeroes every commodity.** A balance assignment can now target the `*`
+wildcard commodity: `= *0` flattens an account across all the commodities it
+holds, expanding to one correcting posting per *non-zero* commodity (already-zero
+ones produce no posting, so no `$0.00` clutter) and degrading to a plain
+empty-commodity `= 0` no-op when the account is already flat. Only zeroing is
+meaningful; `= *5` is rejected.
+
 ## 0.26.0 — 2026-07-24
 
 ### Wed 24 Jul 2026 - Multi-rule auto-templates, a two-pass booker, and aligned periodics
@@ -1713,16 +1763,16 @@ policy, no per-coffee tracking required.
 The multipliers must sum to zero across a rule — validated in
 the resolver. This guarantees the expansion leaves the
 transaction balanced: the injected postings net to zero among
-themselves in the triggering commodity. A VAT-split variant uses
+themselves in the triggering commodity. A fee-split variant uses
 this:
 
     = /^income:gross/
         [income:gross]       -1
-        [income:net]       0.81
-        [taxes:vat19]      0.19
+        [income:net]        0.9
+        [expenses:fee]      0.1
 
 Matching `income:gross $1000` injects `income:gross $-1000`,
-`income:net $810`, `taxes:vat19 $190`, all in the same commodity,
+`income:net $900`, `expenses:fee $100`, all in the same commodity,
 and they sum to zero.
 
 Patterns are a subset of Ledger regex — `^prefix`, `suffix$`,

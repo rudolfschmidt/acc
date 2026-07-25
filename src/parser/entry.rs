@@ -61,10 +61,10 @@ pub enum Entry {
     Comment(String),
 
     /// Automated-transaction rule: a pattern that matches against
-    /// posting accounts, plus the extra postings to inject (scaled by
-    /// the matching posting's amount) into every matching transaction.
-    /// Line-leading `=` at column 0, followed by `/pattern/`; indented
-    /// children provide the postings with their multipliers.
+    /// posting accounts, plus the extra postings to inject (their amounts
+    /// evaluated against the matching posting) into every matching
+    /// transaction. Line-leading `=` at column 0, followed by `/pattern/`;
+    /// indented children provide the postings with their amount expressions.
     AutoRule(AutoRule),
 
     /// `= NAME[key] :: value` — one entry of a named string→string lookup
@@ -177,6 +177,10 @@ pub struct AutoRule {
     pub postings: Vec<AutoPosting>,
     /// Optional `amount <op> N` filter on the matched posting's amount.
     pub condition: Option<AmountCondition>,
+    /// `NAME := EXPR` intermediate bindings, in declaration order. Substituted
+    /// into the postings (and later bindings) before matching, so they never
+    /// reach evaluation.
+    pub bindings: Vec<(String, AmountExpr)>,
 }
 
 /// One rule inside a `= NAME ::` template: a matcher plus the postings it
@@ -191,6 +195,8 @@ pub struct TemplateRule {
     pub pattern: String,
     pub condition: Option<AmountCondition>,
     pub postings: Vec<AutoPosting>,
+    /// `NAME := EXPR` intermediate bindings, in declaration order.
+    pub bindings: Vec<(String, AmountExpr)>,
 }
 
 /// Pattern kinds supported in V1 — a subset of ledger-cli regex
@@ -311,41 +317,74 @@ fn matches_segments(
     true
 }
 
-/// How much an auto-rule posting injects, relative to the triggering amount.
-/// Written in the amount slot after the account:
+/// The amount an auto-rule posting injects, as an **expression** evaluated
+/// against the triggering posting during expansion (see the expander's
+/// `eval_amount`). A posting with *no* expression is a bare `Fill` leg —
+/// [`AutoPosting::amount`] is then `None` and the expander values it from its
+/// balance pool (the negated sum of its pool's other legs), like the bare last
+/// posting of a hand-written transaction.
 ///
-/// - a bare number, or `amount` (= `1`) / `-amount` (= `-1`) → [`Factor`]:
-///   inject `factor × trigger`.
-/// - `clamp(amount)` / `-clamp(amount)` → [`Clamp`]: inject the trigger clamped
-///   to this posting's account's remaining headroom to zero.
-/// - nothing at all (a bare `[account]`) → [`Fill`]: the balancing leg, filled
-///   by the expander with the negated sum of its pool's other injected legs —
-///   like the bare last posting of a hand-written transaction.
+/// The pieces, written in the amount slot after the account:
+/// - `amount` — the triggering posting's value.
+/// - a bare number — that literal value itself.
+/// - `$n` — a positional template parameter, resolved to the instance's `n`-th
+///   argument.
+/// - `table[key]` — a lookup table entry used as a *value* (missing → `0`).
+/// - a bare `name` — a `name := EXPR` binding declared earlier in the rule.
+/// - `total(ACCOUNT)` — `ACCOUNT`'s running balance up to this transaction. The
+///   account text keeps its placeholders: `$1`/`$2` (filled per instance),
+///   `$self` (this leg's own account), `$account` (the trigger's account), and
+///   `$year`/`$month`/`$day`.
+/// - `min(a, b)` / `max(a, b)`, `a + b` / `a - b` / `a * b`, unary `-a`, and
+///   parentheses.
 ///
-/// [`Factor`]: AutoAmount::Factor
-/// [`Clamp`]: AutoAmount::Clamp
-/// [`Fill`]: AutoAmount::Fill
+/// So the old `clamp(amount)` is `min(amount, total($self))`, and
+/// `min(amount, X - total($self))` fills this account up to `X`.
+///
+/// `$n`, `table[key]` and `name` bindings are all rewritten to literals by the
+/// resolver, so a matched rule only ever holds `Amount` / `Literal` / `Total`
+/// and the arithmetic combinators.
 #[derive(Debug, Clone)]
-pub enum AutoAmount {
-    Factor(Decimal),
-    /// `clamp(amount)` / `-clamp(amount)` — inject the trigger, but clamped so
-    /// this posting's own account is not driven past zero: it fills only the
-    /// remaining headroom (`min(|trigger|, balance)`). `negate` is the
-    /// `-clamp(...)` form. Evaluated in the expander against the running account
-    /// balance; a pool with a clamp leg needs a `Fill` leg to absorb it.
-    Clamp {
-        negate: bool,
-    },
-    Fill,
+pub enum AmountExpr {
+    /// `amount` — the triggering posting's value.
+    Amount,
+    /// A bare number — that literal value.
+    Literal(Decimal),
+    /// `$n` — a positional template parameter used as a *number* (e.g. `$3` in
+    /// `$3 - total($self)`). The resolver rewrites it to a [`Literal`] from the
+    /// instance's `n`-th argument; it never survives into a matched rule.
+    ///
+    /// [`Literal`]: AmountExpr::Literal
+    Param(usize),
+    /// A `NAME := EXPR` binding reference — replaced with the binding's
+    /// expression (`\def`-style) before a rule is matched, so it never survives
+    /// into evaluation.
+    Var(String),
+    /// `table[key]` used as a *value* — resolved against the lookup tables to a
+    /// [`Literal`] (missing table/key → `0`); the raw text keeps its `$1`/`$2`
+    /// placeholders until the resolver substitutes them.
+    ///
+    /// [`Literal`]: AmountExpr::Literal
+    Lookup(String),
+    /// `total(ACCOUNT)` — the account's running balance (placeholders intact).
+    Total(String),
+    Neg(Box<AmountExpr>),
+    Min(Box<AmountExpr>, Box<AmountExpr>),
+    Max(Box<AmountExpr>, Box<AmountExpr>),
+    Add(Box<AmountExpr>, Box<AmountExpr>),
+    Sub(Box<AmountExpr>, Box<AmountExpr>),
+    Mul(Box<AmountExpr>, Box<AmountExpr>),
 }
 
 /// One posting inside an auto-rule. Account + amount + virtual flags mirror
-/// the posting syntax; the amount is applied to the triggering posting during
-/// expansion.
+/// the posting syntax; the amount expression is evaluated against the
+/// triggering posting during expansion.
 #[derive(Debug, Clone)]
 pub struct AutoPosting {
     pub account: String,
-    pub amount: AutoAmount,
+    /// The injected amount expression, or `None` for a bare `Fill` leg (valued
+    /// from its balance pool during expansion).
+    pub amount: Option<AmountExpr>,
     pub is_virtual: bool,
     pub balanced: bool,
 }

@@ -41,6 +41,11 @@ pub enum BookErrorKind {
         commodity: String,
         decimals: usize,
     },
+    /// A `= *TARGET` all-commodity assignment used a non-zero target — only
+    /// `= *0` (zero every commodity) is meaningful.
+    AllCommodityNonZero {
+        account: String,
+    },
 }
 
 impl BookError {
@@ -75,6 +80,12 @@ impl BookError {
                     account,
                     commodity, expected.format_decimal(*decimals),
                     commodity, got.format_decimal(*decimals),
+                )
+            }
+            BookErrorKind::AllCommodityNonZero { account } => {
+                format!(
+                    "`= *` on `{}` may only zero every commodity (`= *0`), not set a value",
+                    account
                 )
             }
         }

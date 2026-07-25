@@ -15,6 +15,8 @@ pub mod transaction;
 pub use comment::Comment;
 pub use entry::{Entry, Price};
 pub use error::ParseError;
+
+use entry::AmountExpr;
 pub use located::Located;
 pub use posting::{Amount, Costs, LotCost, Posting};
 pub use transaction::{State, Transaction};
@@ -148,7 +150,7 @@ fn dispatch(
 ///   and `lookup[key]` calls that an instantiation fills in.
 /// - `= NAME arg…` → instantiate template `NAME` with a pair (`AutoInstance`).
 ///
-/// Indented `[account] multiplier` lines attach via `extend_block`.
+/// Indented `[account] EXPR` posting lines attach via `extend_block`.
 fn parse_auto_rule(
     rest: &str,
     line: usize,
@@ -168,6 +170,7 @@ fn parse_auto_rule(
                 pattern: crate::parser::entry::AutoPattern::parse_inner(&inner),
                 postings: Vec::new(),
                 condition,
+                bindings: Vec::new(),
             }),
         });
         return Ok(());
@@ -662,20 +665,27 @@ fn extend_block(
             push_new = Some(Entry::RoleAccount { role, account: account.clone() });
         }
         Entry::AutoRule(rule) => {
-            let auto_posting = parse_auto_posting(body, line)?;
-            rule.postings.push(auto_posting);
+            // A `NAME := EXPR` line is an intermediate binding; anything else is
+            // a posting.
+            if let Some((name, expr)) = parse_auto_binding(body, line)? {
+                rule.bindings.push((name, expr));
+            } else {
+                rule.postings.push(parse_auto_posting(body, line)?);
+            }
         }
         Entry::AutoTemplate { rules, .. } => {
-            // A `/pattern/ [cond]` line opens a new rule in the template; any
-            // other indented line is a posting on the current (last) rule.
-            // Template postings parse like auto-rule postings — the account just
-            // carries `$1`/`$2` / `lookup[key]` placeholders resolved later.
+            // A `/pattern/ [cond]` line opens a new rule in the template; a
+            // `NAME := EXPR` line is a binding on the current rule; any other
+            // indented line is a posting. Template postings parse like auto-rule
+            // postings — the account just carries `$1`/`$2` / `lookup[key]`
+            // placeholders resolved later.
             if body.starts_with('/') {
                 let (pattern, condition) = parse_predicate(body, line)?;
                 rules.push(crate::parser::entry::TemplateRule {
                     pattern,
                     condition,
                     postings: Vec::new(),
+                    bindings: Vec::new(),
                 });
             } else {
                 let Some(rule) = rules.last_mut() else {
@@ -685,7 +695,11 @@ fn extend_block(
                         "template posting has no rule — it must sit under a `/pattern/` line",
                     ));
                 };
-                rule.postings.push(parse_auto_posting(body, line)?);
+                if let Some((name, expr)) = parse_auto_binding(body, line)? {
+                    rule.bindings.push((name, expr));
+                } else {
+                    rule.postings.push(parse_auto_posting(body, line)?);
+                }
             }
         }
         Entry::Periodic { postings, .. } => {
@@ -730,15 +744,44 @@ fn parse_role_directive(body: &str, line: usize) -> Result<String, ParseError> {
     Ok(role)
 }
 
-/// Parse one auto-rule posting line: `[account]  MULTIPLIER` (or the
-/// paren-virtual / real-posting variant). Multiplier is a signed
-/// decimal, applied to the triggering posting's amount during
-/// expansion.
+/// If `body` is a `NAME := EXPR` binding line, parse and return `(name, expr)`;
+/// otherwise `None` (the caller treats it as a posting). A binding is a bare
+/// identifier immediately followed by `:=` — distinct from a posting account
+/// (whose `:` separators are never adjacent to `=`) and from a balance assertion
+/// (`=` with no leading `:`).
+fn parse_auto_binding(
+    body: &str,
+    line: usize,
+) -> Result<Option<(String, AmountExpr)>, ParseError> {
+    let Some(idx) = body.find(":=") else { return Ok(None) };
+    let name = body[..idx].trim();
+    let is_ident = !name.is_empty()
+        && name.as_bytes()[0].is_ascii_alphabetic()
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !is_ident {
+        return Ok(None); // `:=` not preceded by a plain name — it's a posting
+    }
+    if matches!(name, "amount" | "total" | "min" | "max") {
+        return Err(ParseError::new(
+            line,
+            1,
+            format!("binding name `{name}` is a reserved word in amount expressions"),
+        ));
+    }
+    let expr = parse_amount_expr(body[idx + 2..].trim(), line)?;
+    Ok(Some((name.to_string(), expr)))
+}
+
+/// Parse one auto-rule posting line: `[account]  EXPR` (or the paren-virtual /
+/// real-posting variant). `EXPR` is an amount expression (see [`AmountExpr`])
+/// evaluated against the trigger during expansion; a posting with no expression
+/// at all is the bare `Fill` leg (`amount: None`), valued from its balance pool.
+///
+/// [`AmountExpr`]: crate::parser::entry::AmountExpr
 fn parse_auto_posting(
     body: &str,
     line: usize,
 ) -> Result<crate::parser::entry::AutoPosting, ParseError> {
-    use crate::parser::entry::AutoAmount;
     // Account and amount split on a tab / 2+ spaces (same rule as regular
     // postings). A posting with no amount at all is the balancing `Fill` leg —
     // then the whole body is the account.
@@ -757,10 +800,7 @@ fn parse_auto_posting(
     } else {
         (account_raw.to_string(), false, true)
     };
-    let amount = match amount_raw {
-        None => AutoAmount::Fill,
-        Some(raw) => parse_auto_amount(raw, line)?,
-    };
+    let amount = amount_raw.map(|raw| parse_amount_expr(raw, line)).transpose()?;
     Ok(crate::parser::entry::AutoPosting {
         account,
         amount,
@@ -769,24 +809,228 @@ fn parse_auto_posting(
     })
 }
 
-/// Parse the amount slot of an auto-rule posting. `amount` / `-amount` are
-/// readable synonyms for the factor `1` / `-1` (the full triggering amount);
-/// anything else is a bare decimal factor (`2`, `-1`, `0.19`). A missing
-/// amount never reaches here — the caller maps it to the `Fill` leg.
-fn parse_auto_amount(
+/// Parse the amount slot of an auto-rule posting into an [`AmountExpr`]. The
+/// grammar, lowest precedence first:
+///
+/// ```text
+/// expr   := term (('+' | '-') term)*
+/// term   := factor ('*' factor)*
+/// factor := '-' factor | atom
+/// atom   := NUMBER | 'amount' | '$' DIGITS | '(' expr ')'
+///         | 'total' '(' ACCOUNT ')'
+///         | 'min' '(' expr ',' expr ')' | 'max' '(' expr ',' expr ')'
+///         | NAME '[' KEY ']'   (value lookup)
+///         | NAME               (`:=` binding reference)
+/// ```
+///
+/// `amount` is the trigger value, a bare number a literal, `$n` a positional
+/// parameter (resolved to the instance's `n`-th argument), `total(ACCOUNT)` an
+/// account's running balance, `table[key]` a lookup table value, and a bare
+/// `NAME` a `NAME := EXPR` binding. `ACCOUNT` is taken verbatim up to the closing
+/// `)`, keeping its `$1`/`$2`, `$self`, `$account` and date placeholders.
+///
+/// [`AmountExpr`]: crate::parser::entry::AmountExpr
+fn parse_amount_expr(
     raw: &str,
     line: usize,
-) -> Result<crate::parser::entry::AutoAmount, ParseError> {
-    use crate::decimal::Decimal;
-    use crate::parser::entry::AutoAmount;
-    match raw {
-        "amount" => Ok(AutoAmount::Factor(Decimal::from(1))),
-        "-amount" => Ok(AutoAmount::Factor(Decimal::from(-1))),
-        "clamp(amount)" => Ok(AutoAmount::Clamp { negate: false }),
-        "-clamp(amount)" => Ok(AutoAmount::Clamp { negate: true }),
-        _ => Decimal::parse(raw)
-            .map(AutoAmount::Factor)
-            .map_err(|e| ParseError::new(line, 1, format!("invalid auto-rule amount: {}", e))),
+) -> Result<crate::parser::entry::AmountExpr, ParseError> {
+    let mut p = ExprParser { bytes: raw.as_bytes(), pos: 0, line };
+    let expr = p.parse_expr()?;
+    p.skip_ws();
+    if p.pos != p.bytes.len() {
+        return Err(ParseError::new(
+            line,
+            1,
+            format!("unexpected trailing input in auto-rule amount: `{}`", &raw[p.pos..]),
+        ));
+    }
+    Ok(expr)
+}
+
+/// Recursive-descent parser for one auto-rule amount expression — operates on
+/// the raw bytes of the amount slot with a cursor. See [`parse_amount_expr`] for
+/// the grammar.
+struct ExprParser<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+    line: usize,
+}
+
+impl ExprParser<'_> {
+    fn skip_ws(&mut self) {
+        while matches!(self.bytes.get(self.pos), Some(b' ' | b'\t')) {
+            self.pos += 1;
+        }
+    }
+
+    /// The next non-whitespace byte (whitespace between tokens is skipped).
+    fn peek(&mut self) -> Option<u8> {
+        self.skip_ws();
+        self.bytes.get(self.pos).copied()
+    }
+
+    fn err<T>(&self, msg: impl Into<String>) -> Result<T, ParseError> {
+        Err(ParseError::new(self.line, 1, msg.into()))
+    }
+
+    /// Consume the next non-whitespace byte if it is `c`, else error.
+    fn expect(&mut self, c: u8) -> Result<(), ParseError> {
+        if self.peek() == Some(c) {
+            self.pos += 1;
+            Ok(())
+        } else {
+            self.err(format!("expected `{}` in auto-rule amount", c as char))
+        }
+    }
+
+    // expr := term (('+' | '-') term)*
+    fn parse_expr(&mut self) -> Result<AmountExpr, ParseError> {
+        let mut left = self.parse_term()?;
+        loop {
+            match self.peek() {
+                Some(b'+') => {
+                    self.pos += 1;
+                    let right = self.parse_term()?;
+                    left = AmountExpr::Add(Box::new(left), Box::new(right));
+                }
+                Some(b'-') => {
+                    self.pos += 1;
+                    let right = self.parse_term()?;
+                    left = AmountExpr::Sub(Box::new(left), Box::new(right));
+                }
+                _ => return Ok(left),
+            }
+        }
+    }
+
+    // term := factor ('*' factor)*
+    fn parse_term(&mut self) -> Result<AmountExpr, ParseError> {
+        let mut left = self.parse_factor()?;
+        while self.peek() == Some(b'*') {
+            self.pos += 1;
+            let right = self.parse_factor()?;
+            left = AmountExpr::Mul(Box::new(left), Box::new(right));
+        }
+        Ok(left)
+    }
+
+    // factor := '-' factor | atom
+    fn parse_factor(&mut self) -> Result<AmountExpr, ParseError> {
+        if self.peek() == Some(b'-') {
+            self.pos += 1;
+            return Ok(AmountExpr::Neg(Box::new(self.parse_factor()?)));
+        }
+        self.parse_atom()
+    }
+
+    fn parse_atom(&mut self) -> Result<AmountExpr, ParseError> {
+        use crate::decimal::Decimal;
+        match self.peek() {
+            Some(b'(') => {
+                self.pos += 1;
+                let e = self.parse_expr()?;
+                self.expect(b')')?;
+                Ok(e)
+            }
+            Some(b'$') => {
+                self.pos += 1;
+                let start = self.pos;
+                while matches!(self.bytes.get(self.pos), Some(c) if c.is_ascii_digit()) {
+                    self.pos += 1;
+                }
+                if self.pos == start {
+                    return self.err("expected a parameter number after `$` in auto-rule amount");
+                }
+                let n: usize = std::str::from_utf8(&self.bytes[start..self.pos])
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                Ok(AmountExpr::Param(n))
+            }
+            Some(c) if c.is_ascii_digit() || c == b'.' => {
+                let start = self.pos;
+                while matches!(self.bytes.get(self.pos), Some(c) if c.is_ascii_digit() || *c == b'.')
+                {
+                    self.pos += 1;
+                }
+                let text = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap();
+                Decimal::parse(text).map(AmountExpr::Literal).map_err(|e| {
+                    ParseError::new(self.line, 1, format!("invalid number in auto-rule amount: {e}"))
+                })
+            }
+            Some(c) if c.is_ascii_alphabetic() => {
+                let start = self.pos;
+                while matches!(self.bytes.get(self.pos),
+                    Some(c) if c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_')
+                {
+                    self.pos += 1;
+                }
+                let word = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap().to_string();
+                // `table[key]` (bracket adjacent, no space) is a value lookup.
+                if self.bytes.get(self.pos) == Some(&b'[') {
+                    self.pos += 1;
+                    let key_start = self.pos;
+                    while !matches!(self.bytes.get(self.pos), Some(b']') | None) {
+                        self.pos += 1;
+                    }
+                    if self.bytes.get(self.pos).is_none() {
+                        return self.err("unclosed `[` in auto-rule amount lookup");
+                    }
+                    let key = std::str::from_utf8(&self.bytes[key_start..self.pos]).unwrap();
+                    self.pos += 1; // consume `]`
+                    return Ok(AmountExpr::Lookup(format!("{word}[{key}]")));
+                }
+                match word.as_str() {
+                    "amount" => Ok(AmountExpr::Amount),
+                    "total" => {
+                        self.expect(b'(')?;
+                        Ok(AmountExpr::Total(self.take_account()?))
+                    }
+                    "min" => {
+                        let (a, b) = self.parse_two_args()?;
+                        Ok(AmountExpr::Min(Box::new(a), Box::new(b)))
+                    }
+                    "max" => {
+                        let (a, b) = self.parse_two_args()?;
+                        Ok(AmountExpr::Max(Box::new(a), Box::new(b)))
+                    }
+                    // Anything else is a `:=` binding reference, resolved away
+                    // before the rule is matched.
+                    _ => Ok(AmountExpr::Var(word)),
+                }
+            }
+            Some(c) => self.err(format!("unexpected `{}` in auto-rule amount", c as char)),
+            None => self.err("unexpected end of auto-rule amount"),
+        }
+    }
+
+    /// Parse `( expr , expr )` for `min`/`max` — the opening `(` not yet eaten.
+    fn parse_two_args(&mut self) -> Result<(AmountExpr, AmountExpr), ParseError> {
+        self.expect(b'(')?;
+        let a = self.parse_expr()?;
+        self.expect(b',')?;
+        let b = self.parse_expr()?;
+        self.expect(b')')?;
+        Ok((a, b))
+    }
+
+    /// Consume raw account text up to the matching `)` (the `(` already eaten),
+    /// returned trimmed. Account names never contain `)`, so the first `)`
+    /// closes the `total(...)`; placeholders inside are left verbatim.
+    fn take_account(&mut self) -> Result<String, ParseError> {
+        let start = self.pos;
+        while !matches!(self.bytes.get(self.pos), Some(b')') | None) {
+            self.pos += 1;
+        }
+        if self.bytes.get(self.pos).is_none() {
+            return self.err("unclosed `total(` in auto-rule amount");
+        }
+        let text = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap().trim().to_string();
+        self.pos += 1; // consume `)`
+        if text.is_empty() {
+            return self.err("empty account in `total(...)`");
+        }
+        Ok(text)
     }
 }
 
@@ -1273,22 +1517,61 @@ mod tests {
 
     #[test]
     fn parse_auto_posting_amount_forms() {
-        use crate::parser::entry::AutoAmount;
-        // `amount`/`-amount` are factor 1/-1; `clamp(amount)` a clamp; a leg with
-        // no amount is the bare Fill leg.
-        let got =
-            parse("= /^x/\n\t[a]  amount\n\t[b]  -amount\n\t[c]  -clamp(amount)\n\t[d]\n").unwrap();
+        use crate::parser::entry::AmountExpr;
+        // `amount` is the trigger, `-amount` its negation, `min(amount, total(…))`
+        // an expression tree; a leg with no amount at all is the bare Fill leg
+        // (`amount: None`).
+        let got = parse(
+            "= /^x/\n\t[a]  amount\n\t[b]  -amount\n\t[c]  min(amount, total($self))\n\t[d]\n",
+        )
+        .unwrap();
         let Entry::AutoRule(rule) = &got[0].value else { panic!("expected AutoRule") };
-        match &rule.postings[0].amount {
-            AutoAmount::Factor(f) => assert_eq!(*f, Decimal::from(1)),
-            other => panic!("amount → Factor(1), got {:?}", other),
+        assert!(matches!(rule.postings[0].amount, Some(AmountExpr::Amount)));
+        assert!(matches!(rule.postings[1].amount, Some(AmountExpr::Neg(_))));
+        match &rule.postings[2].amount {
+            Some(AmountExpr::Min(a, b)) => {
+                assert!(matches!(**a, AmountExpr::Amount));
+                match &**b {
+                    AmountExpr::Total(s) => assert_eq!(s, "$self"),
+                    other => panic!("expected total($self), got {:?}", other),
+                }
+            }
+            other => panic!("min(...) → Min, got {:?}", other),
         }
-        match &rule.postings[1].amount {
-            AutoAmount::Factor(f) => assert_eq!(*f, Decimal::from(-1)),
-            other => panic!("-amount → Factor(-1), got {:?}", other),
-        }
-        assert!(matches!(rule.postings[2].amount, AutoAmount::Clamp { negate: true }));
-        assert!(matches!(rule.postings[3].amount, AutoAmount::Fill));
+        assert!(rule.postings[3].amount.is_none());
+    }
+
+    #[test]
+    fn parse_auto_posting_capped_expression() {
+        // The capped-fill shape: `$3` is a positional parameter, arithmetic and
+        // nested min/max parse into the expected tree.
+        use crate::parser::entry::AmountExpr;
+        let got = parse("= /^x/\n\t[a]  min(amount, max(0, $3 - total($self)))\n\t[b]\n").unwrap();
+        let Entry::AutoRule(rule) = &got[0].value else { panic!("expected AutoRule") };
+        let Some(AmountExpr::Min(a, b)) = &rule.postings[0].amount else {
+            panic!("expected Min at the root");
+        };
+        assert!(matches!(**a, AmountExpr::Amount));
+        let AmountExpr::Max(zero, sub) = &**b else { panic!("expected Max as min's 2nd arg") };
+        assert!(matches!(**zero, AmountExpr::Literal(_)));
+        let AmountExpr::Sub(p, total) = &**sub else { panic!("expected Sub inside max") };
+        assert!(matches!(**p, AmountExpr::Param(3)));
+        assert!(matches!(**total, AmountExpr::Total(_)));
+    }
+
+    #[test]
+    fn parse_auto_binding_and_value_lookup() {
+        use crate::parser::entry::AmountExpr;
+        // `NAME := EXPR` is a binding; `table[key]` in an amount is a value
+        // lookup; a posting references the binding as a bare name (`Var`).
+        let got = parse("= /^x/\n\tstake := min(amount, cap[$2])\n\t[a]  stake\n\t[b]\n").unwrap();
+        let Entry::AutoRule(rule) = &got[0].value else { panic!("expected AutoRule") };
+        assert_eq!(rule.bindings.len(), 1);
+        assert_eq!(rule.bindings[0].0, "stake");
+        let AmountExpr::Min(_, b) = &rule.bindings[0].1 else { panic!("binding → Min") };
+        assert!(matches!(**b, AmountExpr::Lookup(ref s) if s == "cap[$2]"));
+        assert!(matches!(rule.postings[0].amount, Some(AmountExpr::Var(ref n)) if n == "stake"));
+        assert!(rule.postings[1].amount.is_none());
     }
 
     #[test]

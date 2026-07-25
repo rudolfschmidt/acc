@@ -160,11 +160,13 @@ assertions and assignments; directives `commodity` (with `alias`,
 loss` / `holding gain` / `holding loss` / `cta gain`
 / `cta loss` / `capital gain` / `capital loss` / `label`), `P`, and
 ledger-style **automated transactions**
-(line-leading `= /pattern/` rules that inject scaled postings
-into matching transactions, with `$account` / `$segment`
+(line-leading `= /pattern/` rules that inject **expression-valued** postings —
+`min`/`max`, arithmetic, running-balance `total(…)`, `$self`, and `NAME := …`
+bindings — into matching transactions, with `$account` / `$segment`
 placeholders, plus named `= NAME :: /pattern/` templates
 instantiated per pair with positional `$1` / `$2` args, a `= NAME[key] :: value`
-lookup table, and an `amount <op> N` rule clause); filter DSL across account /
+lookup table usable as text or value, and an `amount <op> N` rule clause);
+filter DSL across account /
 description / code / commodity plus `-r` sibling-posting view;
 per-posting currency conversion at `tx.date`; multi-hop price
 lookups; **FIFO realised capital gains** (`capital gain` /
@@ -942,27 +944,55 @@ Expanded at load time to:
 Net effect: `assets:cash` back to zero, `assets:bank` down $100,
 `expenses:cash` up $100.
 
-The amount after each account is a factor on the triggering amount: a
-bare number, or `amount` / `-amount` as readable synonyms for `1` /
-`-1`. A posting with **no** amount is the balancing leg — the expander
-fills it with the negated pool sum, like the bare last posting of a
-hand-written transaction (so the flush above can also be written
-`[assets:cash] -amount` + a bare `[expenses:cash]`).
+The amount after each account is an **expression** evaluated against the
+triggering posting. The simplest is `amount` (the trigger's value) or a bare
+number (a literal), and `-amount` negates it. A posting with **no** amount is the
+balancing leg — the expander fills it with the negated pool sum, like the bare
+last posting of a hand-written transaction (so the flush above can also be
+written `[assets:cash] -amount` + a bare `[expenses:cash]`). A leg whose amount
+evaluates to **zero** injects nothing, so a rule that runs out of work adds no
+`$0.00` clutter.
 
-Each balance pool must balance: a bare leg fills it, or the factors sum
-to zero — real postings on their own, balanced-virtual `[...]` on their
-own (unbalanced `(...)` postings are exempt); the resolver validates
-this. A VAT-split variant:
+Each balance pool needs at most one bare filling leg — real postings on their
+own, balanced-virtual `[...]` on their own (unbalanced `(...)` postings are
+exempt). Whether the pool nets to zero is enforced when the transaction is
+booked. A fee-split variant scales the trigger with `*`:
 
 ```
 = /^income:gross/
-	[income:gross]          -1
-	[income:net]          0.81
-	[taxes:vat19]         0.19
+	[income:gross]        -amount
+	[income:net]      amount * 0.9
+	[expenses:fee]    amount * 0.1
 ```
 
 Matching `income:gross $1000` injects `-$1000` flush,
-`+$810` net, `+$190` vat.
+`+$900` net, `+$100` fee.
+
+**Amount expressions.** Beyond `amount`, literals and `*` scaling, an amount may
+use `min(a, b)` / `max(a, b)`, `+` / `-`, unary `-` and parentheses, plus two
+readers of running state: `total(ACCOUNT)` is `ACCOUNT`'s balance up to the
+current transaction, and inside a `total(...)` the placeholder `$self` is the
+leg's own account. So a leg that tops its own account up to a cap `C` and no
+further is `min(amount, max(0, C - total($self)))`, and one that draws an account
+down to (but not past) zero is `min(amount, total($self))` — the two shapes that
+used to be a hard-wired `clamp`.
+
+**`NAME := EXPR` bindings.** Compute an intermediate value once and refer to it
+by name. Substitution is textual (`\def`-style), so `$self` inside a binding is
+the account of the *posting* that uses it — a value shared across legs therefore
+names its account explicitly instead of `$self`. Splitting an inflow into a
+capped "locked" bucket and the free remainder, computing the split once:
+
+```
+= /^assets:inflow/
+	take := min(amount, max(0, 1000 - total(assets:locked)))
+	[assets:locked]    take
+	[assets:free]      amount - take
+	[assets:inflow]   -amount
+```
+
+Reserved names (`amount`, `total`, `min`, `max`) and duplicate bindings are
+rejected.
 
 **`$account` — refer to the matched account.** Inside an injected
 posting, `$account` is replaced with the account of the posting that
@@ -1199,6 +1229,19 @@ whatever brings the account to the target:
 
 Useful for reconciling against a bank statement: write the ending
 balance, let the tool figure out the delta.
+
+**`= *0` — zero every commodity.** A bare `= 0` targets only the empty-commodity
+balance and `= $0` only the dollar one. To flatten an account that holds several
+commodities at once, use the `*` wildcard commodity: `= *0` expands to one
+correcting posting per commodity the account holds a **non-zero** balance in —
+commodities already at zero produce no posting, so there is no `$0.00` clutter.
+Only zeroing is meaningful, so `= *5` is rejected.
+
+```
+2024-12-31 * flatten the wallet
+    assets:wallet   = *0
+    equity:reset
+```
 
 ---
 
@@ -1779,11 +1822,13 @@ match case-insensitively, as a user-friendliness convenience.
 ```
 
 A set of `= NAME[key] :: value` entries is a string→string **lookup table** on
-the auto-transaction level (leading `=`): each line maps one key, and
-`NAME[key]` — inside an automated-transaction template posting — expands to the
-value (an unknown key is an error). Deliberately a lookup *only*; acc has no
-expression evaluator. See **Automated transactions** for how a template
-references it.
+the auto-transaction level (leading `=`): each line maps one key. `NAME[key]`
+resolves in two places inside an automated transaction: in a **posting account**
+it expands to the value as text (an unknown key is an error), and in an **amount
+expression** it resolves to the value as a *number* (an unknown table or key is a
+lenient `0`, so an unlisted entity simply gets no special amount). A lookup keyed
+by entity is the natural home for a per-entity constant — a share-capital cap, a
+rate — referenced the same way in every rule. See **Automated transactions**.
 
 ### `~` (periodic transactions)
 
