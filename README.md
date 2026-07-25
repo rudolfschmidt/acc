@@ -65,8 +65,8 @@ $ acc -f journal.ledger register
 Commodities, valuation roles and display labels are configured as TOML
 files in a directory named by the `CONFIG_DIR` environment variable;
 every `.toml` there is read alongside your ledgers (dispatched by
-extension). Transactions, `P` prices, `= ` auto-rules and `~ ` periodics
-live in the `.ledger` files themselves.
+extension). Transactions, `P` prices and `~ ` periodics live in the
+`.ledger` files themselves.
 
 ---
 

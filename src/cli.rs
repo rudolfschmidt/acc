@@ -515,7 +515,15 @@ pub fn run() {
 /// then delegate here, since the args are taken as a parameter rather than read
 /// from the environment.
 pub fn run_from(argv: Vec<String>) {
-    if let Err(e) = start(argv) {
+    run_from_with(argv, &mut |_| {});
+}
+
+/// [`run_from`] with an [`Inject`](crate::Inject) hook: the report path calls
+/// `inject` after resolving + filling and before booking, so an embedder (e.g.
+/// the wrapper) can add its own programmatically-built transactions — the
+/// replacement for the removed `=` auto-rules.
+pub fn run_from_with(argv: Vec<String>, inject: crate::Inject) {
+    if let Err(e) = start(argv, inject) {
         eprintln!("{}", e);
         std::process::exit(1);
     }
@@ -885,7 +893,7 @@ fn resolve_date_range(
     (period_ranges, begin, end)
 }
 
-fn start(raw_args: Vec<String>) -> Result<(), crate::Error> {
+fn start(raw_args: Vec<String>, inject: crate::Inject) -> Result<(), crate::Error> {
     let (files, argv) = split_file_args(raw_args);
     let mut args = Args::parse_from(argv);
     args.paths = files;
@@ -974,9 +982,9 @@ fn start(raw_args: Vec<String>) -> Result<(), crate::Error> {
     }
 
     let mut journal = if price_paths.is_empty() {
-        crate::load_report(&journal_paths)
+        crate::load_report_with(&journal_paths, inject)
     } else {
-        crate::load_selective_report(&journal_paths, &price_paths, exchange.as_deref())
+        crate::load_selective_report_with(&journal_paths, &price_paths, exchange.as_deref(), inject)
     }
     .map_err(|e| crate::Error::from(e.to_string()))?;
 

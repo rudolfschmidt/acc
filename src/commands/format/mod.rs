@@ -307,33 +307,6 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fil
                     );
                 }
             }
-            // Auto-rule / template blocks span multiple lines (header + indented
-            // children); their body needs no re-derivation — simpler to emit the
-            // source lines verbatim than rebuild the syntax. The block ends at
-            // the next line that isn't indented.
-            Entry::AutoRule(_) | Entry::AutoTemplate { .. } => {
-                let start = entry.line.saturating_sub(1);
-                let mut end = start + 1;
-                while end < source_lines.len() {
-                    let line = source_lines[end];
-                    if line.is_empty() || !(line.starts_with('\t') || line.starts_with("  ")) {
-                        break;
-                    }
-                    end += 1;
-                }
-                for &line in &source_lines[start..end] {
-                    out.push_str(line);
-                    out.push('\n');
-                }
-            }
-            Entry::AutoInstance { .. } | Entry::Lookup { .. } => {
-                // Single-line directives (`= NAME a b`, `= NAME[key] :: value`);
-                // emit verbatim.
-                if let Some(line) = source_lines.get(entry.line.saturating_sub(1)) {
-                    out.push_str(line);
-                    out.push('\n');
-                }
-            }
         }
         prev_was_tx = is_tx;
         prev_was_comment = is_comment;

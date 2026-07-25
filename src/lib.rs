@@ -21,7 +21,6 @@ pub mod commands;
 pub mod date;
 pub mod decimal;
 pub mod error;
-pub mod expander;
 pub mod filter;
 pub mod indexer;
 pub mod loader;
@@ -38,7 +37,10 @@ pub mod translator;
 pub(crate) mod i256;
 
 pub use error::Error;
-pub use loader::{load, load_report, load_selective, load_selective_report, Journal, LoadError};
+pub use loader::{
+    load, load_report, load_report_with, load_selective, load_selective_report,
+    load_selective_report_with, Inject, Journal, LoadError,
+};
 
 /// Extension treated as a journal file when walking a directory.
 /// Only `.ledger` is picked up by the recursive walk, so non-journal

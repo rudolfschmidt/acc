@@ -39,7 +39,7 @@ where
     P: AsRef<Path> + Sync,
 {
     let entries = read_and_parse(files)?;
-    finish_load(entries, false)
+    finish_load(entries, &mut |_| {})
 }
 
 /// Load the journal, then load only the price-DB pairs the report can use.
@@ -59,22 +59,32 @@ pub fn load_selective<P>(
 where
     P: AsRef<Path> + Sync,
 {
-    finish_load(selective_entries(journal_files, price_files, target)?, false)
+    finish_load(selective_entries(journal_files, price_files, target)?, &mut |_| {})
 }
 
-/// Like [`load`], but applies `= /pattern/` auto-rules *before* booking. Used by
-/// the report commands so that balance assignments and assertions account for
-/// the injected postings; plain [`load`] (lint / sweep) stays source-only.
+/// Like [`load`], but exposes the pre-book [`Inject`] hook (a no-op here — see
+/// [`load_report_with`]). Used by the report commands so an embedder's injected
+/// postings are seen by balance assignments and assertions; plain [`load`]
+/// (lint / sweep) stays source-only.
 pub fn load_report<P>(files: &[P]) -> Result<Journal, LoadError>
 where
     P: AsRef<Path> + Sync,
 {
-    let entries = read_and_parse(files)?;
-    finish_load(entries, true)
+    load_report_with(files, &mut |_| {})
 }
 
-/// The report-path counterpart of [`load_selective`] — expands auto-rules
-/// before booking (see [`load_report`]).
+/// [`load_report`] with an [`Inject`] hook run before booking — the seam an
+/// embedder uses to add its own programmatically-built transactions.
+pub fn load_report_with<P>(files: &[P], inject: Inject) -> Result<Journal, LoadError>
+where
+    P: AsRef<Path> + Sync,
+{
+    let entries = read_and_parse(files)?;
+    finish_load(entries, inject)
+}
+
+/// The report-path counterpart of [`load_selective`] — exposes the pre-book
+/// [`Inject`] hook (a no-op here; see [`load_selective_report_with`]).
 pub fn load_selective_report<P>(
     journal_files: &[P],
     price_files: &[P],
@@ -83,7 +93,20 @@ pub fn load_selective_report<P>(
 where
     P: AsRef<Path> + Sync,
 {
-    finish_load(selective_entries(journal_files, price_files, target)?, true)
+    load_selective_report_with(journal_files, price_files, target, &mut |_| {})
+}
+
+/// [`load_selective_report`] with an [`Inject`] hook run before booking.
+pub fn load_selective_report_with<P>(
+    journal_files: &[P],
+    price_files: &[P],
+    target: Option<&str>,
+    inject: Inject,
+) -> Result<Journal, LoadError>
+where
+    P: AsRef<Path> + Sync,
+{
+    finish_load(selective_entries(journal_files, price_files, target)?, inject)
 }
 
 /// Gather the entry stream for a selective (`-X`) load: journal entries plus
@@ -112,21 +135,26 @@ where
     Ok(entries)
 }
 
-/// Resolve → (optionally expand auto-rules) → book → index a parsed entry
-/// stream into a `Journal`. When `expand` is set, `= /pattern/` auto-rules are
-/// applied *before* booking, so balance assignments and assertions see the
-/// injected postings. lint / sweep pass `false` — they validate the source, not
-/// the injections.
-fn finish_load(entries: Vec<Located<Entry>>, expand: bool) -> Result<Journal, LoadError> {
+/// A hook the report path calls after resolving + filling and before booking's
+/// balance checks: it may add programmatically-built transactions or postings to
+/// the stream — the replacement for the removed `=` auto-rules, supplied by an
+/// embedder (e.g. the wrapper). It runs at the exact point the expander did, so
+/// it sees running, filled amounts; injected postings carry their own amounts
+/// (they are not auto-filled).
+pub type Inject<'a> = &'a mut dyn FnMut(&mut Vec<Located<Transaction>>);
+
+/// Resolve → fill → inject → book → index a parsed entry stream into a
+/// `Journal`. On the report path `inject` may add programmatically-built
+/// transactions before the balance checks; lint / sweep pass a no-op — they
+/// validate the source, not the injections.
+fn finish_load(entries: Vec<Located<Entry>>, inject: Inject) -> Result<Journal, LoadError> {
     let resolved = resolver::resolve(entries)?;
-    // Pass 1 fills every ordinary transaction's omitted amount; on the report
-    // path the expander then scales its rules against those concrete numbers;
-    // pass 2 resolves `= TARGET` assignments/assertions against a running
-    // balance that now includes the injected postings.
+    // Pass 1 fills every ordinary transaction's omitted amount; `inject` may then
+    // add postings/transactions scaled against those concrete numbers; pass 2
+    // resolves `= TARGET` assignments/assertions against a running balance that
+    // now includes the injected postings.
     let mut transactions = booker::fill(resolved.transactions)?;
-    if expand {
-        crate::expander::expand(&mut transactions, &resolved.auto_rules);
-    }
+    inject(&mut transactions);
     let transactions = booker::assert_balances(transactions)?;
     let prices = indexer::index(resolved.prices);
     let mut precisions = precisions_per_commodity(&transactions);
@@ -151,7 +179,6 @@ fn finish_load(entries: Vec<Located<Entry>>, expand: bool) -> Result<Journal, Lo
         holding_loss: resolved.holding_loss,
         precisions,
         aliases: resolved.aliases,
-        auto_rules: resolved.auto_rules,
         labels: resolved.labels,
         labels_balance: resolved.labels_balance,
         labels_register: resolved.labels_register,

@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.29.0 — 2026-07-26
+
+### Fri 26 Jul 2026 - The `=` automated-transaction system is removed; an embedder injects transactions instead
+
+**Complex automation belongs to the embedder, not the ledger syntax.** The whole
+`=` automated-transaction layer is gone: anonymous auto-rules (`= /pattern/`),
+named templates (`= NAME ::`), lookup tables (`= NAME[key] :: value`), and their
+instantiations — together with the `AmountExpr` amount-expression language that
+fed them (`amount`, `total(ACCOUNT)`, `$self`, `min` / `max`, arithmetic, and
+`NAME := EXPR` bindings) and the expander phase that applied them. A `-f` ledger
+is now purely transactions, `P` prices, `~` periodics and comments; a leading `=`
+is an "unknown directive" error. The syntax had grown into a small interpreter
+living inside a plaintext file — the wrong home for rules that get genuinely
+complex. acc stays a general tool over real, booked transactions.
+
+**An embedder injects transactions in Rust — same seam the expander used.** In
+its place, the report path exposes an `Inject` hook: `run_from_with(argv, inject)`
+(and `load_report_with` / `load_selective_report_with`) take a closure that runs
+after resolving + filling and *before* booking's balance checks — the exact point
+the expander occupied. A caller inspects the resolved, filled transactions and
+adds its own, built to whatever rules it defines; acc then books, asserts and
+reports them indistinguishably from hand-written entries. So automated bookings
+that used to be `=` rules become ordinary Rust in the embedder, and acc's core
+carries no automation engine. The auto-rules only ever created transactions at
+this one point, so a single pre-book hook replaces them completely; if injection
+elsewhere is ever needed, it can be added.
+
+**Kept:** `~` periodic transactions (still expanded in the resolver), the
+`$segment` display-label patterns, and `$role:slot` account references — none of
+which depended on the `=` machinery.
+
 ## 0.28.0 — 2026-07-26
 
 ### Fri 26 Jul 2026 - Commodities, roles and labels move to TOML config; the `commodity` / `account` DSL is gone

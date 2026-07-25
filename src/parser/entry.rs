@@ -60,45 +60,6 @@ pub enum Entry {
     /// A top-level comment line (`;` or `#` at column 0).
     Comment(String),
 
-    /// Automated-transaction rule: a pattern that matches against
-    /// posting accounts, plus the extra postings to inject (their amounts
-    /// evaluated against the matching posting) into every matching
-    /// transaction. Line-leading `=` at column 0, followed by `/pattern/`;
-    /// indented children provide the postings with their amount expressions.
-    AutoRule(AutoRule),
-
-    /// `= NAME[key] :: value` — one entry of a named string→string lookup
-    /// table, declared on the auto-transaction level (leading `=`). Referenced
-    /// as `NAME[key]` inside an auto-template posting account to expand a key
-    /// to its value. A deliberately restricted lookup — pure map access, no
-    /// expressions — so resolving it is a map lookup, not an evaluator. Each
-    /// line is one entry; entries sharing a table name are merged in resolve.
-    /// The bracket in the name is what tells it apart from an `AutoTemplate`.
-    Lookup {
-        table: String,
-        key: String,
-        value: String,
-    },
-
-    /// `= NAME ::` header + one or more indented `/pattern/ [cond]` rule blocks
-    /// — a named auto-rule *template*. Each rule's pattern and posting accounts
-    /// carry positional `$1` / `$2` placeholders (and `NAME[key]` lookup calls);
-    /// an `AutoInstance` substitutes a pair into every rule. A second transfer
-    /// direction is just a second rule (mirrored pattern, its own amounts) — no
-    /// operator. Kept apart from `AutoRule` because it isn't matchable until
-    /// filled.
-    AutoTemplate {
-        name: String,
-        rules: Vec<TemplateRule>,
-    },
-
-    /// `= NAME a b` — instantiate template `NAME` for the pair, binding `$1`=a,
-    /// `$2`=b into every one of its rules.
-    AutoInstance {
-        name: String,
-        args: Vec<String>,
-    },
-
     /// `~ PERIOD [CADENCE]` block + indented postings — a *periodic*
     /// transaction. The resolver expands it into real, ordinary transactions:
     /// one per cadence occurrence in the year, dated at the occurrence start,
@@ -133,70 +94,6 @@ pub enum Cadence {
     Monthly,
     /// `daily` — one transaction per day of the year, each the total ÷ days.
     Daily,
-}
-
-/// Comparison operator for an `amount` clause on an auto-rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompareOp {
-    Gt,
-    Lt,
-    Ge,
-    Le,
-    Eq,
-    Ne,
-}
-
-/// An optional `amount <op> <value>` clause after an auto-rule pattern — the
-/// rule fires only when the matched posting's amount satisfies it. A composable
-/// filter, deliberately limited to one comparison against a bare number (no
-/// expression language): AND is more clauses, OR is more rules, NOT flips the op.
-#[derive(Debug, Clone)]
-pub struct AmountCondition {
-    pub op: CompareOp,
-    pub value: Decimal,
-}
-
-impl AmountCondition {
-    /// Whether `value` — a matched posting's amount — satisfies the clause.
-    pub fn matches(&self, value: &Decimal) -> bool {
-        match self.op {
-            CompareOp::Gt => *value > self.value,
-            CompareOp::Lt => *value < self.value,
-            CompareOp::Ge => *value >= self.value,
-            CompareOp::Le => *value <= self.value,
-            CompareOp::Eq => *value == self.value,
-            CompareOp::Ne => *value != self.value,
-        }
-    }
-}
-
-/// An auto-transaction (`= /pattern/`) block.
-#[derive(Debug, Clone)]
-pub struct AutoRule {
-    pub pattern: AutoPattern,
-    pub postings: Vec<AutoPosting>,
-    /// Optional `amount <op> N` filter on the matched posting's amount.
-    pub condition: Option<AmountCondition>,
-    /// `NAME := EXPR` intermediate bindings, in declaration order. Substituted
-    /// into the postings (and later bindings) before matching, so they never
-    /// reach evaluation.
-    pub bindings: Vec<(String, AmountExpr)>,
-}
-
-/// One rule inside a `= NAME ::` template: a matcher plus the postings it
-/// injects, written as an indented `/pattern/ [cond]` block with its own
-/// postings under it. Mirrors [`AutoRule`] but keeps the pattern as raw text
-/// with `$1`/`$2` placeholders intact — the resolver substitutes a pair in and
-/// parses it into an `AutoPattern` per instance. A template holds a list of
-/// these; a second transfer direction is simply another rule.
-#[derive(Debug, Clone)]
-pub struct TemplateRule {
-    /// Pattern inner text (no surrounding `/…/`), placeholders intact.
-    pub pattern: String,
-    pub condition: Option<AmountCondition>,
-    pub postings: Vec<AutoPosting>,
-    /// `NAME := EXPR` intermediate bindings, in declaration order.
-    pub bindings: Vec<(String, AmountExpr)>,
 }
 
 /// Pattern kinds supported in V1 — a subset of ledger-cli regex
@@ -235,39 +132,6 @@ impl AutoPattern {
                 anchored_start,
                 anchored_end,
             } => matches_segments(account, parts, *anchored_start, *anchored_end),
-        }
-    }
-
-    /// Build a pattern from its inner text — the part between the `/…/`
-    /// delimiters, already stripped. `^` anchors the start, `$` the end,
-    /// and each `$segment` token stands for exactly one account segment.
-    /// Shared by the parser (`= /pattern/`) and the resolver, which calls
-    /// it on a template pattern after substituting a pair in. The caller
-    /// guarantees `inner` is non-empty.
-    pub fn parse_inner(inner: &str) -> AutoPattern {
-        let anchored_start = inner.starts_with('^');
-        let anchored_end = inner.ends_with('$');
-        let core = match (anchored_start, anchored_end) {
-            (true, true) => &inner[1..inner.len() - 1],
-            (true, false) => &inner[1..],
-            (false, true) => &inner[..inner.len() - 1],
-            (false, false) => inner,
-        };
-        // `$segment` placeholder(s): split into literal chunks matched
-        // segment-wise. Not regex — the only token is the literal `$segment`.
-        if core.contains("$segment") {
-            let parts = core.split("$segment").map(str::to_string).collect();
-            return AutoPattern::Segmented {
-                parts,
-                anchored_start,
-                anchored_end,
-            };
-        }
-        match (anchored_start, anchored_end) {
-            (true, true) => AutoPattern::Exact(core.to_string()),
-            (true, false) => AutoPattern::Prefix(core.to_string()),
-            (false, true) => AutoPattern::Suffix(core.to_string()),
-            (false, false) => AutoPattern::Contains(core.to_string()),
         }
     }
 }
@@ -315,78 +179,6 @@ fn matches_segments(
         }
     }
     true
-}
-
-/// The amount an auto-rule posting injects, as an **expression** evaluated
-/// against the triggering posting during expansion (see the expander's
-/// `eval_amount`). A posting with *no* expression is a bare `Fill` leg —
-/// [`AutoPosting::amount`] is then `None` and the expander values it from its
-/// balance pool (the negated sum of its pool's other legs), like the bare last
-/// posting of a hand-written transaction.
-///
-/// The pieces, written in the amount slot after the account:
-/// - `amount` — the triggering posting's value.
-/// - a bare number — that literal value itself.
-/// - `$n` — a positional template parameter, resolved to the instance's `n`-th
-///   argument.
-/// - `table[key]` — a lookup table entry used as a *value* (missing → `0`).
-/// - a bare `name` — a `name := EXPR` binding declared earlier in the rule.
-/// - `total(ACCOUNT)` — `ACCOUNT`'s running balance up to this transaction. The
-///   account text keeps its placeholders: `$1`/`$2` (filled per instance),
-///   `$self` (this leg's own account), `$account` (the trigger's account), and
-///   `$year`/`$month`/`$day`.
-/// - `min(a, b)` / `max(a, b)`, `a + b` / `a - b` / `a * b`, unary `-a`, and
-///   parentheses.
-///
-/// So the old `clamp(amount)` is `min(amount, total($self))`, and
-/// `min(amount, X - total($self))` fills this account up to `X`.
-///
-/// `$n`, `table[key]` and `name` bindings are all rewritten to literals by the
-/// resolver, so a matched rule only ever holds `Amount` / `Literal` / `Total`
-/// and the arithmetic combinators.
-#[derive(Debug, Clone)]
-pub enum AmountExpr {
-    /// `amount` — the triggering posting's value.
-    Amount,
-    /// A bare number — that literal value.
-    Literal(Decimal),
-    /// `$n` — a positional template parameter used as a *number* (e.g. `$3` in
-    /// `$3 - total($self)`). The resolver rewrites it to a [`Literal`] from the
-    /// instance's `n`-th argument; it never survives into a matched rule.
-    ///
-    /// [`Literal`]: AmountExpr::Literal
-    Param(usize),
-    /// A `NAME := EXPR` binding reference — replaced with the binding's
-    /// expression (`\def`-style) before a rule is matched, so it never survives
-    /// into evaluation.
-    Var(String),
-    /// `table[key]` used as a *value* — resolved against the lookup tables to a
-    /// [`Literal`] (missing table/key → `0`); the raw text keeps its `$1`/`$2`
-    /// placeholders until the resolver substitutes them.
-    ///
-    /// [`Literal`]: AmountExpr::Literal
-    Lookup(String),
-    /// `total(ACCOUNT)` — the account's running balance (placeholders intact).
-    Total(String),
-    Neg(Box<AmountExpr>),
-    Min(Box<AmountExpr>, Box<AmountExpr>),
-    Max(Box<AmountExpr>, Box<AmountExpr>),
-    Add(Box<AmountExpr>, Box<AmountExpr>),
-    Sub(Box<AmountExpr>, Box<AmountExpr>),
-    Mul(Box<AmountExpr>, Box<AmountExpr>),
-}
-
-/// One posting inside an auto-rule. Account + amount + virtual flags mirror
-/// the posting syntax; the amount expression is evaluated against the
-/// triggering posting during expansion.
-#[derive(Debug, Clone)]
-pub struct AutoPosting {
-    pub account: String,
-    /// The injected amount expression, or `None` for a bare `Fill` leg (valued
-    /// from its balance pool during expansion).
-    pub amount: Option<AmountExpr>,
-    pub is_virtual: bool,
-    pub balanced: bool,
 }
 
 /// A `P DATE BASE QUOTE RATE` directive. Commodities are stored as

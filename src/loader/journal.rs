@@ -42,11 +42,7 @@ pub struct Journal {
     /// the journal declared `commodity € / alias EUR`, so the target
     /// symbol matches the form stored in postings and the price DB.
     pub aliases: HashMap<String, String>,
-    /// Automated-transaction rules from `= /pattern/` blocks. Expanded
-    /// into their matching transactions by the expander phase between
-    /// booker and filter.
-    pub auto_rules: Vec<crate::parser::entry::AutoRule>,
-    /// Cosmetic display labels from `account NAME / label …` directives.
+    /// Cosmetic display labels from the config's `[[label]]` tables.
     /// `labels` is the shared fallback (bare `label`); the two view-specific
     /// sets (`label-balance` / `label-register`) override it per view. Each
     /// set holds exact full names and `$segment` wildcard patterns. Shown by
