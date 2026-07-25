@@ -42,18 +42,14 @@ pub struct Journal {
     /// the journal declared `commodity € / alias EUR`, so the target
     /// symbol matches the form stored in postings and the price DB.
     pub aliases: HashMap<String, String>,
-    /// Cosmetic display labels from the config's `[[label]]` tables.
-    /// `labels` is the shared fallback (bare `label`); the two view-specific
-    /// sets (`label-balance` / `label-register`) override it per view. Each
-    /// set holds exact full names and `$segment` wildcard patterns. Shown by
-    /// `bal` / `reg`, never filtered or computed on. See [`Self::label_for`].
-    pub labels: crate::resolver::LabelSet,
+    /// Cosmetic display labels from the config's `[[label]]` tables, one set per
+    /// view. Each set holds exact full names and segment-skipping matches. Shown
+    /// by `bal` / `reg`, never filtered or computed on. See [`Self::label_for`].
     pub labels_balance: crate::resolver::LabelSet,
     pub labels_register: crate::resolver::LabelSet,
 }
 
-/// Which view is asking for a label — selects the view-specific set that
-/// overrides the shared `labels` fallback.
+/// Which view is asking for a label — selects the view-specific set.
 #[derive(Debug, Clone, Copy)]
 pub enum LabelView {
     Balance,
@@ -61,14 +57,13 @@ pub enum LabelView {
 }
 
 impl Journal {
-    /// The display label for `account` in `view`: the view-specific set
-    /// wins (exact name, then `$segment` pattern), else the shared `labels`
-    /// fallback, else `None`.
+    /// The display label for `account` in `view` (exact name, then a
+    /// segment-skipping match), or `None`.
     pub fn label_for(&self, account: &str, view: LabelView) -> Option<&str> {
-        let specific = match view {
+        match view {
             LabelView::Balance => &self.labels_balance,
             LabelView::Register => &self.labels_register,
-        };
-        specific.get(account).or_else(|| self.labels.get(account))
+        }
+        .get(account)
     }
 }

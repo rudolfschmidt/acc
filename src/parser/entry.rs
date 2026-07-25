@@ -57,6 +57,18 @@ pub enum Entry {
     /// no parser/resolver change, only a declaration.
     RoleAccount { role: String, account: String },
 
+    /// A display label from a `[[label]]` config table. `account` is the account
+    /// it decorates; `skip` is how many leading segments to skip when matching
+    /// (`0` = an exact name, `1` = match `<any one segment>:account`, …); and
+    /// `balance` / `register` are the label texts shown in each view. Cosmetic
+    /// only — never filtered or computed on.
+    Label {
+        account: String,
+        skip: usize,
+        balance: String,
+        register: String,
+    },
+
     /// A top-level comment line (`;` or `#` at column 0).
     Comment(String),
 
@@ -96,91 +108,6 @@ pub enum Cadence {
     Daily,
 }
 
-/// Pattern kinds supported in V1 — a subset of ledger-cli regex
-/// semantics, matching what the filter DSL already handles: a
-/// `^prefix` anchor, a `suffix$` anchor, an anchored-both `^exact$`,
-/// or an unanchored substring. Plus a single placeholder, `$segment`,
-/// standing for exactly one account segment (`[^:]+`). It is *not*
-/// regex: the only metacharacters are the `^` / `$` anchors and the
-/// literal `$segment` token — no ranges, classes or quantifiers.
-#[derive(Debug, Clone)]
-pub enum AutoPattern {
-    Prefix(String),
-    Suffix(String),
-    Exact(String),
-    Contains(String),
-    /// Pattern with one or more `$segment` placeholders. `parts` are the
-    /// literal chunks the pattern splits into on `$segment`; between each
-    /// consecutive pair exactly one account segment must sit. The anchors
-    /// apply to the first / last literal.
-    Segmented {
-        parts: Vec<String>,
-        anchored_start: bool,
-        anchored_end: bool,
-    },
-}
-
-impl AutoPattern {
-    pub fn matches(&self, account: &str) -> bool {
-        match self {
-            AutoPattern::Prefix(s) => account.starts_with(s.as_str()),
-            AutoPattern::Suffix(s) => account.ends_with(s.as_str()),
-            AutoPattern::Exact(s) => account == s,
-            AutoPattern::Contains(s) => account.contains(s.as_str()),
-            AutoPattern::Segmented {
-                parts,
-                anchored_start,
-                anchored_end,
-            } => matches_segments(account, parts, *anchored_start, *anchored_end),
-        }
-    }
-}
-
-/// Match `account` against a `$segment`-templated pattern: the literal
-/// `parts` in order, with exactly one account segment (`[^:]+` — a
-/// non-empty run without `:`) filling each gap between consecutive
-/// parts. A single left-to-right scan, no regex and no backtracking, so
-/// each `$segment` is meant to sit between `:` delimiters or an anchor.
-fn matches_segments(
-    account: &str,
-    parts: &[String],
-    anchored_start: bool,
-    anchored_end: bool,
-) -> bool {
-    // Leading literal. Anchored: it must start the account; unanchored:
-    // it may appear anywhere (its first occurrence).
-    let mut rest = if anchored_start {
-        match account.strip_prefix(parts[0].as_str()) {
-            Some(r) => r,
-            None => return false,
-        }
-    } else {
-        match account.find(parts[0].as_str()) {
-            Some(i) => &account[i + parts[0].len()..],
-            None => return false,
-        }
-    };
-
-    // Each remaining part is preceded by one `$segment` gap.
-    for (i, lit) in parts.iter().enumerate().skip(1) {
-        // Consume exactly one non-empty segment (up to the next `:`).
-        let seg_end = rest.find(':').unwrap_or(rest.len());
-        if seg_end == 0 {
-            return false;
-        }
-        rest = &rest[seg_end..];
-
-        if i == parts.len() - 1 && anchored_end {
-            return rest == lit.as_str();
-        }
-        match rest.strip_prefix(lit.as_str()) {
-            Some(r) => rest = r,
-            None => return false,
-        }
-    }
-    true
-}
-
 /// A `P DATE BASE QUOTE RATE` directive. Commodities are stored as
 /// `Arc<str>` so the resolver (and downstream phases) can intern them
 /// without cloning string buffers. Alias resolution is deferred to the
@@ -191,50 +118,4 @@ pub struct Price {
     pub base: Arc<str>,
     pub quote: Arc<str>,
     pub rate: Decimal,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::AutoPattern;
-
-    fn seg(parts: &[&str], start: bool, end: bool) -> AutoPattern {
-        AutoPattern::Segmented {
-            parts: parts.iter().map(|s| s.to_string()).collect(),
-            anchored_start: start,
-            anchored_end: end,
-        }
-    }
-
-    #[test]
-    fn segment_wildcard_matches_exactly_one_leading_segment() {
-        // `^$segment:bar:baz`
-        let p = seg(&["", ":bar:baz"], true, false);
-        assert!(p.matches("foo:bar:baz"));
-        assert!(p.matches("qux:bar:baz-suffix"));
-    }
-
-    #[test]
-    fn segment_wildcard_rejects_wrong_depth() {
-        // `^$segment:bar:baz` must not match a deeper occurrence…
-        let p = seg(&["", ":bar:baz"], true, false);
-        assert!(!p.matches("foo:extra:bar:baz")); // two segments before :bar:
-        assert!(!p.matches("bar:baz")); // no segment before :bar:
-    }
-
-    #[test]
-    fn segment_wildcard_matches_a_middle_segment() {
-        // `:bar:$segment:qux`
-        let p = seg(&[":bar:", ":qux"], false, false);
-        assert!(p.matches("foo:bar:mid:qux"));
-        assert!(!p.matches("foo:bar::qux")); // empty middle segment
-    }
-
-    #[test]
-    fn segment_wildcard_anchored_both_ends_is_exactly_one_segment() {
-        // `^$segment$`
-        let p = seg(&["", ""], true, true);
-        assert!(p.matches("foo"));
-        assert!(!p.matches("foo:bar")); // more than one segment
-        assert!(!p.matches("")); // empty
-    }
 }

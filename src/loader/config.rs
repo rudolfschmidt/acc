@@ -132,16 +132,11 @@ impl Config {
         push_role(&mut v, file, "capital gain", &self.capital.gain);
         push_role(&mut v, file, "capital loss", &self.capital.loss);
         for l in &self.label {
-            // `skip` leading wildcard segments then the account — the same
-            // account string an old `account $segment:…` label directive used.
-            let acct = format!("{}{}", "$segment:".repeat(l.skip), l.account);
-            v.push(entry(file, Entry::RoleAccount {
-                role: format!("label-balance {}", l.balance),
-                account: acct.clone(),
-            }));
-            v.push(entry(file, Entry::RoleAccount {
-                role: format!("label-register {}", l.register),
-                account: acct,
+            v.push(entry(file, Entry::Label {
+                account: l.account.clone(),
+                skip: l.skip,
+                balance: l.balance.clone(),
+                register: l.register.clone(),
             }));
         }
         v
@@ -213,14 +208,14 @@ mod tests {
             &Arc::from("<test>"),
         )
         .unwrap();
-        // 1 commodity + 2 roles (holding gain/loss) + 2 labels (balance/register).
-        assert_eq!(entries.len(), 5);
+        // 1 commodity + 2 roles (holding gain/loss) + 1 label.
+        assert_eq!(entries.len(), 4);
         assert!(matches!(&entries[0].value, Entry::Commodity { symbol, .. } if symbol == "$"));
         assert!(entries.iter().any(|e| matches!(&e.value,
             Entry::RoleAccount { role, account } if role == "holding gain" && account == "in:hg")));
-        // `skip = 1` becomes the `$segment:bb` pattern the resolver anchors.
+        // The label carries its account, skip and per-view texts structurally.
         assert!(entries.iter().any(|e| matches!(&e.value,
-            Entry::RoleAccount { role, account }
-                if role == "label-balance bal" && account == "$segment:bb")));
+            Entry::Label { account, skip, balance, register }
+                if account == "bb" && *skip == 1 && balance == "bal" && register == "reg")));
     }
 }

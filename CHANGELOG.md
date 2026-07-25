@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.30.0 — 2026-07-26
+
+### Fri 26 Jul 2026 - Display labels carry `skip` structurally; the `$segment` token is gone
+
+**Labels are structured config, not string-encoded directives.** A `[[label]]`
+table used to be smuggled through the resolver as two `Entry::RoleAccount`
+values — `label-balance <text>` / `label-register <text>` roles whose account
+was a `"$segment:"`-repeated string built from `skip`. That whole encoding is
+replaced by one structured `Entry::Label { account, skip, balance, register }`
+straight from the TOML: the resolver reads `skip` as a number and matches it in
+Rust (drop `skip` leading `:` segments, the remainder must equal the account —
+`skip = 1`, `1000` matches `foo:1000` but not `foo:1000:sub` or `foo:bar:1000`).
+The `[[label]]` TOML schema is unchanged, so existing configs keep working.
+
+**The `$segment` string token is removed everywhere, and with it `AutoPattern`.**
+Labels were its last consumer once the `=` auto-rules were gone; the whole
+pattern type (prefix / suffix / exact / contains / segmented matching) is
+deleted. Segment-skipping is now a five-line function on the label set, not a
+regex-ish mini-matcher.
+
+**The shared bare-`label` fallback set is dropped.** Config only ever supplies
+per-view `balance` / `register` text, so the third "shared" label set (and its
+fallback in `label_for`) was dead weight — a journal now carries exactly the two
+view sets it uses.
+
 ## 0.29.0 — 2026-07-26
 
 ### Fri 26 Jul 2026 - The `=` automated-transaction system is removed; an embedder injects transactions instead

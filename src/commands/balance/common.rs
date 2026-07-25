@@ -48,10 +48,9 @@ pub(super) fn print_commodity_amount(
 }
 
 /// The ` (label)` suffix for an account in the balance view, coloured via
-/// [`paint_label`] — empty when the account carries no balance label
-/// (`label-balance`, or the shared `label` fallback; exact or `$segment`
-/// pattern). Display only, appended by both balance renderers next to the
-/// account name.
+/// [`paint_label`] — empty when the account carries no balance-view label
+/// (exact name or segment-skipping match). Display only, appended by both
+/// balance renderers next to the account name.
 pub(super) fn label_suffix(account: &str, journal: &Journal) -> String {
     match journal.label_for(account, LabelView::Balance) {
         Some(label) => paint_label(&format!(" ({})", label)),

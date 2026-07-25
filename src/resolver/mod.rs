@@ -33,27 +33,53 @@ pub mod error;
 
 pub use error::ResolveError;
 
-/// A set of account labels: exact full-name entries plus `$segment`
-/// wildcard patterns. One of these per view (plus a shared base); the
-/// exact map is consulted first, then the patterns.
+/// A set of account labels for one view: exact full-name entries plus
+/// segment-skipping entries (`skip = N` matches the account tail after `N`
+/// leading segments, e.g. `<any one segment>:1000`). One `LabelSet` per view.
 #[derive(Debug, Clone, Default)]
 pub struct LabelSet {
     pub exact: HashMap<String, String>,
-    pub patterns: Vec<(crate::parser::entry::AutoPattern, String)>,
+    /// `(skip, tail, label)` — matches when dropping the first `skip` `:`
+    /// segments of the account leaves exactly `tail`.
+    pub skipped: Vec<(usize, String, String)>,
 }
 
 impl LabelSet {
-    /// The label for `account` in this set: exact match first, then the
-    /// first matching `$segment` pattern.
+    /// Insert a label: `skip = 0` is an exact account name, `skip > 0` a
+    /// segment-skipping match.
+    pub fn insert(&mut self, account: String, skip: usize, label: String) {
+        if skip == 0 {
+            self.exact.insert(account, label);
+        } else {
+            self.skipped.push((skip, account, label));
+        }
+    }
+
+    /// The label for `account` in this view: an exact match first, then the
+    /// first segment-skipping entry that matches.
     pub fn get(&self, account: &str) -> Option<&str> {
         if let Some(label) = self.exact.get(account) {
             return Some(label);
         }
-        self.patterns
+        self.skipped
             .iter()
-            .find(|(pattern, _)| pattern.matches(account))
-            .map(|(_, label)| label.as_str())
+            .find(|(skip, tail, _)| matches_skip(account, *skip, tail))
+            .map(|(_, _, label)| label.as_str())
     }
+}
+
+/// Whether dropping the first `skip` `:`-separated segments of `account` leaves
+/// exactly `tail` — the segment-skipping label match (`skip = 1`, `tail = "1000"`
+/// matches `foo:1000` but not `foo:1000:sub` or `foo:bar:1000`).
+fn matches_skip(account: &str, skip: usize, tail: &str) -> bool {
+    let mut rest = account;
+    for _ in 0..skip {
+        match rest.split_once(':') {
+            Some((_, r)) => rest = r,
+            None => return false,
+        }
+    }
+    rest == tail
 }
 
 /// Output of normalization. Transactions and prices are in date order;
@@ -83,11 +109,8 @@ pub struct Resolved {
     /// Handed downstream so CLI targets like `-X EUR` can be resolved
     /// to `€` before they reach the rebalancer or the price DB.
     pub aliases: HashMap<String, String>,
-    /// Cosmetic display labels from the config's `[[label]]` tables. `labels`
-    /// is the shared fallback (bare `label`); the two view-specific sets
-    /// (`label-balance` / `label-register`) override it per view. Each set holds
-    /// exact names and `$segment` patterns.
-    pub labels: LabelSet,
+    /// Cosmetic display labels from the config's `[[label]]` tables, one set per
+    /// view (`balance` / `register`).
     pub labels_balance: LabelSet,
     pub labels_register: LabelSet,
 }
@@ -97,7 +120,6 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         aliases,
         roles,
         precisions,
-        labels,
         labels_balance,
         labels_register,
     } = collect_declarations(&entries)?;
@@ -222,7 +244,6 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         holding_loss,
         precisions,
         aliases,
-        labels,
         labels_balance,
         labels_register,
     })
@@ -286,7 +307,6 @@ struct Declarations {
     aliases: HashMap<String, String>,
     roles: HashMap<String, String>,
     precisions: HashMap<String, usize>,
-    labels: LabelSet,
     labels_balance: LabelSet,
     labels_register: LabelSet,
 }
@@ -298,9 +318,7 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
     // former per-role fields: a new role needs no change here.
     let mut roles: HashMap<String, Declaration> = HashMap::new();
     let mut precisions: HashMap<String, usize> = HashMap::new();
-    // `label` / `label-balance` / `label-register` display labels.
-    // `labels` is the shared fallback; the view-specific sets override it.
-    let mut labels = LabelSet::default();
+    // Per-view display labels from `[[label]]` config tables.
     let mut labels_balance = LabelSet::default();
     let mut labels_register = LabelSet::default();
 
@@ -326,35 +344,6 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
                 }
             }
             Entry::RoleAccount { role, account } => {
-                // Display-label sub-directives, not roles: bare `label`
-                // (shared fallback) or the view-specific `label-balance` /
-                // `label-register`, which override it per view. A `$segment`
-                // in the account name makes it a wildcard (anchored to the
-                // whole name); otherwise it is an exact full-name entry.
-                let target = if let Some(t) = role.strip_prefix("label-balance ") {
-                    Some((&mut labels_balance, t))
-                } else if let Some(t) = role.strip_prefix("label-register ") {
-                    Some((&mut labels_register, t))
-                } else {
-                    role.strip_prefix("label ").map(|t| (&mut labels, t))
-                };
-                if let Some((set, text)) = target {
-                    let text = text.trim().to_string();
-                    if account.contains("$segment") {
-                        let parts = account.split("$segment").map(str::to_string).collect();
-                        set.patterns.push((
-                            crate::parser::entry::AutoPattern::Segmented {
-                                parts,
-                                anchored_start: true,
-                                anchored_end: true,
-                            },
-                            text,
-                        ));
-                    } else {
-                        set.exact.insert(account.clone(), text);
-                    }
-                    continue;
-                }
                 if let Some(prev) = roles.get(role)
                     && prev.name != *account {
                         return Err(ResolveError::new(
@@ -368,6 +357,12 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
                     }
                 roles.insert(role.clone(), Declaration { line: e.line, name: account.clone() });
             }
+            Entry::Label { account, skip, balance, register } => {
+                // One label decorates one account (exact, or skipping `skip`
+                // leading segments) with a per-view text.
+                labels_balance.insert(account.clone(), *skip, balance.clone());
+                labels_register.insert(account.clone(), *skip, register.clone());
+            }
             _ => {}
         }
     }
@@ -376,7 +371,6 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
         aliases,
         roles: roles.into_iter().map(|(role, d)| (role, d.name)).collect(),
         precisions,
-        labels,
         labels_balance,
         labels_register,
     })
@@ -579,9 +573,19 @@ mod tests {
         })
     }
 
-    /// A synthetic role / label account entry (`slippage gain`, `label X`, …).
+    /// A synthetic role account entry (`slippage gain`, `cta loss`, …).
     fn role(role: &str, account: &str) -> Located<Entry> {
         loc(Entry::RoleAccount { role: role.to_string(), account: account.to_string() })
+    }
+
+    /// A synthetic display-label entry, as a `[[label]]` config table produces.
+    fn label(account: &str, skip: usize, balance: &str, register: &str) -> Located<Entry> {
+        loc(Entry::Label {
+            account: account.to_string(),
+            skip,
+            balance: balance.to_string(),
+            register: register.to_string(),
+        })
     }
 
     /// Config entries (commodities / roles) followed by a parsed ledger — the
@@ -643,35 +647,28 @@ mod tests {
     }
 
     #[test]
-    fn splits_exact_and_segment_labels() {
+    fn labels_resolve_exact_and_skipped() {
         let out = resolve(vec![
-            role("label liquid", "assets:cash"),
-            role("label tag", "$segment:baz"),
+            label("assets:cash", 0, "liquid", "liquid"), // exact full name
+            label("1000", 1, "cash", "cash"),            // skip one leading segment
         ])
         .unwrap();
-        // Exact name and `$segment` pattern both resolve via the base set;
-        // the pattern is anchored to the whole account name.
-        assert_eq!(out.labels.get("assets:cash"), Some("liquid"));
-        assert_eq!(out.labels.get("foo:baz"), Some("tag"));
-        assert_eq!(out.labels.get("foo:baz:sub"), None);
+        // `skip = 0` is an exact full name — no inheritance to sub-accounts.
+        assert_eq!(out.labels_balance.get("assets:cash"), Some("liquid"));
+        assert_eq!(out.labels_balance.get("assets:cash:sub"), None);
+        // `skip = 1` matches `<any one segment>:1000`, anchored to the tail.
+        assert_eq!(out.labels_balance.get("foo:1000"), Some("cash"));
+        assert_eq!(out.labels_balance.get("bar:1000"), Some("cash"));
+        assert_eq!(out.labels_balance.get("foo:1000:sub"), None); // deeper
+        assert_eq!(out.labels_balance.get("foo:bar:1000"), None); // two before
     }
 
     #[test]
-    fn view_labels_and_multiple_sub_directives() {
-        let out = resolve(vec![
-            role("label base", "a:1"),
-            role("label-register reg-only", "a:1"),
-            role("label-balance bal-only", "a:2"),
-        ])
-        .unwrap();
-        // a:1 declares two sub-directives: a shared fallback and a
-        // register-specific override; no balance-specific label.
-        assert_eq!(out.labels.get("a:1"), Some("base"));
-        assert_eq!(out.labels_register.get("a:1"), Some("reg-only"));
-        assert_eq!(out.labels_balance.get("a:1"), None);
-        // a:2 is balance-only, no shared fallback.
-        assert_eq!(out.labels_balance.get("a:2"), Some("bal-only"));
-        assert_eq!(out.labels.get("a:2"), None);
+    fn labels_carry_a_text_per_view() {
+        let out = resolve(vec![label("a:1", 0, "in balance", "in register")]).unwrap();
+        assert_eq!(out.labels_balance.get("a:1"), Some("in balance"));
+        assert_eq!(out.labels_register.get("a:1"), Some("in register"));
+        assert_eq!(out.labels_balance.get("a:2"), None);
     }
 
     #[test]

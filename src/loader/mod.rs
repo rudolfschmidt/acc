@@ -179,7 +179,6 @@ fn finish_load(entries: Vec<Located<Entry>>, inject: Inject) -> Result<Journal, 
         holding_loss: resolved.holding_loss,
         precisions,
         aliases: resolved.aliases,
-        labels: resolved.labels,
         labels_balance: resolved.labels_balance,
         labels_register: resolved.labels_register,
     };

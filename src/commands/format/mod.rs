@@ -254,30 +254,12 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fil
                     out.push('\n');
                 }
             }
-            Entry::Commodity { symbol, aliases, parities, precision } => {
-                out.push_str(&format!("commodity {}\n", symbol));
-                for a in aliases {
-                    out.push_str(INDENT);
-                    out.push_str(&format!("alias {}\n", a));
-                }
-                for t in parities {
-                    out.push_str(INDENT);
-                    out.push_str(&format!("parity {}\n", t));
-                }
-                if let Some(p) = precision {
-                    out.push_str(INDENT);
-                    out.push_str(&format!("precision {}\n", p));
-                }
-            }
-            Entry::Account(name) => {
-                out.push_str(&format!("account {}\n", name));
-            }
-            Entry::RoleAccount { role, account } => {
-                out.push_str(&format!("account {}\n", account));
-                out.push_str(INDENT);
-                out.push_str(role);
-                out.push('\n');
-            }
+            // Commodities / roles / labels are config (TOML), never present in a
+            // ledger file `acc format` processes — so they never reach here.
+            Entry::Commodity { .. }
+            | Entry::Account(_)
+            | Entry::RoleAccount { .. }
+            | Entry::Label { .. } => {}
             Entry::Comment(text) => {
                 out.push_str(text);
                 if !text.ends_with('\n') {
