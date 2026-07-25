@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::date::Date;
 use crate::decimal::Decimal;
 use crate::parser::entry::{
-    AmountCondition, AutoAmount, AutoPattern, AutoPosting, AutoRule, Cadence, Entry,
+    AutoAmount, AutoPattern, AutoPosting, AutoRule, Cadence, Entry, TemplateRule,
 };
 use crate::parser::located::Located;
 use crate::parser::posting::{Costs, Posting};
@@ -100,14 +100,12 @@ pub struct Resolved {
     pub labels_register: LabelSet,
 }
 
-/// A named auto-rule template from `= NAME :: /pattern/`. Its `pattern` and
-/// posting accounts carry positional `$1`/`$2` placeholders and `lookup[key]`
-/// references; [`expand_instance`] substitutes a pair in to produce concrete
-/// `AutoRule`s.
+/// A named auto-rule template from a `= NAME ::` block — its one or more rules,
+/// each carrying positional `$1`/`$2` placeholders and `lookup[key]` references
+/// in the pattern and accounts; [`expand_instance`] substitutes a pair into
+/// every rule to produce concrete `AutoRule`s.
 struct Template {
-    pattern: String,
-    postings: Vec<AutoPosting>,
-    condition: Option<AmountCondition>,
+    rules: Vec<TemplateRule>,
 }
 
 pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
@@ -213,9 +211,10 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                 }
             }
             Entry::AutoInstance { name, args } => {
-                // Instantiate a template into concrete auto-rules (one per
-                // transfer direction). Templates/lookups were gathered in the
-                // first pass, so ordering across files doesn't matter.
+                // Instantiate a template into concrete auto-rules — one per rule
+                // in the template, with `$1`/`$2` bound to the pair. Templates/
+                // lookups were gathered in the first pass, so ordering across
+                // files doesn't matter.
                 let rules = expand_instance(&name, &args, &templates, &lookups, &file, line)?;
                 auto_rules.extend(rules);
             }
@@ -329,12 +328,11 @@ fn check_pool(postings: &[AutoPosting], balanced_virtual: bool, pool: &str) -> R
     Ok(())
 }
 
-/// Expand a `= NAME arg…` instantiation into concrete `AutoRule`s. The pair is
-/// instantiated in both orderings — one rule per transfer direction — so a
-/// single `= NAME a b` mirrors both `a→b` and `b→a`. Each ordering
-/// substitutes the args into the template pattern and posting accounts, then
-/// resolves any `table[key]` lookup reference against the lookup tables. The
-/// resulting rules are ordinary `AutoRule`s the expander runs unchanged.
+/// Expand a `= NAME a b` instantiation into concrete `AutoRule`s — one per rule
+/// in template `NAME`, with `$1`/`$2` bound to `a`/`b` in the pattern and the
+/// posting accounts. The rules are independent (a second transfer direction is
+/// just another rule in the template), so this is a straight per-rule map; any
+/// `table[key]` lookup in an account is resolved against the lookup tables.
 fn expand_instance(
     name: &str,
     args: &[String],
@@ -346,44 +344,45 @@ fn expand_instance(
     let template = templates.get(name).ok_or_else(|| {
         ResolveError::new(file.clone(), line, format!("no auto-rule template named `{name}`"))
     })?;
-    // A pair template takes exactly two positional args (`$1`/`$2`); the pair
-    // is unordered, so both orderings are emitted (one rule per direction).
+    // An instance takes exactly two positional args, bound to `$1`/`$2`.
     if args.len() != 2 {
         return Err(ResolveError::new(
             file.clone(),
             line,
-            format!("`= {name}` takes exactly two arguments (an unordered pair), got {}", args.len()),
+            format!("`= {name}` takes exactly two arguments ($1 and $2), got {}", args.len()),
         ));
     }
-    // Both orderings — one rule per direction. A self-pair (a == b) collapses
-    // to a single rule.
-    let mut orderings: Vec<[&str; 2]> = vec![[args[0].as_str(), args[1].as_str()]];
-    if args[0] != args[1] {
-        orderings.push([args[1].as_str(), args[0].as_str()]);
-    }
+    let bindings = [("1", args[0].as_str()), ("2", args[1].as_str())];
+    template
+        .rules
+        .iter()
+        .map(|rule| build_instance_rule(rule, &bindings, lookups, file, line))
+        .collect()
+}
 
-    let mut rules = Vec::new();
-    for [a, b] in orderings {
-        let bindings = [("1", a), ("2", b)];
-        let pattern = AutoPattern::parse_inner(&substitute_params(&template.pattern, &bindings));
-        let mut postings = Vec::new();
-        for tp in &template.postings {
-            let account = resolve_lookup_calls(
-                &substitute_params(&tp.account, &bindings),
-                lookups,
-                file,
-                line,
-            )?;
-            postings.push(AutoPosting {
-                account,
-                amount: tp.amount.clone(),
-                is_virtual: tp.is_virtual,
-                balanced: tp.balanced,
-            });
-        }
-        rules.push(AutoRule { pattern, postings, condition: template.condition.clone() });
+/// Build one concrete `AutoRule` from a template rule: substitute the `$1`/`$2`
+/// `bindings` into the pattern and every posting account, resolve any
+/// `table[key]` lookup, and carry the rule's amounts and condition through.
+fn build_instance_rule(
+    rule: &TemplateRule,
+    bindings: &[(&str, &str)],
+    lookups: &HashMap<String, HashMap<String, String>>,
+    file: &Arc<str>,
+    line: usize,
+) -> Result<AutoRule, ResolveError> {
+    let pattern = AutoPattern::parse_inner(&substitute_params(&rule.pattern, bindings));
+    let mut postings = Vec::new();
+    for tp in &rule.postings {
+        let account =
+            resolve_lookup_calls(&substitute_params(&tp.account, bindings), lookups, file, line)?;
+        postings.push(AutoPosting {
+            account,
+            amount: tp.amount.clone(),
+            is_virtual: tp.is_virtual,
+            balanced: tp.balanced,
+        });
     }
-    Ok(rules)
+    Ok(AutoRule { pattern, postings, condition: rule.condition.clone() })
 }
 
 /// Replace each positional placeholder `$n` with its bound value. `$segment`
@@ -628,45 +627,50 @@ fn collect_declarations(entries: &[Located<Entry>]) -> Result<Declarations, Reso
                     ));
                 }
             }
-            Entry::AutoTemplate { name, pattern, postings, condition } => {
-                if postings.is_empty() {
+            Entry::AutoTemplate { name, rules } => {
+                if rules.is_empty() {
                     return Err(ResolveError::new(
                         e.file.clone(),
                         e.line,
-                        format!("auto-rule template `{name}` has no postings"),
+                        format!("auto-rule template `{name}` has no rules (no `/pattern/` blocks)"),
                     ));
                 }
-                // Each balance pool must balance — a bare leg fills it, or the
-                // factors sum to zero; `(...)` postings are exempt — validate once.
-                if let Err(msg) = check_multiplier_balance(postings) {
-                    return Err(ResolveError::new(
-                        e.file.clone(),
-                        e.line,
-                        format!("template `{name}`: {msg}"),
-                    ));
-                }
-                // Only positional `$1` / `$2` are valid — catch `$3`, a name,
-                // or a typo.
-                for text in std::iter::once(pattern.as_str())
-                    .chain(postings.iter().map(|p| p.account.as_str()))
-                {
-                    for r in param_refs(text) {
-                        if r != "1" && r != "2" {
-                            return Err(ResolveError::new(
-                                e.file.clone(),
-                                e.line,
-                                format!(
-                                    "template `{name}` uses `${r}` — only positional `$1` and `$2` are valid"
-                                ),
-                            ));
+                for rule in rules {
+                    if rule.postings.is_empty() {
+                        return Err(ResolveError::new(
+                            e.file.clone(),
+                            e.line,
+                            format!("template `{name}`: a `/pattern/` rule has no postings"),
+                        ));
+                    }
+                    // Each balance pool must balance — a bare leg fills it, or the
+                    // factors sum to zero; `(...)` postings are exempt.
+                    if let Err(msg) = check_multiplier_balance(&rule.postings) {
+                        return Err(ResolveError::new(
+                            e.file.clone(),
+                            e.line,
+                            format!("template `{name}`: {msg}"),
+                        ));
+                    }
+                    // Only positional `$1` / `$2` are valid — catch `$3`, a name,
+                    // or a typo, in the pattern or any account.
+                    for text in std::iter::once(rule.pattern.as_str())
+                        .chain(rule.postings.iter().map(|p| p.account.as_str()))
+                    {
+                        for r in param_refs(text) {
+                            if r != "1" && r != "2" {
+                                return Err(ResolveError::new(
+                                    e.file.clone(),
+                                    e.line,
+                                    format!(
+                                        "template `{name}` uses `${r}` — only positional `$1` and `$2` are valid"
+                                    ),
+                                ));
+                            }
                         }
                     }
                 }
-                let template = Template {
-                    pattern: pattern.clone(),
-                    postings: postings.clone(),
-                    condition: condition.clone(),
-                };
+                let template = Template { rules: rules.clone() };
                 if templates.insert(name.clone(), template).is_some() {
                     return Err(ResolveError::new(
                         e.file.clone(),
@@ -1000,25 +1004,39 @@ mod tests {
     }
 
     const TEMPLATE_SRC: &str = "= long[foo] :: foo-long\n= long[bar] :: bar-long\n\
-        = mirror :: /^x:$1:$segment:$2:$segment$/\n\
-        \t[$1:z:long[$2]]  -1\n\t[$2:z:long[$1]]  1\n";
+        = mirror ::\n\
+        \t/^x:$1:$segment:$2:$segment$/\n\
+        \t\t[$1:z:long[$2]]  -1\n\t\t[$2:z:long[$1]]  1\n";
 
     #[test]
-    fn instantiation_expands_both_directions_with_lookup() {
+    fn instantiation_substitutes_the_pair_into_the_rule() {
         let out = resolve(parsed(&format!("{TEMPLATE_SRC}= mirror foo bar\n"))).unwrap();
-        // One rule per direction, in order: (foo→bar), then (bar→foo).
-        assert_eq!(out.auto_rules.len(), 2);
-
-        let fwd = &out.auto_rules[0];
-        let accts: Vec<&str> = fwd.postings.iter().map(|p| p.account.as_str()).collect();
+        // One rule in the template → one concrete rule, `$1`=foo/`$2`=bar.
+        assert_eq!(out.auto_rules.len(), 1);
+        let rule = &out.auto_rules[0];
+        let accts: Vec<&str> = rule.postings.iter().map(|p| p.account.as_str()).collect();
         assert_eq!(accts, vec!["foo:z:bar-long", "bar:z:foo-long"]);
-        assert!(fwd.pattern.matches("x:foo:acct-a:bar:acct-b"));
-        assert!(!fwd.pattern.matches("x:bar:acct-b:foo:acct-a"));
+        assert!(rule.pattern.matches("x:foo:acct-a:bar:acct-b"));
+        // Only the written direction — the reverse would be a second rule block.
+        assert!(!rule.pattern.matches("x:bar:acct-b:foo:acct-a"));
+    }
 
-        let rev = &out.auto_rules[1];
-        let accts: Vec<&str> = rev.postings.iter().map(|p| p.account.as_str()).collect();
-        assert_eq!(accts, vec!["bar:z:foo-long", "foo:z:bar-long"]);
-        assert!(rev.pattern.matches("x:bar:acct-b:foo:acct-a"));
+    #[test]
+    fn multi_rule_template_instantiates_every_rule() {
+        // A two-rule template (forward + mirrored reverse, both written out) →
+        // two concrete rules from one instance, `$1`=foo/`$2`=bar in both.
+        let src = "= long[foo] :: foo-long\n= long[bar] :: bar-long\n\
+                   = both ::\n\
+                   \t/^x:$1:$segment:$2:$segment$/\n\t\t[$1:z:long[$2]]  amount\n\t\t[$2:z:long[$1]]\n\
+                   \t/^x:$2:$segment:$1:$segment$/\n\t\t[$1:z:long[$2]]  -amount\n\t\t[$2:z:long[$1]]\n\
+                   = both foo bar\n";
+        let out = resolve(parsed(src)).unwrap();
+        assert_eq!(out.auto_rules.len(), 2);
+        // Rule 0 matches foo-first, rule 1 bar-first; both book foo:z:bar-long.
+        assert!(out.auto_rules[0].pattern.matches("x:foo:a:bar:b"));
+        assert!(out.auto_rules[1].pattern.matches("x:bar:b:foo:a"));
+        assert_eq!(out.auto_rules[0].postings[0].account, "foo:z:bar-long");
+        assert_eq!(out.auto_rules[1].postings[0].account, "foo:z:bar-long");
     }
 
     #[test]
@@ -1039,28 +1057,28 @@ mod tests {
 
     #[test]
     fn template_multipliers_must_sum_to_zero() {
-        let src = "= mirror :: /^x:$1:$segment:$2:$segment$/\n\
-                   \t[$1:z:$2]  -1\n\t[$2:z:$1]  2\n";
+        let src = "= mirror ::\n\t/^x:$1:$segment:$2:$segment$/\n\
+                   \t\t[$1:z:$2]  -1\n\t\t[$2:z:$1]  2\n";
         assert!(resolve(parsed(src)).is_err());
     }
 
     #[test]
     fn out_of_range_placeholder_is_rejected() {
         // Only `$1` and `$2` are valid; `$3` has no argument.
-        let src = "= mirror :: /^x:$1:$segment:$3:$segment$/\n\
-                   \t[$1:z:$2]  -1\n\t[$2:z:$1]  1\n";
+        let src = "= mirror ::\n\t/^x:$1:$segment:$3:$segment$/\n\
+                   \t\t[$1:z:$2]  -1\n\t\t[$2:z:$1]  1\n";
         assert!(resolve(parsed(src)).is_err());
     }
 
     #[test]
     fn unbalanced_virtual_posting_and_amount_clause_pass() {
         // A lone `(...)` unbalanced posting is allowed (no `[...]` pool to
-        // balance); the `amount > 0` clause carries onto both concrete rules.
-        let src = "= mirror :: /^x:$1-$segment:$2-$segment$/ amount > 0\n\
-                   \t($1:z:$2)  1\n\
+        // balance); the `amount > 0` clause carries onto the concrete rule.
+        let src = "= mirror ::\n\t/^x:$1-$segment:$2-$segment$/ amount > 0\n\
+                   \t\t($1:z:$2)  1\n\
                    = mirror foo bar\n";
         let out = resolve(parsed(src)).unwrap();
-        assert_eq!(out.auto_rules.len(), 2);
+        assert_eq!(out.auto_rules.len(), 1);
         for rule in &out.auto_rules {
             assert!(rule.condition.is_some());
             assert_eq!(rule.postings.len(), 1);
@@ -1071,7 +1089,7 @@ mod tests {
     #[test]
     fn periodic_monthly_splits_the_total() {
         let out =
-            resolve(parsed("~ 2021 monthly budget\n\tassets:b:$year  €1200.00\n\tin:x\n")).unwrap();
+            resolve(parsed("~ 2021 monthly budget\n\tassets:b:$year  $1200.00\n\tin:x\n")).unwrap();
         // 12 monthly transactions, dated the 1st of each month.
         assert_eq!(out.transactions.len(), 12);
         assert_eq!(out.transactions[0].value.date.to_string(), "2021-01-01");
@@ -1085,7 +1103,7 @@ mod tests {
     fn periodic_split_preserves_the_total_with_remainder() {
         // 100 / 12 does not divide evenly; the 12 slices must still sum to 100
         // (the last occurrence absorbs the rounding remainder).
-        let out = resolve(parsed("~ 2021 monthly x\n\ta  €100.00\n\tb\n")).unwrap();
+        let out = resolve(parsed("~ 2021 monthly x\n\ta  $100.00\n\tb\n")).unwrap();
         assert_eq!(out.transactions.len(), 12);
         let sum = out
             .transactions

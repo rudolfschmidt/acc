@@ -1,215 +1,106 @@
 //! Booker phase — the only phase with cross-transaction state.
 //!
-//! Walks the date-sorted transactions and maintains a running balance
-//! per `(account, commodity)` pair. For each transaction, three steps
-//! run in order:
+//! Booking runs in two passes so an auto-rule expander can sit between
+//! them (report path only):
 //!
-//! 1. **Assignment resolution** — any posting shaped `ACCOUNT = TARGET`
-//!    with no amount has its amount inferred so the account balance
-//!    reaches `TARGET`. Uses the running balance that has accumulated
-//!    from prior transactions.
+//! 1. [`fill`](filler::fill) — **transaction-local balance.** Each
+//!    ordinary transaction's one omitted amount is inferred so its
+//!    commodities sum to zero (cost-aware for `@` / `@@`). This gives
+//!    every posting a concrete amount — the basis auto-rules scale
+//!    against. Transactions carrying a balance *assignment* (`= TARGET`
+//!    with no amount) are skipped here: their value depends on the
+//!    running balance that only pass 2 has.
 //!
-//! 2. **Transaction-local balance** — each commodity's sum must be
-//!    zero across the postings (cost-aware for `@` / `@@`). The one
-//!    allowed omitted amount is inferred.
+//! 2. [`assert_balances`](asserter::assert_balances) — **cross-transaction
+//!    assignments and assertions.** Walks the date-sorted transactions
+//!    maintaining a running balance per `(account, commodity)`, resolving
+//!    `= TARGET` assignments, applying every posting, and verifying any
+//!    `= TARGET` assertion.
 //!
-//! 3. **Apply + assertion check** — each posting's amount is applied
-//!    to the running balance; any `= TARGET` assertion (with an
-//!    explicit amount) is verified.
+//! [`book`] runs both back to back — no injection between — for the paths
+//! that carry no auto-rules (lint, sweep, format, tests). The report load
+//! path instead calls [`fill`](filler::fill), expands auto-rules, then
+//! [`assert_balances`](asserter::assert_balances), so a `= TARGET`
+//! assignment accounts for the injected postings already in the running
+//! balance.
 //!
-//! Step 2 is implemented in [`balance`]; the cross-tx steps 1 and 3
-//! live in this file because they share the running-balance state.
+//! Pass 1 lives in [`filler`], pass 2 in [`asserter`]; both share the
+//! transaction-local math in [`balance`].
 
+pub mod asserter;
 pub mod balance;
 pub mod error;
+pub mod filler;
 
+pub use asserter::assert_balances;
 pub use error::{BookError, BookErrorKind};
+pub use filler::fill;
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use crate::decimal::Decimal;
 use crate::parser::located::Located;
-use crate::parser::posting::{Amount, Posting};
 use crate::parser::transaction::Transaction;
 
-/// Book every transaction. Input must be date-sorted (resolver
+/// Book every transaction: [`fill`] then [`assert_balances`], with no
+/// auto-rule injection between. Input must be date-sorted (resolver
 /// guarantees this). Returns transactions with every posting's amount
-/// filled in and every balance assertion verified.
+/// filled in and every balance assertion verified. The report load path
+/// runs the two passes itself, expanding auto-rules in between.
 pub fn book(
     transactions: Vec<Located<Transaction>>,
 ) -> Result<Vec<Located<Transaction>>, BookError> {
-    let mut balances: HashMap<(String, String), Decimal> = HashMap::new();
-    let mut result = Vec::with_capacity(transactions.len());
-
-    for Located { file, line, mut value } in transactions {
-        let end_line = value
-            .postings
-            .iter()
-            .map(|p| p.line)
-            .max()
-            .unwrap_or(line);
-        // 1. Resolve balance-assignment postings (amount from running
-        // balance vs target).
-        for lp in &mut value.postings {
-            resolve_assignment(&mut lp.value, &balances);
-        }
-        // 2. Transaction-local balance (sum = 0, cost-aware).
-        balance::balance_tx(&mut value, &file, line, end_line)?;
-        // 3. Apply each posting to the running balance and check any
-        // assertion targets.
-        for lp in &value.postings {
-            apply_and_check(&lp.value, &file, line, end_line, &mut balances)?;
-        }
-        result.push(Located { file, line, value });
-    }
-
-    Ok(result)
-}
-
-/// If the posting is a balance-assignment (`= TARGET` with no amount),
-/// fill its amount so that the account balance reaches `TARGET` after
-/// this posting.
-fn resolve_assignment(
-    posting: &mut Posting,
-    balances: &HashMap<(String, String), Decimal>,
-) {
-    let (amount, assertion) = (&posting.amount, &posting.balance_assertion);
-    if amount.is_some() {
-        return;
-    }
-    let Some(target) = assertion else {
-        return;
-    };
-    let running = balances
-        .get(&(posting.account.clone(), target.commodity.clone()))
-        .copied()
-        .unwrap_or_else(Decimal::zero);
-    let diff = target.value - running;
-    posting.amount = Some(Amount {
-        commodity: target.commodity.clone(),
-        value: diff,
-        decimals: target.decimals,
-    });
-}
-
-/// Apply a posting's amount to the running balance and check any
-/// attached assertion.
-fn apply_and_check(
-    posting: &Posting,
-    file: &Arc<str>,
-    start_line: usize,
-    end_line: usize,
-    balances: &mut HashMap<(String, String), Decimal>,
-) -> Result<(), BookError> {
-    let Some(amt) = &posting.amount else {
-        return Ok(());
-    };
-    let key = (posting.account.clone(), amt.commodity.clone());
-    *balances.entry(key).or_insert_with(Decimal::zero) += amt.value;
-
-    if let Some(target) = &posting.balance_assertion {
-        let running = balances
-            .get(&(posting.account.clone(), target.commodity.clone()))
-            .copied()
-            .unwrap_or_else(Decimal::zero);
-        if running != target.value {
-            return Err(BookError::new(
-                file.clone(),
-                start_line,
-                end_line,
-                BookErrorKind::AssertionFailed {
-                    account: posting.account.clone(),
-                    expected: target.value,
-                    got: running,
-                    commodity: target.commodity.clone(),
-                    decimals: target.decimals,
-                },
-            ));
-        }
-    }
-    Ok(())
+    assert_balances(fill(transactions)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser;
-    use crate::resolver;
+    use crate::decimal::Decimal;
+    use crate::{parser, resolver};
 
-    fn pipeline(src: &str) -> Result<Vec<Located<Transaction>>, BookError> {
+    #[test]
+    fn fill_then_expand_then_assert_fires_on_a_bare_trigger() {
+        // The trigger `inter:send` is the *bare* (auto-balanced) leg. Only
+        // because pass 1 (`fill`) resolves it to +20 first can the auto-rule
+        // scale against it — the whole point of the split. The injected
+        // `[budget]` posting then sits in the running balance, so the later
+        // `budget = 0` assignment zeroes the full balance (seed + injection),
+        // not just the seed. This is the fill -> expand -> assert order the
+        // report load path uses; reverting it (expand before fill) would leave
+        // the trigger unfilled and the rule silent.
+        let src = "\
+            = /^inter:send/\n\
+            \t[budget]  -amount\n\
+            \t[absorbed]\n\
+            \n\
+            2025-01-01 * seed\n\
+            \tbudget   50 USD\n\
+            \tequity   -50 USD\n\
+            \n\
+            2025-06-01 * transfer\n\
+            \tassets:bank  -20 USD\n\
+            \tinter:send\n\
+            \n\
+            2025-12-31 * deprecate\n\
+            \tbudget   = 0 USD\n\
+            \tequity:writeoff\n";
         let entries = parser::parse(src).unwrap();
         let resolved = resolver::resolve(entries).unwrap();
-        book(resolved.transactions)
-    }
+        let mut txs = fill(resolved.transactions).unwrap();
+        crate::expander::expand(&mut txs, &resolved.auto_rules);
+        let txs = assert_balances(txs).unwrap();
 
-    #[test]
-    fn assignment_infers_amount_to_reach_target() {
-        let src = "2024-01-01 * Opening\n    assets:bank    = 100 USD\n    equity:opening\n";
-        let out = pipeline(src).unwrap();
-        let bank = &out[0].value.postings[0].value;
-        assert_eq!(bank.amount.as_ref().unwrap().value, Decimal::from(100));
-        let equity = &out[0].value.postings[1].value;
-        assert_eq!(equity.amount.as_ref().unwrap().value, Decimal::from(-100));
-    }
+        // Rule fired on the filled bare trigger: an injected `[budget]` leg
+        // worth -20 (the +20 trigger, negated) landed on the transfer.
+        let transfer = &txs[1].value;
+        let injected = transfer
+            .postings
+            .iter()
+            .find(|lp| lp.value.account == "budget")
+            .expect("rule should inject a budget posting");
+        assert_eq!(injected.value.amount.as_ref().unwrap().value, Decimal::from(-20));
 
-    #[test]
-    fn assignment_respects_prior_balance() {
-        let src = "2024-01-01 * Initial\n    assets:bank    40 USD\n    equity:opening  -40 USD\n\
-                   2024-01-05 * Adjust to target\n    assets:bank    = 100 USD\n    equity:adjust\n";
-        let out = pipeline(src).unwrap();
-        let adjust = &out[1].value.postings[0].value;
-        assert_eq!(adjust.amount.as_ref().unwrap().value, Decimal::from(60));
-    }
-
-    #[test]
-    fn assignment_respects_inferred_prior_balance() {
-        // Tx A leaves bank's amount missing; it should be inferred as
-        // +100 by the tx-local balance. Tx B's assignment must see
-        // the running balance that includes this inferred amount.
-        let src = "2024-01-01 * A\n    equity:opening  -100 USD\n    assets:bank\n\
-                   2024-01-02 * B\n    assets:bank    = 100 USD\n    equity:adjust\n";
-        let out = pipeline(src).unwrap();
-        let tx_b_bank = &out[1].value.postings[0].value;
-        assert_eq!(tx_b_bank.amount.as_ref().unwrap().value, Decimal::zero());
-    }
-
-    #[test]
-    fn assertion_passes_when_balance_matches() {
-        let src = "2024-01-01 * Deposit\n    assets:bank   100 USD = 100 USD\n    equity:opening  -100 USD\n";
-        assert!(pipeline(src).is_ok());
-    }
-
-    #[test]
-    fn assertion_fails_on_mismatch() {
-        let src = "2024-01-01 * Deposit\n    assets:bank   100 USD = 999 USD\n    equity:opening  -100 USD\n";
-        let err = pipeline(src).unwrap_err();
-        match err.kind {
-            BookErrorKind::AssertionFailed { ref account, .. } => {
-                assert_eq!(account, "assets:bank");
-            }
-            other => panic!("expected AssertionFailed, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn assertion_after_multiple_transactions() {
-        let src = "2024-01-01 * A\n    assets:bank   50 USD\n    equity:opening  -50 USD\n\
-                   2024-01-02 * B\n    assets:bank   30 USD = 80 USD\n    equity:other    -30 USD\n";
-        assert!(pipeline(src).is_ok());
-    }
-
-    #[test]
-    fn independent_accounts_track_separately() {
-        let src = "2024-01-01 * A\n    assets:bank   100 USD\n    equity:opening  -100 USD\n\
-                   2024-01-02 * B\n    assets:cash    50 USD = 50 USD\n    equity:opening  -50 USD\n";
-        assert!(pipeline(src).is_ok());
-    }
-
-    #[test]
-    fn commodity_tracked_separately_per_account() {
-        let src = "2024-01-01 * A\n    assets:bank   100 USD\n    equity:a  -100 USD\n\
-                   2024-01-02 * B\n    assets:bank   50 EUR = 50 EUR\n    equity:b  -50 EUR\n";
-        assert!(pipeline(src).is_ok());
+        // `budget = 0` accounts for the injection: 50 seed - 20 injected = 30,
+        // so the deprecation books -30 to reach zero.
+        let budget = &txs[2].value.postings[0].value;
+        assert_eq!(budget.amount.as_ref().unwrap().value, Decimal::from(-30));
     }
 }

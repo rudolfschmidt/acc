@@ -7,22 +7,23 @@
 //! identifies pass-through accounts by their journal-wide native sum.
 //! Filtering first would change those sums and corrupt the result. They
 //! are also where the subtle cross-phase rules live, so they belong
-//! together in one tested place rather than inlined in the CLI:
+//! together in one tested place rather than inlined in the CLI. (Auto-rules
+//! `= /pattern/` are applied earlier — in the report load path, between the
+//! booker's fill and assert passes, so balance assignments/assertions see the
+//! injected postings — by the time enrich runs the journal is already expanded.)
 //!
-//! 1. **expander**  — apply `= /pattern/` auto-rules; later phases then
-//!    see the fully expanded journal.
-//! 2. **realizer**  — per-transaction slippage gain/loss: the trade-day
+//! 1. **realizer**  — per-transaction slippage gain/loss: the trade-day
 //!    execution spread, where each leg's market value diverges from the
 //!    others. Runs on every multi-commodity transaction (buy and sell).
-//! 3. **lotter**    — realized capital gains via FIFO lots: the holding-
+//! 2. **lotter**    — realized capital gains via FIFO lots: the holding-
 //!    period market move of each disposed lot. Composes with the
 //!    realizer — it books capital (the market move), the realizer books
 //!    slippage (the execution spread), so neither double-books the other.
-//! 4. **translator** — currency translation adjustment (CTA) for
+//! 3. **translator** — currency translation adjustment (CTA) for
 //!    pass-through accounts. Lot-tracked assets enter at their market
 //!    value and leave at that same value as the `{}` cost basis, so they
 //!    net to zero under conversion — CTA sees no drift there.
-//! 5. **revaluator** — opt-in (`-X` with `--unrealized`) mark-to-market of
+//! 4. **revaluator** — opt-in (`-X` with `--unrealized`) mark-to-market of
 //!    every open foreign balance to the latest available rate, booking the
 //!    unrealized revaluation to the `holding` accounts. Off by default, so the
 //!    historical (realized) view is untouched.
@@ -44,7 +45,10 @@ use crate::loader::Journal;
 /// accounts are declared (it realizes in the booked commodity either
 /// way).
 pub fn enrich(journal: &mut Journal, target: Option<&str>, unrealized: bool) {
-    crate::expander::expand(&mut journal.transactions, &journal.auto_rules);
+    // Auto-rules (`= /pattern/`) are applied in the report load path, between
+    // the booker's fill and assert passes, so balance assignments/assertions
+    // see the injected postings — see `loader::load_report`. The journal
+    // reaching enrich is already expanded.
 
     // The realizer books the per-trade execution spread (slippage) on every
     // multi-commodity transaction; the lotter books the holding-period

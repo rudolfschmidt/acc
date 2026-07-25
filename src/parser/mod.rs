@@ -91,6 +91,19 @@ fn intern(commodities: &mut HashSet<Arc<str>>, s: &str) -> Arc<str> {
     arc
 }
 
+/// **The journal's one indentation rule.** A line is *nested under* the
+/// directive above it when it starts with a **tab** or **two or more spaces**
+/// (Ledger's convention). This is the single definition used everywhere a line
+/// continues an entry: transaction postings, `commodity` / `account`
+/// sub-directives, and — inside a `= NAME ::` auto-template — the `/pattern/`
+/// rule blocks and the postings under each. Deeper nesting is just another unit
+/// (a template's postings sit one level below their `/pattern/`). Keep this the
+/// sole source of truth so the "tab or spaces, how deep?" question never
+/// recurs per feature.
+fn is_indented(bytes: &[u8]) -> bool {
+    matches!(bytes, [b'\t', ..] | [b' ', b' ', ..])
+}
+
 fn dispatch(
     text: &str,
     line: usize,
@@ -99,10 +112,11 @@ fn dispatch(
     prices_filter: Option<&HashSet<String>>,
     entries: &mut Vec<Located<Entry>>,
 ) -> Result<(), ParseError> {
-    match text.as_bytes() {
+    let bytes = text.as_bytes();
+    match bytes {
         [] => Ok(()),
-        // Indent per Ledger rule: tab OR two-plus spaces.
-        [b'\t', ..] | [b' ', b' ', ..] => extend_block(text, line, file, entries),
+        // A nested line (see `is_indented`) continues the entry above it.
+        _ if is_indented(bytes) => extend_block(text, line, file, entries),
         [b'0'..=b'9', ..] => parse_transaction(text, line, file, entries),
         [b'P', b' ', ..] => parse_price(&text[2..], line, file, commodities, prices_filter, entries),
         [b';' | b'#', ..] => {
@@ -187,7 +201,8 @@ fn parse_auto_rule(
             return Ok(());
         }
 
-        // Named auto-rule template: `NAME :: /pattern/ [amount <op> N]`.
+        // Named auto-rule template header: `= NAME ::` alone. Its rules follow
+        // as indented `/pattern/ [cond]` blocks, attached by `extend_block`.
         if name_part.is_empty() {
             return Err(ParseError::new(line, 1, "auto-rule template needs a name before `::`"));
         }
@@ -195,19 +210,20 @@ fn parse_auto_rule(
             return Err(ParseError::new(
                 line,
                 1,
-                "auto-rule template takes no parameter list; use positional `$1`/`$2` in the pattern",
+                "auto-rule template takes no parameter list; use positional `$1`/`$2` in the rule patterns",
             ));
         }
-        let (pattern, condition) = parse_predicate(rest_part, line)?;
+        if !rest_part.trim().is_empty() {
+            return Err(ParseError::new(
+                line,
+                1,
+                "auto-rule template header is `= NAME ::` alone; put each `/pattern/` on its own indented line",
+            ));
+        }
         entries.push(Located {
             file: file.clone(),
             line,
-            value: Entry::AutoTemplate {
-                name: name_part.to_string(),
-                pattern,
-                postings: Vec::new(),
-                condition,
-            },
+            value: Entry::AutoTemplate { name: name_part.to_string(), rules: Vec::new() },
         });
         return Ok(());
     }
@@ -649,11 +665,28 @@ fn extend_block(
             let auto_posting = parse_auto_posting(body, line)?;
             rule.postings.push(auto_posting);
         }
-        Entry::AutoTemplate { postings, .. } => {
-            // Template postings parse like auto-rule postings — the account
-            // just carries `${N}` / `lookup(key)` placeholders resolved later.
-            let auto_posting = parse_auto_posting(body, line)?;
-            postings.push(auto_posting);
+        Entry::AutoTemplate { rules, .. } => {
+            // A `/pattern/ [cond]` line opens a new rule in the template; any
+            // other indented line is a posting on the current (last) rule.
+            // Template postings parse like auto-rule postings — the account just
+            // carries `$1`/`$2` / `lookup[key]` placeholders resolved later.
+            if body.starts_with('/') {
+                let (pattern, condition) = parse_predicate(body, line)?;
+                rules.push(crate::parser::entry::TemplateRule {
+                    pattern,
+                    condition,
+                    postings: Vec::new(),
+                });
+            } else {
+                let Some(rule) = rules.last_mut() else {
+                    return Err(ParseError::new(
+                        line,
+                        1,
+                        "template posting has no rule — it must sit under a `/pattern/` line",
+                    ));
+                };
+                rule.postings.push(parse_auto_posting(body, line)?);
+            }
         }
         Entry::Periodic { postings, .. } => {
             // Periodic postings are ordinary postings (real, auto-filling),
@@ -1135,8 +1168,9 @@ mod tests {
         // Two lookup entries (one table, two keys), a template referencing the
         // table as `long[$N]`, and an instantiation.
         let src = "= long[foo] :: foo-long\n= long[bar] :: bar-long\n\
-                   = mirror :: /^x:$1:$segment:$2:$segment$/\n\
-                   \t[$1:z:long[$2]]  -1\n\t[$2:z:long[$1]]  1\n\
+                   = mirror ::\n\
+                   \t/^x:$1:$segment:$2:$segment$/\n\
+                   \t\t[$1:z:long[$2]]  -1\n\t\t[$2:z:long[$1]]  1\n\
                    = mirror foo bar\n";
         let got = parse(src).unwrap();
         match &got[0].value {
@@ -1156,13 +1190,15 @@ mod tests {
             other => panic!("expected Lookup, got {:?}", other),
         }
         match &got[2].value {
-            Entry::AutoTemplate { name, pattern, postings, condition } => {
+            Entry::AutoTemplate { name, rules } => {
                 assert_eq!(name, "mirror");
-                assert!(condition.is_none());
-                assert_eq!(pattern, "^x:$1:$segment:$2:$segment$");
-                assert_eq!(postings.len(), 2);
-                assert_eq!(postings[0].account, "$1:z:long[$2]");
-                assert!(postings[0].is_virtual && postings[0].balanced);
+                assert_eq!(rules.len(), 1);
+                let rule = &rules[0];
+                assert!(rule.condition.is_none());
+                assert_eq!(rule.pattern, "^x:$1:$segment:$2:$segment$");
+                assert_eq!(rule.postings.len(), 2);
+                assert_eq!(rule.postings[0].account, "$1:z:long[$2]");
+                assert!(rule.postings[0].is_virtual && rule.postings[0].balanced);
             }
             other => panic!("expected AutoTemplate, got {:?}", other),
         }
@@ -1172,6 +1208,29 @@ mod tests {
                 assert_eq!(args, &vec!["foo".to_string(), "bar".to_string()]);
             }
             other => panic!("expected AutoInstance, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn template_holds_multiple_rules() {
+        // A `= NAME ::` header with two `/pattern/` blocks — each its own rule
+        // with its own postings. The reverse direction is just a second rule.
+        let src = "= pair ::\n\
+                   \t/^x:$1-$segment:$2-$segment$/ amount>0\n\
+                   \t\t$1:owes:$2  amount\n\t\t$2:owes:$1\n\
+                   \t/^x:$2-$segment:$1-$segment$/ amount>0\n\
+                   \t\t$2:owes:$1  amount\n\t\t$1:owes:$2\n";
+        let got = parse(src).unwrap();
+        match &got[0].value {
+            Entry::AutoTemplate { name, rules } => {
+                assert_eq!(name, "pair");
+                assert_eq!(rules.len(), 2, "two `/pattern/` blocks → two rules");
+                assert_eq!(rules[0].pattern, "^x:$1-$segment:$2-$segment$");
+                assert_eq!(rules[0].postings[0].account, "$1:owes:$2");
+                assert_eq!(rules[1].pattern, "^x:$2-$segment:$1-$segment$");
+                assert_eq!(rules[1].postings[0].account, "$2:owes:$1");
+            }
+            other => panic!("expected AutoTemplate, got {:?}", other),
         }
     }
 
@@ -1190,15 +1249,16 @@ mod tests {
     fn parse_template_with_amount_clause_and_unbalanced_posting() {
         use crate::parser::entry::CompareOp;
         // `amount > 0` clause after the pattern; a lone `(...)` unbalanced posting.
-        let got = parse("= mirror :: /^x:$1-$segment:$2-$segment$/ amount > 0\n\t($1:z:$2)  1\n")
+        let got = parse("= mirror ::\n\t/^x:$1-$segment:$2-$segment$/ amount > 0\n\t\t($1:z:$2)  1\n")
             .unwrap();
         match &got[0].value {
-            Entry::AutoTemplate { pattern, condition, postings, .. } => {
-                assert_eq!(pattern, "^x:$1-$segment:$2-$segment$");
-                let c = condition.as_ref().expect("amount clause parsed");
+            Entry::AutoTemplate { rules, .. } => {
+                let rule = &rules[0];
+                assert_eq!(rule.pattern, "^x:$1-$segment:$2-$segment$");
+                let c = rule.condition.as_ref().expect("amount clause parsed");
                 assert_eq!(c.op, CompareOp::Gt);
                 assert!(c.value.is_zero());
-                assert!(postings[0].is_virtual && !postings[0].balanced);
+                assert!(rule.postings[0].is_virtual && !rule.postings[0].balanced);
             }
             other => panic!("expected AutoTemplate, got {:?}", other),
         }

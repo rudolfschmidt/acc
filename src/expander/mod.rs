@@ -58,9 +58,13 @@ pub fn expand(transactions: &mut [Located<Transaction>], auto_rules: &[AutoRule]
                 {
                     continue;
                 }
-                for posting in
-                    inject_rule(rule, &trigger_amount, &trigger_account, &date_str, &balances)
-                {
+                let ctx = MatchContext {
+                    trigger: &trigger_amount,
+                    account: &trigger_account,
+                    date: &date_str,
+                    balances: &balances,
+                };
+                for posting in inject_rule(rule, &ctx) {
                     injected.push(Located {
                         file: lt.file.clone(),
                         line: lt.line,
@@ -85,22 +89,33 @@ pub fn expand(transactions: &mut [Located<Transaction>], auto_rules: &[AutoRule]
     }
 }
 
+/// What a firing auto-rule sees about its trigger — the single value context
+/// every injected amount is computed against. Amount builtins read *only* from
+/// here (see [`eval_amount`]), so adding one needs no new plumbing through the
+/// expander.
+struct MatchContext<'a> {
+    /// The matched (triggering) posting's amount — value and commodity.
+    trigger: &'a Amount,
+    /// The matched posting's account (substituted for `$account`).
+    account: &'a str,
+    /// The triggering transaction's date as `YYYY-MM-DD`
+    /// (`$year` / `$month` / `$day`).
+    date: &'a str,
+    /// Running per-account balance up to (not including) this transaction —
+    /// `clamp` reads an injected account's remaining headroom from it.
+    balances: &'a std::collections::HashMap<String, crate::decimal::Decimal>,
+}
+
 /// Build the postings one matching rule injects for a single trigger. `Factor`
-/// legs scale the trigger amount; a bare `Fill` leg is filled with the negated
-/// sum of its own balance pool (real or balanced-virtual `[...]`), so the
-/// injected set nets to zero on its own — exactly like the bare last posting of
-/// a hand-written transaction. `$account` in an account resolves to the matched
-/// posting's account.
-fn inject_rule(
-    rule: &AutoRule,
-    trigger_amount: &Amount,
-    trigger_account: &str,
-    date_str: &str,
-    balances: &std::collections::HashMap<String, crate::decimal::Decimal>,
-) -> Vec<Posting> {
+/// legs scale the trigger amount; `Clamp` legs fill their account's headroom; a
+/// bare `Fill` leg is filled with the negated sum of its own balance pool (real
+/// or balanced-virtual `[...]`), so the injected set nets to zero on its own —
+/// like the bare last posting of a hand-written transaction. `$account` in an
+/// account resolves to the matched posting's account, date vars to its date.
+fn inject_rule(rule: &AutoRule, ctx: &MatchContext) -> Vec<Posting> {
     use crate::decimal::Decimal;
-    // First pass: resolve accounts and value the `Factor`/`Clamp` legs, summing
-    // per pool.
+    // First pass: resolve accounts and value every non-`Fill` leg, summing per
+    // pool so a `Fill` leg can absorb the rest in pass two.
     let mut real_sum = Decimal::zero();
     let mut virt_sum = Decimal::zero();
     let mut legs: Vec<(String, bool, bool, Option<Decimal>)> =
@@ -108,25 +123,9 @@ fn inject_rule(
     for ap in &rule.postings {
         // Resolve the account: the matched account for `$account`, then the
         // triggering transaction's date parts for `$year`/`$month`/`$day`.
-        let mut account = ap.account.replace("$account", trigger_account);
-        crate::resolver::substitute_date_vars(&mut account, date_str);
-        let value = match &ap.amount {
-            AutoAmount::Factor(f) => Some(trigger_amount.value.mul_rounded(*f)),
-            AutoAmount::Clamp { negate } => {
-                // Headroom = the account's current positive balance (once it hits
-                // zero there is nothing left to absorb). Clamp the trigger
-                // magnitude to it; `-clamp(...)` books it negative.
-                let balance = balances.get(&account).copied().unwrap_or_else(Decimal::zero);
-                let headroom = if balance > Decimal::zero() { balance } else { Decimal::zero() };
-                let mag = {
-                    let v = trigger_amount.value;
-                    if v < Decimal::zero() { -v } else { v }
-                };
-                let e = if mag < headroom { mag } else { headroom };
-                Some(if *negate { -e } else { e })
-            }
-            AutoAmount::Fill => None,
-        };
+        let mut account = ap.account.replace("$account", ctx.account);
+        crate::resolver::substitute_date_vars(&mut account, ctx.date);
+        let value = eval_amount(&ap.amount, &account, ctx);
         if let Some(v) = value {
             if !ap.is_virtual {
                 real_sum += v;
@@ -146,9 +145,9 @@ fn inject_rule(
             Posting {
                 account,
                 amount: Some(Amount {
-                    commodity: trigger_amount.commodity.clone(),
+                    commodity: ctx.trigger.commodity.clone(),
                     value,
-                    decimals: trigger_amount.decimals,
+                    decimals: ctx.trigger.decimals,
                 }),
                 costs: None,
                 lot_cost: None,
@@ -160,6 +159,37 @@ fn inject_rule(
             }
         })
         .collect()
+}
+
+/// Evaluate one injected posting's amount against the match context. `None`
+/// marks a `Fill` leg — a balancing posting valued from its pool in
+/// [`inject_rule`]'s second pass. Every amount builtin is exactly one arm here,
+/// reading only from `ctx` and the leg's already-resolved `account`; that is the
+/// extension point for new builtins (a future `flow` reads the match position,
+/// `clamp` reads the headroom, and so on).
+fn eval_amount(
+    amount: &AutoAmount,
+    account: &str,
+    ctx: &MatchContext,
+) -> Option<crate::decimal::Decimal> {
+    use crate::decimal::Decimal;
+    match amount {
+        AutoAmount::Factor(f) => Some(ctx.trigger.value.mul_rounded(*f)),
+        AutoAmount::Clamp { negate } => {
+            // Headroom = the account's current positive balance (once it hits
+            // zero there is nothing left to absorb). Clamp the trigger magnitude
+            // to it; `-clamp(...)` books it negative.
+            let balance = ctx.balances.get(account).copied().unwrap_or_else(Decimal::zero);
+            let headroom = if balance > Decimal::zero() { balance } else { Decimal::zero() };
+            let mag = {
+                let v = ctx.trigger.value;
+                if v < Decimal::zero() { -v } else { v }
+            };
+            let e = if mag < headroom { mag } else { headroom };
+            Some(if *negate { -e } else { e })
+        }
+        AutoAmount::Fill => None,
+    }
 }
 
 #[cfg(test)]

@@ -1009,31 +1009,38 @@ replaced with the parts of that transaction's own date — `assets:budget:$year`
 on a 2026 entry becomes `assets:budget:2026`. A plain textual replace, so they
 work embedded anywhere in the account.
 
-**Named templates + `[key]` lookups.** A named rule `= NAME :: /pattern/` is
-a *template* — it does nothing on its own, and is fired by instantiating it
-with a pair, `= NAME a b`. Positional `$1` / `$2` placeholders in the pattern
-and posting accounts are filled from the two arguments; because the pair is
-unordered, each instantiation emits *both* directions (one rule each), so a
-single `= NAME a b` mirrors `a→b` and `b→a`. A lookup table is a set of
-`= NAME[key] :: value` entries — a string→string map on the same
-auto-transaction level (leading `=`), referenced as `NAME[key]` inside a
-posting account to expand a key to its value (unknown key → error). Together
-they track a per-pair "who owes whom" position:
+**Named templates + `[key]` lookups.** A named *template* is a `= NAME ::`
+header followed by one or more indented `/pattern/ [cond]` **rule blocks**, each
+with its own postings. It does nothing on its own; instantiating it with a pair,
+`= NAME a b`, applies *every* rule, filling the positional `$1` / `$2`
+placeholders in the patterns and posting accounts from the two arguments. A pair
+that moves both ways is simply *two rules* — the second with the pattern's
+`$1`/`$2` swapped and whatever amounts that direction needs — **written out**,
+not hidden behind an operator. A lookup table is a set of `= NAME[key] :: value`
+entries — a string→string map on the same auto-transaction level (leading `=`),
+referenced as `NAME[key]` inside a posting account to expand a key to its value
+(unknown key → error). Together they track a per-pair "who owes whom" position:
 
 ```
 = fullname[a] :: alpha-corp
 = fullname[b] :: beta-llc
 
-= reconcile :: /^transit:$1-$segment:$2-$segment$/ amount > 0
-	($1:owed:fullname[$2])    1
-	($2:owed:fullname[$1])   -1
+= reconcile ::
+	/^transit:$1-$segment:$2-$segment$/ amount > 0
+		($1:owed:fullname[$2])    amount
+		($2:owed:fullname[$1])   -amount
+	/^transit:$2-$segment:$1-$segment$/ amount > 0
+		($2:owed:fullname[$1])    amount
+		($1:owed:fullname[$2])   -amount
 
 = reconcile a b
 ```
 
-`= reconcile a b` expands to two concrete rules, matching `transit:a-…:b-…`
-and `transit:b-…:a-…`. Only *listed* pairs fire; deleting the `= reconcile`
-line removes the position.
+`= reconcile a b` applies both rules — `transit:a-…:b-…` (a sends to b) and
+`transit:b-…:a-…` (b sends to a) — each booking the sender's claim. Only
+*listed* pairs fire; deleting the `= reconcile a b` line removes the position.
+An indented line is nested one level per depth (a tab or two spaces): the
+`/pattern/` at one level, its postings at the next.
 
 **Unbalanced `(...)` postings and the `amount` clause.** Injected postings
 follow the normal balance rules: real and balanced-virtual `[...]` postings
@@ -1782,7 +1789,7 @@ references it.
 
 ```
 ~ 2021 monthly annual-budget
-	assets:budget:$year   €1200.00
+	assets:budget:$year   $1200.00
 	income:x
 ```
 
@@ -1793,7 +1800,7 @@ period **total**; a cadence divides them across the occurrences (`monthly` →
 ÷12, `daily` → ÷ days), with the last occurrence absorbing any rounding
 remainder so the slices sum back exactly. `$year` / `$month` / `$day` in an
 account are filled from each occurrence's date (so the example above accrues
-`assets:budget:2021` at €100/month). Without a cadence keyword it is a single
+`assets:budget:2021` at $100/month). Without a cadence keyword it is a single
 transaction on `YYYY-01-01`.
 
 Unlike ledger's `~` (an unbounded forecast that *repeats* the amount), acc's are

@@ -948,9 +948,9 @@ fn start() -> Result<(), acc::Error> {
     }
 
     let mut journal = if price_paths.is_empty() {
-        acc::load(&journal_paths)
+        acc::load_report(&journal_paths)
     } else {
-        acc::load_selective(
+        acc::load_selective_report(
             &journal_paths,
             &price_paths,
             filter_args.and_then(|f| f.exchange.as_deref()),

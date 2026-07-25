@@ -38,7 +38,7 @@ where
     P: AsRef<Path> + Sync,
 {
     let entries = read_and_parse(files)?;
-    finish_load(entries)
+    finish_load(entries, false)
 }
 
 /// Load the journal, then load only the price-DB pairs the report can use.
@@ -58,6 +58,43 @@ pub fn load_selective<P>(
 where
     P: AsRef<Path> + Sync,
 {
+    finish_load(selective_entries(journal_files, price_files, target)?, false)
+}
+
+/// Like [`load`], but applies `= /pattern/` auto-rules *before* booking. Used by
+/// the report commands so that balance assignments and assertions account for
+/// the injected postings; plain [`load`] (lint / sweep) stays source-only.
+pub fn load_report<P>(files: &[P]) -> Result<Journal, LoadError>
+where
+    P: AsRef<Path> + Sync,
+{
+    let entries = read_and_parse(files)?;
+    finish_load(entries, true)
+}
+
+/// The report-path counterpart of [`load_selective`] — expands auto-rules
+/// before booking (see [`load_report`]).
+pub fn load_selective_report<P>(
+    journal_files: &[P],
+    price_files: &[P],
+    target: Option<&str>,
+) -> Result<Journal, LoadError>
+where
+    P: AsRef<Path> + Sync,
+{
+    finish_load(selective_entries(journal_files, price_files, target)?, true)
+}
+
+/// Gather the entry stream for a selective (`-X`) load: journal entries plus
+/// only the price pairs the report can reach (see [`load_selective`]).
+fn selective_entries<P>(
+    journal_files: &[P],
+    price_files: &[P],
+    target: Option<&str>,
+) -> Result<Vec<Located<Entry>>, LoadError>
+where
+    P: AsRef<Path> + Sync,
+{
     let journal_entries = read_and_parse(journal_files)?;
     let mut needed = needed_commodities(&journal_entries, target);
     // Widen `needed` with the bridge commodities on each conversion path, so a
@@ -71,13 +108,25 @@ where
     // eager order where the price-dir files precede the user files.
     let mut entries = price_entries;
     entries.extend(journal_entries);
-    finish_load(entries)
+    Ok(entries)
 }
 
-/// Resolve → book → index a parsed entry stream into a `Journal`.
-fn finish_load(entries: Vec<Located<Entry>>) -> Result<Journal, LoadError> {
+/// Resolve → (optionally expand auto-rules) → book → index a parsed entry
+/// stream into a `Journal`. When `expand` is set, `= /pattern/` auto-rules are
+/// applied *before* booking, so balance assignments and assertions see the
+/// injected postings. lint / sweep pass `false` — they validate the source, not
+/// the injections.
+fn finish_load(entries: Vec<Located<Entry>>, expand: bool) -> Result<Journal, LoadError> {
     let resolved = resolver::resolve(entries)?;
-    let transactions = booker::book(resolved.transactions)?;
+    // Pass 1 fills every ordinary transaction's omitted amount; on the report
+    // path the expander then scales its rules against those concrete numbers;
+    // pass 2 resolves `= TARGET` assignments/assertions against a running
+    // balance that now includes the injected postings.
+    let mut transactions = booker::fill(resolved.transactions)?;
+    if expand {
+        crate::expander::expand(&mut transactions, &resolved.auto_rules);
+    }
+    let transactions = booker::assert_balances(transactions)?;
     let prices = indexer::index(resolved.prices);
     let mut precisions = precisions_per_commodity(&transactions);
     // Explicit `precision N` under `commodity` directives wins over

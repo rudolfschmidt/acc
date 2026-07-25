@@ -215,12 +215,15 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fil
     let mut first = true;
 
     for entry in entries {
-        let is_tx = matches!(entry.value, Entry::Transaction(_));
+        // Period transactions (`~`) are transactions too — space them like
+        // ordinary ones so consecutive `~` blocks (and a `~` block next to a
+        // dated one) get a blank line between them.
+        let is_tx = matches!(entry.value, Entry::Transaction(_) | Entry::Periodic { .. });
         let is_comment = matches!(entry.value, Entry::Comment(_));
-        // Blank line for readability: between consecutive transactions,
-        // and at the boundary between a comment block and the surrounding
-        // content (so a commented-out transaction gets breathing room).
-        // Never before the first entry, and not between adjacent comment
+        // Blank line for readability: between consecutive transactions (ordinary
+        // or periodic), and at the boundary between a comment block and the
+        // surrounding content (so a commented-out transaction gets breathing
+        // room). Never before the first entry, and not between adjacent comment
         // lines — a multi-line comment block stays together.
         if !first && ((is_tx && prev_was_tx) || (is_comment != prev_was_comment)) {
             out.push('\n');
@@ -281,11 +284,34 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fil
                     out.push('\n');
                 }
             }
-            // Auto-rule / template / periodic blocks span multiple lines (header
-            // + indented children); their body here needs no re-derivation —
-            // simpler to emit the source lines verbatim than rebuild the syntax.
-            // The block ends at the next line that isn't indented.
-            Entry::AutoRule(_) | Entry::AutoTemplate { .. } | Entry::Periodic { .. } => {
+            // Period transactions align like ordinary ones: the header
+            // (`~ <period> [cadence] <desc>`) stays verbatim — its syntax isn't
+            // worth rebuilding — but each posting runs through the shared
+            // aligner so its amount lands in the file-wide amount column.
+            Entry::Periodic { postings, .. } => {
+                if let Some(header) = source_lines.get(entry.line.saturating_sub(1)) {
+                    out.push_str(header);
+                    out.push('\n');
+                }
+                for lp in postings {
+                    let src = source_lines.get(lp.line.saturating_sub(1)).copied();
+                    render_posting(
+                        &lp.value,
+                        lp.line,
+                        account_width,
+                        amount_width,
+                        src,
+                        false,
+                        None,
+                        &mut out,
+                    );
+                }
+            }
+            // Auto-rule / template blocks span multiple lines (header + indented
+            // children); their body needs no re-derivation — simpler to emit the
+            // source lines verbatim than rebuild the syntax. The block ends at
+            // the next line that isn't indented.
+            Entry::AutoRule(_) | Entry::AutoTemplate { .. } => {
                 let start = entry.line.saturating_sub(1);
                 let mut end = start + 1;
                 while end < source_lines.len() {
@@ -530,14 +556,18 @@ fn column_widths(entries: &[Located<Entry>], source_lines: &[&str]) -> (usize, u
     let mut account_max = 0usize;
     let mut amount_max = 0usize;
     for entry in entries {
-        if let Entry::Transaction(tx) = &entry.value {
-            for lp in &tx.postings {
-                let a = render_account(&lp.value);
-                account_max = account_max.max(a.chars().count());
-                if let Some(src) = source_lines.get(lp.line.saturating_sub(1)).copied() {
-                    let parts = extract_posting_parts(src);
-                    amount_max = amount_max.max(parts.amount_str.chars().count());
-                }
+        // Ordinary and period transactions both align into the same columns.
+        let postings = match &entry.value {
+            Entry::Transaction(tx) => &tx.postings,
+            Entry::Periodic { postings, .. } => postings,
+            _ => continue,
+        };
+        for lp in postings {
+            let a = render_account(&lp.value);
+            account_max = account_max.max(a.chars().count());
+            if let Some(src) = source_lines.get(lp.line.saturating_sub(1)).copied() {
+                let parts = extract_posting_parts(src);
+                amount_max = amount_max.max(parts.amount_str.chars().count());
             }
         }
     }

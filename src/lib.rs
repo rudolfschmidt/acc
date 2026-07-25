@@ -1,12 +1,15 @@
 //! Pipeline:
 //!
 //! ```text
-//! load:    parser → resolver → booker → indexer ─────────────────────► Journal
-//! enrich:  expander → realizer → lotter → translator → revaluator      (journal-global)
+//! load:    parser → resolver → fill → (expander) → assert → indexer ──► Journal
+//! enrich:  realizer → lotter → translator → revaluator                 (journal-global)
 //! report:  filter → rebalancer → sorter → commands                     (CLI-driven)
 //! ```
 //!
-//! [`load`] builds a validated `Journal`. [`pipeline::enrich`] runs the
+//! [`load`] builds a validated `Journal`; the report path ([`load_report`])
+//! applies `= /pattern/` auto-rules between the booker's fill and assert
+//! passes, so balance assignments and assertions see the injected postings.
+//! [`pipeline::enrich`] then runs the
 //! journal-global phases that must see every transaction (realizer and
 //! translator only under `-X`; the revaluator only under `-X` with
 //! `--unrealized`; lotter needs capital accounts). The report phases are
@@ -34,7 +37,7 @@ pub mod translator;
 pub(crate) mod i256;
 
 pub use error::Error;
-pub use loader::{load, load_selective, Journal, LoadError};
+pub use loader::{load, load_report, load_selective, load_selective_report, Journal, LoadError};
 
 /// Extension treated as a journal file when walking a directory.
 /// Only `.ledger` is picked up by the recursive walk, so non-journal

@@ -80,22 +80,20 @@ pub enum Entry {
         value: String,
     },
 
-    /// `= NAME :: /pattern/` — a named auto-rule *template*. Its pattern and
-    /// posting accounts carry positional `$1` / `$2` placeholders (and
-    /// `NAME[key]` lookup calls); an `AutoInstance` substitutes a pair in. Kept
-    /// apart from `AutoRule` because it isn't matchable until filled.
+    /// `= NAME ::` header + one or more indented `/pattern/ [cond]` rule blocks
+    /// — a named auto-rule *template*. Each rule's pattern and posting accounts
+    /// carry positional `$1` / `$2` placeholders (and `NAME[key]` lookup calls);
+    /// an `AutoInstance` substitutes a pair into every rule. A second transfer
+    /// direction is just a second rule (mirrored pattern, its own amounts) — no
+    /// operator. Kept apart from `AutoRule` because it isn't matchable until
+    /// filled.
     AutoTemplate {
         name: String,
-        /// Pattern inner text (no surrounding `/…/`), placeholders intact.
-        pattern: String,
-        postings: Vec<AutoPosting>,
-        /// Optional `amount <op> N` filter, applied to every instantiation.
-        condition: Option<AmountCondition>,
+        rules: Vec<TemplateRule>,
     },
 
-    /// `= NAME arg1 arg2` — instantiate template `NAME` with a pair. The
-    /// resolver substitutes the args in both orderings (one rule per
-    /// direction) and emits concrete `AutoRule`s.
+    /// `= NAME a b` — instantiate template `NAME` for the pair, binding `$1`=a,
+    /// `$2`=b into every one of its rules.
     AutoInstance {
         name: String,
         args: Vec<String>,
@@ -179,6 +177,20 @@ pub struct AutoRule {
     pub postings: Vec<AutoPosting>,
     /// Optional `amount <op> N` filter on the matched posting's amount.
     pub condition: Option<AmountCondition>,
+}
+
+/// One rule inside a `= NAME ::` template: a matcher plus the postings it
+/// injects, written as an indented `/pattern/ [cond]` block with its own
+/// postings under it. Mirrors [`AutoRule`] but keeps the pattern as raw text
+/// with `$1`/`$2` placeholders intact — the resolver substitutes a pair in and
+/// parses it into an `AutoPattern` per instance. A template holds a list of
+/// these; a second transfer direction is simply another rule.
+#[derive(Debug, Clone)]
+pub struct TemplateRule {
+    /// Pattern inner text (no surrounding `/…/`), placeholders intact.
+    pub pattern: String,
+    pub condition: Option<AmountCondition>,
+    pub postings: Vec<AutoPosting>,
 }
 
 /// Pattern kinds supported in V1 — a subset of ledger-cli regex

@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.26.0 — 2026-07-24
+
+### Wed 24 Jul 2026 - Multi-rule auto-templates, a two-pass booker, and aligned periodics
+
+**Auto-templates hold multiple rules.** A named template is now a `= NAME ::`
+header followed by one or more indented `/pattern/ [cond]` **rule blocks**, each
+with its own postings; instantiating it (`= NAME a b`) applies every rule with
+`$1`/`$2` bound to the pair. A pair that moves both ways is simply *two rules* —
+the second with the pattern's `$1`/`$2` swapped and whatever amounts that
+direction needs — written out in the template. This replaces the old implicit
+both-orderings expansion (and a brief, unshipped detour through directionality
+operators like `<->` / `<~>`): the reverse direction is now a rule you can read,
+not a swap hidden behind a symbol — which also stops a directional rule from
+silently booking the wrong entity. One indentation rule governs the nesting,
+defined in one place: a tab or two spaces per level (the `/pattern/`, then its
+postings one level deeper).
+
+**The booker runs in two passes so auto-rules see filled amounts.** Booking is
+split into `fill` — transaction-local balancing that gives every posting a
+concrete amount — and `assert` — the cross-transaction balance assignments and
+assertions. On the report path the auto-rule expander runs *between* the two,
+which fixes two things at once: an auto-rule now fires on a bare (auto-balanced)
+trigger leg (pass 1 fills it first), and a `= TARGET` balance assignment now
+accounts for the postings the expander injected — so a year-end `budget = 0`
+zeroes the *full* balance, injections included, not just the source amount.
+
+**Periodic transactions format like ordinary ones.** `acc format` now gives each
+`~` block a blank line of separation and aligns its postings to the file-wide
+amount column, instead of emitting them verbatim.
+
+**Groundwork.** Every injected auto-rule amount is now computed against a single
+`MatchContext` (trigger, account, date, running balances) through one
+`eval_amount` — so a future amount builtin is one match arm, not another
+argument threaded through the expander. The example currency in the docs and
+tests is `$` throughout.
+
 ## 0.25.0 — 2026-07-24
 
 ### Fri 24 Jul 2026 - Periodic transactions, date variables, and richer auto-rule amounts
@@ -9,8 +45,8 @@
 occurrence's start — one for `~ 2021`, twelve for `monthly`, one per day for
 `daily`. The written amounts are the period *total*; the cadence divides them
 across the occurrences, and the last occurrence absorbs the rounding remainder
-so the slices sum back exactly (a `daily` split of €1000 over 365 days lands on
-€1000.00 to the cent). Unlike ledger's `~` — an unbounded forecast that repeats
+so the slices sum back exactly (a `daily` split of $1000 over 365 days lands on
+$1000.00 to the cent). Unlike ledger's `~` — an unbounded forecast that repeats
 the amount — acc's are bounded to the year and split the total; the generated
 entries are real, so they book, balance and auto-fill a bare posting like any
 hand-written one.
