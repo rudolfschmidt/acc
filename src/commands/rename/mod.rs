@@ -15,7 +15,7 @@
 //! The match is structural, not textual: each file is parsed so we know
 //! exactly which lines are postings and what each posting's account is.
 //! Only the account token on a matched *posting* line is rewritten —
-//! `account` directives, auto-rule patterns, comments and descriptions
+//! `account` directives, comments and descriptions
 //! are left untouched — and the rest of the file stays byte-for-byte
 //! identical. A file that fails to parse is reported on stderr and
 //! skipped, never edited.

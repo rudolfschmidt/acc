@@ -1,6 +1,6 @@
 //! Realizer phase — inject slippage gain/loss postings.
 //!
-//! Runs inside the enrich pipeline (after the expander), i.e. *before*
+//! Runs inside the enrich pipeline (after load), i.e. *before*
 //! filtering and rebalance, and only when the user passes `-X TARGET`.
 //! For every multi-commodity transaction we
 //! convert each balance-contributing posting into `target` at the

@@ -1,5 +1,8 @@
-//! Claude-Code-style diff preview for the import dry-run: a few existing
-//! lines as context, then the new lines on a green band with `+`.
+//! Claude-Code-style diff preview for the import dry-run: a few existing lines
+//! as context, then the new lines on a green band with `+`, role-coloured by
+//! ledger element (date, title, comment, account, amount). The band geometry,
+//! gutter, context row, and path helper all come from [`crate::diff`]; this
+//! module owns only import's addition palette and the preview's overall shape.
 //!
 //! Colour is emitted only when stdout is a terminal (the `colored` crate
 //! auto-detects), so piping the dry-run gives clean plain text.
@@ -8,21 +11,10 @@ use std::path::Path;
 
 use colored::Colorize;
 
-/// Existing lines of context shown above the additions.
-const CONTEXT: usize = 12;
+use crate::diff::{self, BAND, GUTTER};
 
-/// Spaces a tab is shown as in the diff (tabs can't carry the band).
-const TAB_WIDTH: usize = 4;
-
-/// Width of the line-number gutter.
-const GUTTER: usize = 9;
-
-/// The dark-green band behind every addition (#022800).
-const BAND: (u8, u8, u8) = (2, 40, 0);
-
-// A cohesive pastel palette for the additions, on the #022800 band —
-// anchored on the lavender-blue accounts and sage comment: warm peach
-// date, soft-light title, and clear green / red amounts.
+// Import's addition palette — role colours on the green band. Import-only:
+// reconcile paints its diff plain white, so these never touch it.
 const C_DATE: (u8, u8, u8) = (250, 179, 135); // #fab387 peach
 const C_TITLE: (u8, u8, u8) = (205, 214, 244); // #cdd6f4 soft text
 const C_COMMENT: (u8, u8, u8) = (110, 135, 110); // #6e876e sage
@@ -45,41 +37,30 @@ pub fn diff_preview(existing: &str, added: &str, count: usize, file: &Path, skip
     };
     let new_lines: Vec<&str> = new_text.lines().collect();
 
-    // Full-width green band: pad every addition so the highlight spans the
-    // whole line like the editor diff — including a long `; csv:` comment that
-    // wraps, where the pad must also fill the last visual row (see below).
-    let cols = crossterm::terminal::size().map(|(c, _)| c as usize).unwrap_or(100).max(1);
-
-    // Context: trailing existing lines, dim line numbers, grey content
-    // (#a3a39f) — the unchanged surroundings. Tabs are expanded so the
-    // indentation matches the additions below (which can't keep tabs — a
-    // terminal won't paint the band across a tab cell).
-    let ctx_start = total.saturating_sub(CONTEXT);
+    // Context: trailing existing lines, dimmed. `diff::context_line` is the
+    // shared renderer, so reconcile shows identical context above its removals.
+    let ctx_start = total.saturating_sub(diff::CONTEXT);
     for (i, line) in existing_lines[ctx_start..].iter().enumerate() {
-        let n = ctx_start + i + 1;
-        let line = untab(line);
-        println!("{}  {}", gutter(n).dimmed(), line.dimmed());
+        println!("{}", diff::context_line(ctx_start + i + 1, line));
     }
 
-    // Additions: the line number and the `+` share the accent green
-    // (#50c850); the content is off-white (#f8f8f2); everything sits on a
-    // dark-green band (#022800) padded out to the full width.
+    // Additions: the gutter and `+` are accent green (#50c850); the content is
+    // role-coloured by `colorize_added`. The band geometry (padding to the row
+    // boundary) is `diff::band_line`, shared with reconcile — only the palette
+    // differs, so a colour change here can never move reconcile's columns.
+    let cols = diff::term_cols();
     for (i, line) in new_lines.iter().enumerate() {
-        let line = untab(line);
         let n = total + i + 1;
-        // Pad to the next full terminal row so the band spans the whole line
-        // even when the content wraps — a single-row pad would leave a wrapped
-        // remainder un-highlighted. Visible cells = gutter + " " + "+" (2) +
-        // content; `% cols` gives the fill needed to reach a row boundary.
-        let visible = GUTTER + 2 + line.chars().count();
-        let pad = (cols - visible % cols) % cols;
-        println!(
-            "{}{}{}{}{}",
-            gutter(n).truecolor(80, 200, 80).on_truecolor(BAND.0, BAND.1, BAND.2),
+        let line = diff::untab(line);
+        let mark = format!(
+            "{}{}{}",
+            diff::gutter(n).truecolor(80, 200, 80).on_truecolor(BAND.0, BAND.1, BAND.2),
             " ".on_truecolor(BAND.0, BAND.1, BAND.2),
             "+".truecolor(80, 200, 80).on_truecolor(BAND.0, BAND.1, BAND.2),
-            colorize_added(&line),
-            " ".repeat(pad).on_truecolor(BAND.0, BAND.1, BAND.2),
+        );
+        println!(
+            "{}",
+            diff::band_line(&mark, GUTTER + 2, &colorize_added(&line), line.chars().count(), cols, BAND),
         );
     }
 
@@ -93,7 +74,7 @@ pub fn diff_preview(existing: &str, added: &str, count: usize, file: &Path, skip
 /// string so the piped path can send it to stderr (keeping stdout pure ledger)
 /// while the terminal path prints it to stdout.
 pub fn summary(count: usize, file: &Path, skipped: usize, written: bool) -> String {
-    let path = display_path(file);
+    let path = diff::display_path(file);
     let t = if count == 1 { "transaction" } else { "transactions" };
     if written {
         format!(
@@ -117,33 +98,10 @@ pub fn summary(count: usize, file: &Path, skipped: usize, written: bool) -> Stri
     }
 }
 
-fn gutter(n: usize) -> String {
-    format!("{:>width$}", n, width = GUTTER)
-}
-
-/// The target path for the header, with the home directory collapsed back
-/// to `~` (the form the profile is written in).
-fn display_path(file: &Path) -> String {
-    let s = file.to_string_lossy();
-    if let Ok(home) = std::env::var("HOME")
-        && let Some(rest) = s.strip_prefix(&home)
-    {
-        return format!("~{}", rest);
-    }
-    s.into_owned()
-}
-
-/// Expand tabs to spaces. A terminal won't paint the active background
-/// colour across a tab cell, so the indenting tab in a posting line would
-/// leave an un-highlighted gap in the band; spaces fill it.
-fn untab(line: &str) -> String {
-    line.replace('\t', &" ".repeat(TAB_WIDTH))
-}
-
-/// Colour one addition line by its ledger role, using `colored`'s native
-/// styles: `<date> * <title>` header, `; csv: …` comment, or a
-/// `<account>  <amount>` posting. Amounts are green when positive, red
-/// when negative.
+/// Colour one import addition line by its ledger role, on the green band: a
+/// `<date> * <title>` header (peach date + soft bold title), a `; …` comment
+/// (sage), or a `<account>  <amount>` posting (lavender account, green/red
+/// amount). Import-only — reconcile renders its lines plain white.
 fn colorize_added(line: &str) -> String {
     if line.is_empty() {
         return String::new(); // pad fills the band
@@ -172,10 +130,15 @@ fn colorize_added(line: &str) -> String {
         return tc(line, C_COMMENT);
     }
 
-    // Posting: indent, account, then (optionally) the gap + amount.
+    // Posting: indent, account, then (optionally) the gap + amount. Split at the
+    // first space with `find`, NOT `split_once` — `split_once` consumes that
+    // space, dropping one column of the alignment gap and shifting the amount a
+    // column left of where `format` put it. `find` keeps the space in `rest`.
     let indent = &line[..line.len() - trimmed.len()];
-    match trimmed.split_once(' ') {
-        Some((account, rest)) => {
+    match trimmed.find(' ') {
+        Some(idx) => {
+            let account = &trimmed[..idx];
+            let rest = &trimmed[idx..];
             let amount = rest.trim_start();
             let gap = &rest[..rest.len() - amount.len()];
             let amount_c = if amount.contains('-') { C_NEG } else { C_POS };
@@ -188,5 +151,38 @@ fn colorize_added(line: &str) -> String {
             )
         }
         None => format!("{}{}", tc(indent, C_ACCOUNT), tc(trimmed, C_ACCOUNT)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ANSI-strip helper for the layout test below.
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for c2 in chars.by_ref() {
+                    if c2 == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn colorize_preserves_every_column() {
+        colored::control::set_override(true);
+        // A posting exactly as `format_source` emits it (untabbed): account,
+        // an aligned run of spaces, then the amount. Re-colouring must not move
+        // the amount by a single column.
+        let line = "    assets:12:bitcoin-uncategorized        BTC0.00018958";
+        assert_eq!(strip_ansi(&colorize_added(line)), line);
     }
 }

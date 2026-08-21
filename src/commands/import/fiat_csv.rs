@@ -405,25 +405,24 @@ fn fmt_amount(s: &str, precision: usize) -> String {
 // commodities / csv / io
 // ---------------------------------------------------------------------
 
-/// Parse a `commodities.ledger`: return (code→symbol, precision-of-target).
+/// Parse a `commodities.toml`: return (code→symbol, precision-of-target). Each
+/// `[[commodity]]`'s symbol maps to itself and every alias folds to it — keys
+/// upper-cased, so a source code like `EUR` resolves regardless of case. The
+/// precision is that of the commodity whose symbol is `target` (default 2).
 fn load_commodities(path: &Path, target: &str) -> Result<(HashMap<String, String>, usize), Error> {
     let src = std::fs::read_to_string(path)
         .map_err(|e| Error::from(format!("import: read {}: {}", path.display(), e)))?;
+    let commodities = crate::loader::config::commodities_from_toml(&src)
+        .map_err(|e| Error::from(format!("import: parse {}: {}", path.display(), e)))?;
     let mut sym = HashMap::new();
     let mut precision = 2usize;
-    let mut current = String::new();
-    for line in src.lines() {
-        let t = line.trim();
-        if let Some(s) = t.strip_prefix("commodity ") {
-            current = s.trim().to_string();
-            sym.insert(current.to_uppercase(), current.clone());
-        } else if let Some(a) = t.strip_prefix("alias ") {
-            sym.insert(a.trim().to_uppercase(), current.clone());
-        } else if let Some(p) = t.strip_prefix("precision ")
-            && current == target
-            && let Ok(n) = p.trim().parse::<usize>()
-        {
-            precision = n;
+    for c in commodities {
+        sym.insert(c.symbol.to_uppercase(), c.symbol.clone());
+        for a in &c.aliases {
+            sym.insert(a.to_uppercase(), c.symbol.clone());
+        }
+        if c.symbol == target {
+            precision = c.precision;
         }
     }
     Ok((sym, precision))
@@ -510,7 +509,7 @@ mod tests {
     fn field_val_takes_first_non_empty_column() {
         let dir = std::env::temp_dir().join(format!("acc-import-multi-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let com = write(&dir, "com.ledger", "commodity €\n    precision 2\n");
+        let com = write(&dir, "com.toml", "[[commodity]]\nsymbol = \"€\"\nprecision = 2\n");
         let conf = write(
             &dir,
             "bank.conf",
@@ -558,7 +557,7 @@ mod tests {
     }
     
     fn test_profile(dir: &std::path::Path) -> Profile {
-        let com = write(dir, "com.ledger", "commodity €\n    alias EUR\n    precision 2\n");
+        let com = write(dir, "com.toml", "[[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n");
         let conf = write(
             dir,
             "bank.conf",
@@ -590,7 +589,7 @@ mod tests {
     fn semicolon_conditions_are_anded() {
         let dir = std::env::temp_dir().join(format!("acc-import-and-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let com = write(&dir, "com.ledger", "commodity €\n    precision 2\n");
+        let com = write(&dir, "com.toml", "[[commodity]]\nsymbol = \"€\"\nprecision = 2\n");
         let conf = write(
             &dir,
             "bank.conf",
@@ -623,7 +622,7 @@ mod tests {
     fn rule_value_anchors() {
         let dir = std::env::temp_dir().join(format!("acc-import-anchor-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let com = write(&dir, "com.ledger", "commodity €\n    precision 2\n");
+        let com = write(&dir, "com.toml", "[[commodity]]\nsymbol = \"€\"\nprecision = 2\n");
         let conf = write(
             &dir,
             "bank.conf",

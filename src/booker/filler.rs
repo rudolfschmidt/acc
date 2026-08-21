@@ -1,8 +1,8 @@
 //! Booker pass 1 — transaction-local balancing.
 //!
 //! Fills every ordinary transaction's one omitted amount so its
-//! commodities sum to zero, giving downstream auto-rules concrete numbers
-//! to scale against. Transactions carrying a balance assignment (`= TARGET`
+//! commodities sum to zero, giving the downstream inject hook concrete
+//! numbers to scale against. Transactions carrying a balance assignment (`= TARGET`
 //! with no amount) are deferred to
 //! [`assert_balances`](super::asserter::assert_balances): their value
 //! depends on the cross-transaction running balance that only pass 2 has,

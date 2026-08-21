@@ -7,10 +7,10 @@
 //! identifies pass-through accounts by their journal-wide native sum.
 //! Filtering first would change those sums and corrupt the result. They
 //! are also where the subtle cross-phase rules live, so they belong
-//! together in one tested place rather than inlined in the CLI. (Auto-rules
-//! `= /pattern/` are applied earlier — in the report load path, between the
-//! booker's fill and assert passes, so balance assignments/assertions see the
-//! injected postings — by the time enrich runs the journal is already expanded.)
+//! together in one tested place rather than inlined in the CLI. (The inject
+//! hook runs earlier — in the report load path, between the booker's fill and
+//! assert passes, so balance assignments/assertions see the injected postings —
+//! by the time enrich runs the journal already carries them.)
 //!
 //! 1. **realizer**  — per-transaction slippage gain/loss: the trade-day
 //!    execution spread, where each leg's market value diverges from the
@@ -45,10 +45,10 @@ use crate::loader::Journal;
 /// accounts are declared (it realizes in the booked commodity either
 /// way).
 pub fn enrich(journal: &mut Journal, target: Option<&str>, unrealized: bool) {
-    // Auto-rules (`= /pattern/`) are applied in the report load path, between
-    // the booker's fill and assert passes, so balance assignments/assertions
-    // see the injected postings — see `loader::load_report`. The journal
-    // reaching enrich is already expanded.
+    // The inject hook runs in the report load path, between the booker's fill
+    // and assert passes, so balance assignments/assertions see the injected
+    // postings — see the report load path in `loader`. The journal reaching
+    // enrich already carries them.
 
     // The realizer books the per-trade execution spread (slippage) on every
     // multi-commodity transaction; the lotter books the holding-period

@@ -62,19 +62,10 @@ where
     finish_load(selective_entries(journal_files, price_files, target)?, &mut |_| {})
 }
 
-/// Like [`load`], but exposes the pre-book [`Inject`] hook (a no-op here — see
-/// [`load_report_with`]). Used by the report commands so an embedder's injected
-/// postings are seen by balance assignments and assertions; plain [`load`]
-/// (lint / sweep) stays source-only.
-pub fn load_report<P>(files: &[P]) -> Result<Journal, LoadError>
-where
-    P: AsRef<Path> + Sync,
-{
-    load_report_with(files, &mut |_| {})
-}
-
-/// [`load_report`] with an [`Inject`] hook run before booking — the seam an
-/// embedder uses to add its own programmatically-built transactions.
+/// [`load`] with an [`Inject`] hook run before booking — the seam an embedder
+/// uses to add its own programmatically-built transactions. Used by the report
+/// commands so an embedder's injected postings are seen by balance assignments
+/// and assertions; plain [`load`] (lint / sweep) stays source-only.
 pub fn load_report_with<P>(files: &[P], inject: Inject) -> Result<Journal, LoadError>
 where
     P: AsRef<Path> + Sync,
@@ -83,20 +74,8 @@ where
     finish_load(entries, inject)
 }
 
-/// The report-path counterpart of [`load_selective`] — exposes the pre-book
-/// [`Inject`] hook (a no-op here; see [`load_selective_report_with`]).
-pub fn load_selective_report<P>(
-    journal_files: &[P],
-    price_files: &[P],
-    target: Option<&str>,
-) -> Result<Journal, LoadError>
-where
-    P: AsRef<Path> + Sync,
-{
-    load_selective_report_with(journal_files, price_files, target, &mut |_| {})
-}
-
-/// [`load_selective_report`] with an [`Inject`] hook run before booking.
+/// The report-path counterpart of [`load_selective`] with an [`Inject`] hook run
+/// before booking — the seam an embedder uses to add its own transactions.
 pub fn load_selective_report_with<P>(
     journal_files: &[P],
     price_files: &[P],

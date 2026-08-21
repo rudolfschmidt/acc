@@ -59,25 +59,22 @@ pub(super) fn signed(v: i128, dp: u32) -> String {
     if v < 0 { format!("-{}", m) } else { m }
 }
 
-/// Parse a `commodities.ledger` for its `alias` declarations only: inside a
-/// `commodity SYM` block each `alias CODE` maps CODE→SYM (EUR→€, USD→$).
-/// `parity` / `precision` lines are ignored — a parity commodity keeps its own
-/// symbol (it values 1:1 at report time), so folding it here would be wrong.
-/// Best-effort: a missing or unreadable file yields an empty map.
+/// Read a `commodities.toml` for its aliases only: each `[[commodity]]`'s
+/// `aliases` fold to its `symbol` (EUR→€, USD→$). `parities` are ignored — a
+/// parity commodity keeps its own symbol (it values 1:1 at report time), so
+/// folding it here would be wrong. Best-effort: a missing, unreadable or
+/// unparseable file yields an empty map.
 pub(super) fn load_aliases(path: &Path) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let Ok(src) = std::fs::read_to_string(path) else {
         return map;
     };
-    let mut current: Option<String> = None;
-    for line in src.lines() {
-        let t = line.trim();
-        if let Some(sym) = t.strip_prefix("commodity ") {
-            current = Some(sym.trim().to_string());
-        } else if let Some(code) = t.strip_prefix("alias ")
-            && let Some(sym) = &current
-        {
-            map.insert(code.trim().to_string(), sym.clone());
+    let Ok(commodities) = crate::loader::config::commodities_from_toml(&src) else {
+        return map;
+    };
+    for c in commodities {
+        for a in c.aliases {
+            map.insert(a, c.symbol.clone());
         }
     }
     map
@@ -110,12 +107,16 @@ mod tests {
 
     #[test]
     fn load_aliases_reads_only_alias_lines_not_parity() {
-        use std::io::Write as _;
         let dir = std::env::temp_dir().join(format!("acc-exlib-alias-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("commodities.ledger");
-        let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(b"commodity $\n\talias USD\ncommodity USDC\n\tparity $\n\tprecision 2\ncommodity \xe2\x82\xac\n\talias EUR\n").unwrap();
+        let path = dir.join("commodities.toml");
+        std::fs::write(
+            &path,
+            "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\"]\nprecision = 2\n\
+             [[commodity]]\nsymbol = \"USDC\"\nparities = [\"$\"]\nprecision = 2\n\
+             [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n",
+        )
+        .unwrap();
         let map = load_aliases(&path);
         assert_eq!(map.get("USD").map(String::as_str), Some("$"));
         assert_eq!(map.get("EUR").map(String::as_str), Some("€"));

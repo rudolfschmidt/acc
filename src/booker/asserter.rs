@@ -5,7 +5,7 @@
 //! assignment (infer the amount that reaches the target), fill any
 //! remaining counter, apply every posting to the running balance, and
 //! verify any `= TARGET` assertion. Runs after [`fill`](super::filler::fill)
-//! and, on the report path, after the auto-rule expander — so an assignment
+//! and, on the report path, after the inject hook — so an assignment
 //! like `budget = 0` accounts for the injected postings already in the
 //! running balance.
 

@@ -1,14 +1,14 @@
 //! Pipeline:
 //!
 //! ```text
-//! load:    parser → resolver → fill → (expander) → assert → indexer ──► Journal
+//! load:    parser → resolver → fill → (inject) → assert → indexer ──► Journal
 //! enrich:  realizer → lotter → translator → revaluator                 (journal-global)
 //! report:  filter → rebalancer → sorter → commands                     (CLI-driven)
 //! ```
 //!
-//! [`load`] builds a validated `Journal`; the report path ([`load_report`])
-//! applies `= /pattern/` auto-rules between the booker's fill and assert
-//! passes, so balance assignments and assertions see the injected postings.
+//! [`load`] builds a validated `Journal`; the report path runs the embedder's
+//! inject hook between the booker's fill and assert passes, so balance
+//! assignments and assertions see the injected postings.
 //! [`pipeline::enrich`] then runs the
 //! journal-global phases that must see every transaction (realizer and
 //! translator only under `-X`; the revaluator only under `-X` with
@@ -20,6 +20,7 @@ pub mod cli;
 pub mod commands;
 pub mod date;
 pub mod decimal;
+pub mod diff;
 pub mod error;
 pub mod filter;
 pub mod indexer;
@@ -38,8 +39,7 @@ pub(crate) mod i256;
 
 pub use error::Error;
 pub use loader::{
-    load, load_report, load_report_with, load_selective, load_selective_report,
-    load_selective_report_with, Inject, Journal, LoadError,
+    load, load_report_with, load_selective, load_selective_report_with, Inject, Journal, LoadError,
 };
 
 /// Extension treated as a journal file when walking a directory.

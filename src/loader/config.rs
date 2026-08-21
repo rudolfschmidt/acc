@@ -35,14 +35,18 @@ pub struct Config {
     capital: GainLoss,
 }
 
+/// One `[[commodity]]` table. Public so callers outside the config-directory
+/// merge can read a single TOML file: the `import` command references one
+/// `commodities.toml` from a profile and maps the source's currency codes onto
+/// ledger symbols, needing each commodity's symbol, aliases and precision.
 #[derive(Deserialize)]
-struct Commodity {
-    symbol: String,
+pub struct Commodity {
+    pub symbol: String,
     #[serde(default)]
-    aliases: Vec<String>,
+    pub aliases: Vec<String>,
     #[serde(default)]
-    parities: Vec<String>,
-    precision: usize,
+    pub parities: Vec<String>,
+    pub precision: usize,
 }
 
 #[derive(Deserialize)]
@@ -152,6 +156,14 @@ pub fn entries_from_str(
     file: &Arc<str>,
 ) -> Result<Vec<Located<Entry>>, toml::de::Error> {
     Ok(toml::from_str::<Config>(source)?.entries(file))
+}
+
+/// The `[[commodity]]` entries of a single TOML source. For the `import`
+/// command, which references one `commodities.toml` from a profile and maps the
+/// source's currency codes onto ledger symbols — outside the config-directory
+/// merge that [`Config::from_dir`] performs.
+pub fn commodities_from_toml(source: &str) -> Result<Vec<Commodity>, toml::de::Error> {
+    Ok(toml::from_str::<Config>(source)?.commodity)
 }
 
 /// The default `-X` valuation target from `[exchange] default`, or `None`.

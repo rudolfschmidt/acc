@@ -35,7 +35,7 @@ use crate::parser::{
     self,
     entry::Entry,
     located::Located,
-    posting::Posting,
+    posting::{Costs, Posting},
     transaction::{State, Transaction},
 };
 
@@ -192,7 +192,7 @@ fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
 
 fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fill: bool) -> String {
     let source_lines: Vec<&str> = source.lines().collect();
-    let (account_width, amount_width) = column_widths(entries, &source_lines);
+    let (account_width, amount_width) = column_widths(entries, &source_lines, infer);
     // Transactions keep their source order by default. With `sort`,
     // stably date-sort them: non-transaction entries (price directives,
     // commodity blocks, top-level comments) keep their original
@@ -321,10 +321,13 @@ fn infers_last(tx: &Transaction) -> bool {
 }
 
 /// `--fill`: the inverse of `--infer`. When a transaction has more than two
-/// postings, exactly one of them lacks an amount, and every other posting
-/// is real (non-virtual) in the same commodity with no cost, the missing
-/// amount is the negated sum of the rest — compute it so it can be written
-/// out explicitly. Returns (index of the empty posting, rendered amount).
+/// postings, exactly one of them lacks an amount, and every other real
+/// (non-virtual) posting weighs to the same commodity, the missing amount is
+/// the negated sum of those weights — compute it so it can be written out
+/// explicitly. A `@`/`@@` priced posting weighs its *cost* (the balance
+/// commodity), so `AAE-29563 @@ €195.85` counts as −€195.85 and the fill lands
+/// in €. Lot-cost (`{…}`) postings are still left alone. Returns (index of the
+/// empty posting, rendered amount).
 fn fills(tx: &Transaction) -> Option<(usize, String)> {
     if tx.postings.len() <= 2 {
         return None;
@@ -346,16 +349,37 @@ fn fills(tx: &Transaction) -> Option<(usize, String)> {
                 empty = Some(i);
             }
             Some(a) => {
-                if p.costs.is_some() || p.lot_cost.is_some() {
-                    return None; // a cost changes the balance maths
+                if p.lot_cost.is_some() {
+                    return None; // lot cost basis — leave it (more nuanced)
                 }
+                // Value the posting in its balance commodity: a `@`/`@@` priced
+                // posting weighs its cost (a total cost signed by the quantity, a
+                // per-unit cost scaled by it), an uncosted one its own amount. All
+                // weights must share one commodity for the fill to be unambiguous.
+                let (comm, weight) = match &p.costs {
+                    Some(Costs::Total(c)) => {
+                        decimals = decimals.max(c.decimals);
+                        let v = if a.value.is_negative() {
+                            Decimal::zero() - c.value
+                        } else {
+                            c.value
+                        };
+                        (c.commodity.as_str(), v)
+                    }
+                    Some(Costs::PerUnit(c)) => {
+                        (c.commodity.as_str(), a.value.mul_rounded(c.value))
+                    }
+                    None => {
+                        decimals = decimals.max(a.decimals);
+                        (a.commodity.as_str(), a.value)
+                    }
+                };
                 match commodity {
-                    None => commodity = Some(a.commodity.as_str()),
-                    Some(c) if c == a.commodity.as_str() => {}
-                    _ => return None, // mixed commodities
+                    None => commodity = Some(comm),
+                    Some(c) if c == comm => {}
+                    _ => return None, // mixed balance commodities
                 }
-                sum += a.value;
-                decimals = decimals.max(a.decimals);
+                sum += weight;
             }
         }
     }
@@ -449,12 +473,21 @@ fn render_posting(
         .unwrap_or_default();
 
     if infer_amount {
-        // `--infer`: drop the redundant balancing amount, keeping
-        // the account and any inline comment (the tail carries no cost /
-        // assertion here — `infers_last` excluded those) so it auto-balances.
+        // `--infer`: drop the redundant balancing amount so it auto-balances. If
+        // the posting carries an inline comment (the tail — `infers_last` excluded
+        // costs / assertions), pad it through the now-empty amount column so it
+        // lands in the same column as the other postings' comments, in one pass
+        // rather than needing a second format. No tail → just the account, no
+        // trailing whitespace.
         out.push_str(INDENT);
         out.push_str(&account);
-        out.push_str(&parts.tail);
+        if !parts.tail.is_empty() {
+            let account_pad = account_width.saturating_sub(account.chars().count());
+            push_spaces(out, account_pad);
+            push_spaces(out, GAP);
+            push_spaces(out, amount_width);
+            out.push_str(&parts.tail);
+        }
         out.push('\n');
     } else if let Some(amount) = fill {
         // `--fill`: write the computed balancing amount on the otherwise
@@ -507,7 +540,11 @@ fn render_posting(
 /// across the whole file. The amount width is measured on the
 /// **source-side** amount string, not on the AST-rendered value,
 /// so the alignment lines up with what actually gets emitted.
-fn column_widths(entries: &[Located<Entry>], source_lines: &[&str]) -> (usize, usize) {
+fn column_widths(
+    entries: &[Located<Entry>],
+    source_lines: &[&str],
+    infer: bool,
+) -> (usize, usize) {
     let mut account_max = 0usize;
     let mut amount_max = 0usize;
     for entry in entries {
@@ -517,9 +554,19 @@ fn column_widths(entries: &[Located<Entry>], source_lines: &[&str]) -> (usize, u
             Entry::Periodic { postings, .. } => postings,
             _ => continue,
         };
-        for lp in postings {
+        // `--infer` drops the last posting's balancing amount, so it must not
+        // widen the amount column — measure the column on what actually gets
+        // written. Otherwise the first format pads to a width the amount no
+        // longer occupies and a re-format shifts everything (non-idempotent).
+        let infer_last =
+            infer && matches!(&entry.value, Entry::Transaction(tx) if infers_last(tx));
+        let last = postings.len().saturating_sub(1);
+        for (i, lp) in postings.iter().enumerate() {
             let a = render_account(&lp.value);
             account_max = account_max.max(a.chars().count());
+            if infer_last && i == last {
+                continue; // amount dropped — contributes nothing to the column
+            }
             if let Some(src) = source_lines.get(lp.line.saturating_sub(1)).copied() {
                 let parts = extract_posting_parts(src);
                 amount_max = amount_max.max(parts.amount_str.chars().count());
@@ -653,5 +700,51 @@ mod tests {
         // Plain amount + comment (no annotation): still two spaces.
         let p = extract_posting_parts("\tfoo:bar:a  XMR4.314  ; note");
         assert_eq!(p.tail, "  ; note");
+    }
+
+    #[test]
+    fn fill_values_a_costed_leg_in_its_cost_commodity() {
+        // A `@@` priced leg weighs its cost, so the balance is in $ and the bare
+        // posting fills to the $ residual: -195.85 (cost) + 185.57 = -10.28 → +10.28.
+        let src = "2024-01-01 * t\n\tfoo:a  AAA-29563.00 @@ $195.85\n\tfoo:b  $185.57\n\tfoo:c\n";
+        let out = render(&parser::parse(src).unwrap(), src, false, false, true);
+        let c = out.lines().find(|l| l.contains("foo:c")).unwrap();
+        assert!(c.contains("$10.28"), "got:\n{out}");
+
+        // Same figure via a per-unit `@` cost.
+        let src = "2024-01-01 * t\n\tfoo:a  AAA-29563.00 @ $0.006625\n\tfoo:b  $185.57\n\tfoo:c\n";
+        let out = render(&parser::parse(src).unwrap(), src, false, false, true);
+        assert!(out.contains("$10.28"), "per-unit got:\n{out}");
+    }
+
+    #[test]
+    fn infer_aligns_a_dropped_amounts_comment_in_one_pass() {
+        // `--infer` drops the last balancing amount; a comment on that posting must
+        // still land in the amount-comment column (not right after the account), in
+        // a single pass — and a re-format must be a no-op.
+        let src = "2024-01-01 * t\n\tfoo:aaaaaa  $100.00  ; kept\n\tbar:b  $-100.00  ; dropped\n";
+        let out = render(&parser::parse(src).unwrap(), src, false, true, false);
+        let kept = out.lines().find(|l| l.contains("; kept")).unwrap();
+        let dropped = out.lines().find(|l| l.contains("; dropped")).unwrap();
+        // The balancing amount is gone, but its comment aligns with the kept one.
+        assert!(!dropped.contains('$'), "amount should be dropped:\n{out}");
+        assert_eq!(
+            kept.find(';'),
+            dropped.find(';'),
+            "comments must align in one pass:\n{out}"
+        );
+        // Idempotent: formatting the output again changes nothing.
+        let out2 = render(&parser::parse(&out).unwrap(), &out, false, true, false);
+        assert_eq!(out, out2, "re-format must be a no-op:\n{out2}");
+    }
+
+    #[test]
+    fn fill_bails_on_genuinely_mixed_commodities() {
+        // No cost to bridge them: AAA and $ are two balance commodities, so the
+        // bare posting is left for the reader, not guessed.
+        let src = "2024-01-01 * t\n\tfoo:a  AAA-29563.00\n\tfoo:b  $185.57\n\tfoo:c\n";
+        let out = render(&parser::parse(src).unwrap(), src, false, false, true);
+        let c = out.lines().find(|l| l.contains("foo:c")).unwrap();
+        assert!(!c.contains('$') && !c.contains("AAA"), "got:\n{out}");
     }
 }

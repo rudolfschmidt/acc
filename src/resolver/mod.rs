@@ -223,8 +223,13 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
     }
 
     // Transactions must be date-sorted: the booker validates balance
-    // assertions in chronological order.
-    transactions.sort_by_key(|a| a.value.date);
+    // assertions in chronological order. Within one day, a transaction that
+    // asserts a balance of *zero* (`= 0`) sorts *after* those that don't, so a
+    // same-day true-up (e.g. a year-end `= 0` correction) sees all the day's
+    // other postings first. Non-zero assertions (`= €2176.52`) are ordinary
+    // mid-history checkpoints and keep their file position. `sort_by_key` is
+    // stable, so file order is kept among transactions that tie on both keys.
+    transactions.sort_by_key(|a| (a.value.date, asserts_zero(&a.value)));
     // Prices are NOT sorted here: the indexer stores each pair's series
     // in a `BTreeMap<day, rate>` that orders itself, and a same-day
     // collision resolves to the last directive in file order either way
@@ -247,6 +252,15 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
         labels_balance,
         labels_register,
     })
+}
+
+/// Whether any posting of `tx` asserts a balance of zero (`= 0`) — the
+/// same-day sort tie-breaker that pushes such true-up transactions last.
+/// Non-zero assertions are left in file order (ordinary mid-history checkpoints).
+fn asserts_zero(tx: &Transaction) -> bool {
+    tx.postings
+        .iter()
+        .any(|p| p.value.balance_assertion.as_ref().is_some_and(|a| a.value.is_zero()))
 }
 
 /// Resolve a `$role:slot` account reference (e.g. `$capital:gain`) to the
@@ -428,9 +442,7 @@ fn finalize_tx_postings(
 /// `date_str` (a `YYYY-MM-DD` string), exactly as they appear (zero-padded).
 /// A plain textual replace; accounts without `$` are skipped. Lets a posting
 /// derive a dated sub-account from its own transaction date
-/// (`assets:budget:$year` on a 2021 entry → `assets:budget:2021`). Shared with
-/// the expander, which fills the same vars in auto-rule-injected accounts using
-/// the triggering transaction's date.
+/// (`assets:budget:$year` on a 2021 entry → `assets:budget:2021`).
 pub(crate) fn substitute_date_vars(account: &mut String, date_str: &str) {
     // Fast path: most accounts carry no `$` at all. `str::replace` always
     // allocates a fresh String even when the pattern is absent, so skip it.
@@ -678,6 +690,29 @@ mod tests {
         let out = resolve(parsed(src)).unwrap();
         assert_eq!(out.transactions[0].value.description, "Earlier");
         assert_eq!(out.transactions[1].value.description, "Later");
+    }
+
+    #[test]
+    fn same_day_zero_assertion_sorts_last() {
+        // The `= 0` true-up is written *first* in the file, but on the same day
+        // it must sort behind the plain activity so it sees the day's other
+        // postings before it checks.
+        let src = "2024-06-15 * Correction\n    assets:cash  0 USD = 0 USD\n    equity\n\
+                   2024-06-15 * Activity\n    assets:cash  1 USD\n    equity  -1 USD\n";
+        let out = resolve(parsed(src)).unwrap();
+        assert_eq!(out.transactions[0].value.description, "Activity");
+        assert_eq!(out.transactions[1].value.description, "Correction");
+    }
+
+    #[test]
+    fn same_day_nonzero_assertion_keeps_file_order() {
+        // A non-zero `= …` checkpoint is an ordinary mid-history assertion; it
+        // must keep its file position, not jump to the end of the day.
+        let src = "2024-06-15 * Check\n    assets:cash  1 USD = 1 USD\n    equity  -1 USD\n\
+                   2024-06-15 * Activity\n    assets:cash  2 USD\n    equity  -2 USD\n";
+        let out = resolve(parsed(src)).unwrap();
+        assert_eq!(out.transactions[0].value.description, "Check");
+        assert_eq!(out.transactions[1].value.description, "Activity");
     }
 
     #[test]

@@ -59,9 +59,9 @@ struct ReportArgs {
     /// (paren-virtual `(account)` and bracket-virtual `[account]`)
     /// from the output. The realizer, lotter and translator inject
     /// *real* postings (slippage gain/loss, capital gain/loss, currency
-    /// translation adjustment), so `-R` keeps those; it only removes
+    /// translation adjustment), so `--real` keeps those; it only removes
     /// the `(…)`/`[…]` virtual postings written in the source journal.
-    #[arg(short = 'R', long = "real")]
+    #[arg(long = "real")]
     real: bool,
 
     /// Related postings. With a pattern filter, show the *other*
@@ -74,10 +74,11 @@ struct ReportArgs {
 
     /// Show every posting of a matched transaction — both the matched
     /// posting and its counter-parties — instead of just the matched
-    /// posting (default) or just the counter-parties (`-r`). A pattern
-    /// then picks *which transactions* to show in full, not which lines
-    /// of them.
-    #[arg(long = "related-all")]
+    /// posting (default) or just the counter-parties (`-r`). `-R` pairs
+    /// with `-r`: `-r` narrows to the counter-parties, `-R` widens to the
+    /// whole transaction. A pattern then picks *which transactions* to
+    /// show in full, not which lines of them.
+    #[arg(short = 'R', long = "related-all")]
     related_all: bool,
 
     /// Show only postings whose amount is positive (`>= 0`). A
@@ -108,12 +109,12 @@ struct ReportArgs {
     /// narrows which postings are shown by comparing each amount against a
     /// threshold. EXPR is `[op]number` with op one of `>`, `<`, `>=`,
     /// `<=`, `=` and `<>` (not equal); a bare number is `=`. The comparison
-    /// is signed, so `-A 100` keeps `100` but not `-100`, `-A '>50'` keeps
-    /// amounts above 50, and `-A '<>0'` keeps every non-zero amount. Under
+    /// is signed, so `-a 100` keeps `100` but not `-100`, `-a '>50'` keeps
+    /// amounts above 50, and `-a '<>0'` keeps every non-zero amount. Under
     /// `-X` the threshold is read in the target commodity.
-    // `allow_hyphen_values` so a negative threshold (`-A -100`) is taken
+    // `allow_hyphen_values` so a negative threshold (`-a -100`) is taken
     // as the value, not parsed as another flag.
-    #[arg(short = 'A', long = "amount", value_name = "EXPR", allow_hyphen_values = true)]
+    #[arg(short = 'a', long = "amount", value_name = "EXPR", allow_hyphen_values = true)]
     amount: Option<String>,
 
     /// Sort by field: date, amount, account, description. Prefix with - for reverse. (default: date)
@@ -377,8 +378,8 @@ enum Command {
     /// `rename foo:5 foo:4` renames `foo:5`, `foo:50`, `foo:5:…` (OLD need
     /// not be a whole segment); anchored at the start, so `bar:foo:5` is
     /// untouched. Only posting accounts are rewritten (not `account`
-    /// directives or auto-rule patterns). Preview by default (writes
-    /// nothing); `-e` applies it in place.
+    /// directives). Preview by default (writes nothing); `-e` applies it in
+    /// place.
     #[command(arg_required_else_help = true)]
     Rename {
         /// The account (prefix) to rename.
@@ -997,7 +998,7 @@ fn start(raw_args: Vec<String>, inject: crate::Inject) -> Result<(), crate::Erro
         journal.aliases.get(t).cloned().unwrap_or_else(|| t.to_string())
     });
 
-    // Enrichment phases (expander → realizer → lotter → translator, plus
+    // Enrichment phases (realizer → lotter → translator, plus
     // the `--unrealized` revaluator). These must see the whole journal —
     // the lotter tracks lots FIFO across all transactions; the translator
     // and revaluator identify pass-through / open positions by their

@@ -16,7 +16,7 @@ mod kraken_api;
 mod litecoin_rpc;
 mod reto_rpc;
 mod monero_rpc;
-mod render_lib;
+pub mod render_lib;
 mod rpc_lib;
 
 use std::collections::HashMap;
