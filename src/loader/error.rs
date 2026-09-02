@@ -14,6 +14,9 @@ pub enum LoadError {
     Config { path: String, message: String },
     Resolve(ResolveError),
     Book(BookError),
+    /// The embedder's inject hook refused the journal — the message is the
+    /// hook's own, rendered verbatim.
+    Inject(String),
 }
 
 impl fmt::Display for LoadError {
@@ -28,6 +31,7 @@ impl fmt::Display for LoadError {
             }
             LoadError::Resolve(e) => write!(f, "{}", e),
             LoadError::Book(e) => write!(f, "{}", e),
+            LoadError::Inject(msg) => write!(f, "{}", msg),
         }
     }
 }

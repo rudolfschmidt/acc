@@ -39,7 +39,7 @@ where
     P: AsRef<Path> + Sync,
 {
     let entries = read_and_parse(files)?;
-    finish_load(entries, &mut |_| {})
+    finish_load(entries, &mut |_| Ok(()))
 }
 
 /// Load the journal, then load only the price-DB pairs the report can use.
@@ -59,7 +59,7 @@ pub fn load_selective<P>(
 where
     P: AsRef<Path> + Sync,
 {
-    finish_load(selective_entries(journal_files, price_files, target)?, &mut |_| {})
+    finish_load(selective_entries(journal_files, price_files, target)?, &mut |_| Ok(()))
 }
 
 /// [`load`] with an [`Inject`] hook run before booking — the seam an embedder
@@ -120,7 +120,7 @@ where
 /// embedder (e.g. the wrapper). It runs at the exact point the expander did, so
 /// it sees running, filled amounts; injected postings carry their own amounts
 /// (they are not auto-filled).
-pub type Inject<'a> = &'a mut dyn FnMut(&mut Vec<Located<Transaction>>);
+pub type Inject<'a> = &'a mut dyn FnMut(&mut Vec<Located<Transaction>>) -> Result<(), String>;
 
 /// Resolve → fill → inject → book → index a parsed entry stream into a
 /// `Journal`. On the report path `inject` may add programmatically-built
@@ -133,7 +133,9 @@ fn finish_load(entries: Vec<Located<Entry>>, inject: Inject) -> Result<Journal, 
     // resolves `= TARGET` assignments/assertions against a running balance that
     // now includes the injected postings.
     let mut transactions = booker::fill(resolved.transactions)?;
-    inject(&mut transactions);
+    // A hard-erroring hook stops the whole load: better no report than one
+    // built on bookings the embedder's rules flagged as ambiguous.
+    inject(&mut transactions).map_err(LoadError::Inject)?;
     let transactions = booker::assert_balances(transactions)?;
     let prices = indexer::index(resolved.prices);
     let mut precisions = precisions_per_commodity(&transactions);
