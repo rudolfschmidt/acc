@@ -120,24 +120,8 @@ pub(super) fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), E
 /// so any number can be listed in any order. Columns are located by header name
 /// so both export layouts parse.
 fn read_rows(csvs: &[String]) -> Result<Vec<Row>, Error> {
-    let mut files: Vec<PathBuf> = Vec::new();
-    for csv in csvs {
-        let path = expand(csv);
-        if path.is_dir() {
-            let mut entries: Vec<PathBuf> = std::fs::read_dir(&path)
-                .map_err(|e| Error::from(format!("import: read dir {}: {}", path.display(), e)))?
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.extension().is_some_and(|x| x == "csv"))
-                .collect();
-            entries.sort();
-            files.extend(entries);
-        } else {
-            files.push(path);
-        }
-    }
-
     let mut rows = Vec::new();
-    for file in &files {
+    for file in &super::csv_files(csvs)? {
         let src = std::fs::read_to_string(file)
             .map_err(|e| Error::from(format!("import: read {}: {}", file.display(), e)))?;
         rows.extend(rows_from_csv(&src)?);

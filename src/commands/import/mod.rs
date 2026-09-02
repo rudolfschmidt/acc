@@ -52,10 +52,37 @@ pub fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), Error> {
             other => Err(Error::from(format!("import: unknown exchange '{}'", other))),
         };
     }
-    let csv_path = csvs.first().ok_or_else(|| {
-        Error::from("import: this profile reads a CSV — pass the CSV file as the argument")
-    })?;
-    fiat_csv::run(csv_path, conf_path, write)
+    if csvs.is_empty() {
+        return Err(Error::from("import: this profile reads a CSV — pass the CSV file as the argument"));
+    }
+    fiat_csv::run(csvs, conf_path, write)
+}
+
+/// Expand CSV arguments into concrete files: each one is a file, or a
+/// directory whose `*.csv` files are taken (extension compared
+/// case-insensitively — some banks export `Download.CSV`), sorted for a
+/// stable order. Arguments keep their given order.
+fn csv_files(csvs: &[String]) -> Result<Vec<std::path::PathBuf>, Error> {
+    let mut files = Vec::new();
+    for csv in csvs {
+        let path = expand(csv);
+        if path.is_dir() {
+            let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(&path)
+                .map_err(|e| Error::from(format!("import: read dir {}: {}", path.display(), e)))?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| {
+                    p.extension()
+                        .and_then(|x| x.to_str())
+                        .is_some_and(|x| x.eq_ignore_ascii_case("csv"))
+                })
+                .collect();
+            entries.sort();
+            files.extend(entries);
+        } else {
+            files.push(path);
+        }
+    }
+    Ok(files)
 }
 
 /// Read a single-word directive's value from a profile (skips `#` comments

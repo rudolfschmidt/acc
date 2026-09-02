@@ -11,20 +11,42 @@ use crate::error::Error;
 
 use super::{expand, read, slug, Match, Rule, Transit};
 
-pub(super) fn run(csv_path: &str, conf_path: &str, write: bool) -> Result<(), Error> {
+pub(super) fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), Error> {
     let profile = Profile::load(conf_path)?;
-    let rows = parse_csv(&read(csv_path)?);
-    let mut rows: Vec<Vec<String>> = rows.into_iter().skip(1).filter(|r| !is_blank(r)).collect();
+
+    // Any number of exports — files or directories (their `*.csv`), e.g. one
+    // per year. Each file is flipped to oldest-first on its own (the ledger's
+    // convention, even when the bank exports newest-first), then they
+    // concatenate in argument order; dedup runs over the whole set, so
+    // overlapping exports still add every row exactly once.
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for file in &super::csv_files(csvs)? {
+        let src = std::fs::read_to_string(file)
+            .map_err(|e| Error::from(format!("import: read {}: {}", file.display(), e)))?;
+        let mut file_rows: Vec<Vec<String>> =
+            parse_csv(&src).into_iter().skip(1).filter(|r| !is_blank(r)).collect();
+        if file_rows.is_empty() {
+            continue;
+        }
+        if let Some(first) = rows.first()
+            && file_rows[0].len() != first.len()
+        {
+            return Err(Error::from(format!(
+                "import: {} has {} columns, earlier input has {} — mixed export formats",
+                file.display(),
+                file_rows[0].len(),
+                first.len()
+            )));
+        }
+        if newest_first(&file_rows, &profile) {
+            file_rows.reverse();
+        }
+        rows.append(&mut file_rows);
+    }
     if rows.is_empty() {
         return Err(Error::from("import: no data rows in CSV"));
     }
     let ncols = rows[0].len();
-
-    // Emit oldest-first (the ledger's convention) even when the bank
-    // exports newest-first.
-    if newest_first(&rows, &profile) {
-        rows.reverse();
-    }
 
     // What's already in the target ledger, as an identity multiset.
     let existing = std::fs::read_to_string(&profile.output_file).unwrap_or_default();
