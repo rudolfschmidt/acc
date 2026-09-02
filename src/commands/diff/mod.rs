@@ -5,7 +5,7 @@
 //! comparison; only genuine character differences show up.
 //!
 //! Why not parse first? Because the parser canonicalises expressions
-//! like `(€1/212)` into a `Decimal`, which hides exactly the kind of
+//! like `($1/212)` into a `Decimal`, which hides exactly the kind of
 //! formatter-induced damage this command needs to surface.
 //!
 //! Output follows `git diff` conventions: file header (`--- a/...`,

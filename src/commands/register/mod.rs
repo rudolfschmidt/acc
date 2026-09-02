@@ -84,7 +84,7 @@ struct Row {
 
 struct Entry {
     /// Pre-styled account path: segments blue, plus any register label
-    /// coloured inline after the segment it belongs to (`ukdac:12 (foo):wise`).
+    /// coloured inline after the segment it belongs to (`assets:12 (foo):bank`).
     account: String,
     /// Visible width of `account` (excludes ANSI colour codes), for
     /// column alignment.
@@ -144,7 +144,7 @@ fn build_rows(journal: &Journal) -> Vec<Row> {
 
 /// Style an account path for the register: each segment coloured blue,
 /// with a register label ([`paint_label`]) inline after the segment it
-/// attaches to — e.g. `ukdac:12 (brokerage):wise`. The label is looked
+/// attaches to — e.g. `assets:12 (brokerage):bank`. The label is looked
 /// up on each `:`-joined prefix (`label-register`, else the shared
 /// `label` fallback). Returns the styled string (with ANSI colour codes)
 /// and its visible width (without them), so columns still align.

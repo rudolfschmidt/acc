@@ -100,24 +100,24 @@ fn balance_assertion_passes() {
 #[test]
 fn price_directives_land_in_index() {
     let j = common::load(
-        "P 2024-06-15 USD EUR 0.92\n\
-         P 2024-06-16 USD EUR 0.93\n",
+        "P 2024-06-15 USD GBP 0.92\n\
+         P 2024-06-16 USD GBP 0.93\n",
     );
     assert_eq!(j.prices.len(), 2);
-    let rate = j.prices.find("USD", "EUR", "2024-06-17").unwrap();
+    let rate = j.prices.find("USD", "GBP", "2024-06-17").unwrap();
     assert_eq!(rate, Decimal::parse("0.93").unwrap());
 }
 
 #[test]
 fn precision_directive_overrides_observed() {
-    // Source has a 5-decimal amount but `precision 2` pins EUR at 2.
+    // Source has a 5-decimal amount but `precision 2` pins GBP at 2.
     let j = common::load_cfg(
-        "[[commodity]]\nsymbol = \"EUR\"\nprecision = 2\n",
+        "[[commodity]]\nsymbol = \"GBP\"\nprecision = 2\n",
         "2024-06-15 * x\n\
-         \tassets:bank   123.12345 EUR\n\
-         \tequity:open  -123.12345 EUR\n",
+         \tassets:bank   123.12345 GBP\n\
+         \tequity:open  -123.12345 GBP\n",
     );
-    let prec = j.precisions.get("EUR").copied().unwrap();
+    let prec = j.precisions.get("GBP").copied().unwrap();
     assert_eq!(prec, 2);
 }
 

@@ -186,21 +186,21 @@ mod tests {
 
     #[test]
     fn gain_when_implied_rate_above_market() {
-        // Market USD→EUR on 2024-06-15 = 0.90
-        // Tx trades 100 USD for 92 EUR (implied 0.92 — user got more EUR).
+        // Market USD→GBP on 2024-06-15 = 0.90
+        // Tx trades 100 USD for 92 GBP (implied 0.92 — user got more GBP).
         let src = "\
-            P 2024-06-15 USD EUR 0.9\n\
+            P 2024-06-15 USD GBP 0.9\n\
             2024-06-15 * x\n\
             \tassets:usd  -100 USD\n\
-            \tassets:eur   92 EUR\n";
+            \tassets:gbp   92 GBP\n";
         let (mut txs, db) = build(src);
-        realize(&mut txs, "EUR", &db, &HashMap::new(), "income:gain", "expenses:loss");
+        realize(&mut txs, "GBP", &db, &HashMap::new(), "income:gain", "expenses:loss");
         let posted = &txs[0].value.postings;
         assert_eq!(posted.len(), 3);
         let injected = &posted[2].value;
         assert_eq!(injected.account, "income:gain");
         let amt = injected.amount.as_ref().unwrap();
-        assert_eq!(amt.commodity, "EUR");
+        assert_eq!(amt.commodity, "GBP");
         // 100 × 0.90 = 90, +92 = +2 delta → credit income -2.
         assert_eq!(amt.value, Decimal::from(-2));
     }
@@ -208,12 +208,12 @@ mod tests {
     #[test]
     fn loss_when_implied_rate_below_market() {
         let src = "\
-            P 2024-06-15 USD EUR 0.9\n\
+            P 2024-06-15 USD GBP 0.9\n\
             2024-06-15 * x\n\
             \tassets:usd  -100 USD\n\
-            \tassets:eur   88 EUR\n";
+            \tassets:gbp   88 GBP\n";
         let (mut txs, db) = build(src);
-        realize(&mut txs, "EUR", &db, &HashMap::new(), "income:gain", "expenses:loss");
+        realize(&mut txs, "GBP", &db, &HashMap::new(), "income:gain", "expenses:loss");
         let injected = &txs[0].value.postings[2].value;
         assert_eq!(injected.account, "expenses:loss");
         assert_eq!(injected.amount.as_ref().unwrap().value, Decimal::from(2));
@@ -223,10 +223,10 @@ mod tests {
     fn single_commodity_skipped() {
         let src = "\
             2024-06-15 * x\n\
-            \texpenses:food  -5 EUR\n\
-            \tassets:cash     5 EUR\n";
+            \texpenses:food  -5 GBP\n\
+            \tassets:cash     5 GBP\n";
         let (mut txs, db) = build(src);
-        realize(&mut txs, "EUR", &db, &HashMap::new(), "income:gain", "expenses:loss");
+        realize(&mut txs, "GBP", &db, &HashMap::new(), "income:gain", "expenses:loss");
         assert_eq!(txs[0].value.postings.len(), 2);
     }
 
@@ -235,9 +235,9 @@ mod tests {
         let src = "\
             2024-06-15 * x\n\
             \tassets:usd  -100 USD\n\
-            \tassets:eur    92 EUR\n";
+            \tassets:gbp    92 GBP\n";
         let (mut txs, db) = build(src);
-        realize(&mut txs, "EUR", &db, &HashMap::new(), "income:gain", "expenses:loss");
+        realize(&mut txs, "GBP", &db, &HashMap::new(), "income:gain", "expenses:loss");
         assert_eq!(txs[0].value.postings.len(), 2);
     }
 
@@ -245,14 +245,14 @@ mod tests {
     fn delta_below_precision_skipped() {
         // 100 × 0.91999 = 91.999 + 92 = 0.001 → below 2-decimal display.
         let src = "\
-            P 2024-06-15 USD EUR 0.91999\n\
+            P 2024-06-15 USD GBP 0.91999\n\
             2024-06-15 * x\n\
             \tassets:usd  -100 USD\n\
-            \tassets:eur   92 EUR\n";
+            \tassets:gbp   92 GBP\n";
         let (mut txs, db) = build(src);
         let mut precs = HashMap::new();
-        precs.insert("EUR".to_string(), 2);
-        realize(&mut txs, "EUR", &db, &precs, "income:gain", "expenses:loss");
+        precs.insert("GBP".to_string(), 2);
+        realize(&mut txs, "GBP", &db, &precs, "income:gain", "expenses:loss");
         assert_eq!(txs[0].value.postings.len(), 2);
     }
 

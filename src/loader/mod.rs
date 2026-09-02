@@ -231,8 +231,8 @@ fn expand_aliases(needed: &mut HashSet<String>, alias_pairs: &[(String, String)]
 
 /// Add the intermediate ("bridge") commodities that lie on a conversion path
 /// from a journal commodity to `target`. Without this, a two-hop route like
-/// `XMR → $ → €` dies: `$` is neither a posting commodity nor the target, so
-/// the both-sides filter drops `XMR/USDT` and `USD/EUR` alike. The path is
+/// `XMR → $ → £` dies: `$` is neither a posting commodity nor the target, so
+/// the both-sides filter drops `XMR/USDT` and `USD/GBP` alike. The path is
 /// found over a graph built from the price DB's PAIR structure only — cheap
 /// next to the ~800k dated rates.
 fn add_bridge_commodities<P: AsRef<Path>>(
@@ -282,8 +282,8 @@ fn add_bridge_commodities<P: AsRef<Path>>(
         adj.entry(q).or_default().insert(b);
     }
     // Fixed parity edges (`commodity USDC / parity $`) live in the config,
-    // not the price DB — add them so a route like USDC → $ → € is found and
-    // the hub `$` is pulled into `needed`, keeping `$→€` past the filter.
+    // not the price DB — add them so a route like USDC → $ → £ is found and
+    // the hub `$` is pulled into `needed`, keeping `$→£` past the filter.
     for (sym, t) in &parity_pairs {
         let (a, b) = (canon(sym), canon(t));
         if a == b {
@@ -452,7 +452,7 @@ fn precisions_per_commodity(
 fn visit_posting(p: &Posting, map: &mut HashMap<String, usize>) {
     // Only the posting's real amount contributes to display precision.
     // `@` / `@@` cost annotations and `{…}` lot costs can carry many
-    // trailing digits (e.g. `€0.0047169811320755`) that the user never
+    // trailing digits (e.g. `£0.0047169811320755`) that the user never
     // meant to see rendered on a balance line; `= X` assertions are
     // internal checks, not user-facing output.
     if let Some(a) = &p.amount {
@@ -583,47 +583,47 @@ mod tests {
 
     #[test]
     fn loads_prices_into_the_index() {
-        let src = "P 2024-06-15 USD EUR 0.92\n";
+        let src = "P 2024-06-15 USD GBP 0.92\n";
         with_tmp("prices", src, |path| {
             let journal = load(&[path]).unwrap();
-            assert!(journal.prices.find("USD", "EUR", "2024-06-16").is_some());
+            assert!(journal.prices.find("USD", "GBP", "2024-06-16").is_some());
         });
     }
 
     #[test]
     fn shortest_path_finds_the_hub() {
         let mut adj: HashMap<String, HashSet<String>> = HashMap::new();
-        for (a, b) in [("XMR", "$"), ("$", "€"), ("$", "£")] {
+        for (a, b) in [("XMR", "$"), ("$", "£"), ("$", "£")] {
             adj.entry(a.into()).or_default().insert(b.into());
             adj.entry(b.into()).or_default().insert(a.into());
         }
-        assert_eq!(shortest_path(&adj, "XMR", "€").unwrap(), vec!["€", "$", "XMR"]);
+        assert_eq!(shortest_path(&adj, "XMR", "£").unwrap(), vec!["£", "$", "XMR"]);
         assert!(shortest_path(&adj, "XMR", "¥").is_none());
     }
 
     #[test]
     fn bridge_commodities_pull_in_the_hub() {
-        // A journal holding only XMR, valued in € (`-X €`), needs the two-hop
-        // route XMR → $ → €. The hub `$` (and its raw spellings USD / USDT) is
+        // A journal holding only XMR, valued in £ (`-X £`), needs the two-hop
+        // route XMR → $ → £. The hub `$` (and its raw spellings USD / USDT) is
         // neither a posting commodity nor the target, so it must be pulled in
         // explicitly or the bridge rates get filtered out.
         let cfg = "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\", \"USDT\"]\nprecision = 2\n\
-                   [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n";
+                   [[commodity]]\nsymbol = \"£\"\naliases = [\"GBP\"]\nprecision = 2\n";
         let journal = "2026-07-19 * x\n    a  1 XMR\n    b\n";
         let xmr = "P 2026-07-19 XMR USDT 335.22\n";
-        let fiat = "P 2026-07-19 USD EUR 0.874355\n";
+        let fiat = "P 2026-07-19 USD GBP 0.874355\n";
         with_toml("bridge-c", cfg, |c| {
             with_tmp("bridge-j", journal, |j| {
                 with_tmp("bridge-x", xmr, |x| {
                     with_tmp("bridge-e", fiat, |e| {
                         let entries = read_and_parse(&[c, j]).unwrap();
-                        let mut needed = needed_commodities(&entries, Some("€"));
+                        let mut needed = needed_commodities(&entries, Some("£"));
                         assert!(!needed.contains("$"), "hub must not be needed yet");
                         add_bridge_commodities(
                             &mut needed,
                             &entries,
                             &[x.to_path_buf(), e.to_path_buf()],
-                            "€",
+                            "£",
                         );
                         assert!(needed.contains("$"), "hub $ pulled onto the path");
                         assert!(needed.contains("USDT"), "raw alias pulled in for the filter");
@@ -636,22 +636,22 @@ mod tests {
 
     #[test]
     fn parity_edge_bridges_usdc_to_the_hub() {
-        // A journal holding USDC, valued in € (`-X €`). USDC is not an alias
+        // A journal holding USDC, valued in £ (`-X £`). USDC is not an alias
         // of $ — it is `parity $`, its own commodity — and there is no USDC/…
         // pair in the price DB. The parity edge must feed the bridge graph so
-        // the route USDC → $ → € is found and the hub $ pulled into `needed`.
+        // the route USDC → $ → £ is found and the hub $ pulled into `needed`.
         let cfg = "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\"]\nprecision = 2\n\
                    [[commodity]]\nsymbol = \"USDC\"\nparities = [\"$\"]\nprecision = 2\n\
-                   [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n";
+                   [[commodity]]\nsymbol = \"£\"\naliases = [\"GBP\"]\nprecision = 2\n";
         let journal = "2026-07-19 * x\n    a  1 USDC\n    b\n";
-        let fiat = "P 2026-07-19 USD EUR 0.874355\n";
+        let fiat = "P 2026-07-19 USD GBP 0.874355\n";
         with_toml("parity-c", cfg, |c| {
             with_tmp("parity-j", journal, |j| {
                 with_tmp("parity-e", fiat, |e| {
                     let entries = read_and_parse(&[c, j]).unwrap();
-                    let mut needed = needed_commodities(&entries, Some("€"));
+                    let mut needed = needed_commodities(&entries, Some("£"));
                     assert!(!needed.contains("$"), "hub must not be needed yet");
-                    add_bridge_commodities(&mut needed, &entries, &[e.to_path_buf()], "€");
+                    add_bridge_commodities(&mut needed, &entries, &[e.to_path_buf()], "£");
                     assert!(needed.contains("$"), "hub $ pulled onto the parity path");
                     assert!(needed.contains("USD"), "raw alias pulled in for the filter");
                 });
@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn errors_on_alias_conflict() {
         let cfg = "[[commodity]]\nsymbol = \"USD\"\naliases = [\"$\"]\nprecision = 2\n\
-                   [[commodity]]\nsymbol = \"EUR\"\naliases = [\"$\"]\nprecision = 2\n";
+                   [[commodity]]\nsymbol = \"GBP\"\naliases = [\"$\"]\nprecision = 2\n";
         let src = "2024-06-15 * x\n    a  1 USD\n    b\n";
         with_toml("alias_conflict-c", cfg, |c| {
             with_tmp("alias_conflict-j", src, |j| {
@@ -712,26 +712,26 @@ mod tests {
     #[test]
     fn selective_keeps_reachable_pairs_and_drops_noise() {
         // A journal holding ABC bought with $; the price star carries the
-        // useful USD/EUR + ABC/USDT pairs plus a noise pair (XYZ/USDT) for a
+        // useful USD/GBP + ABC/USDT pairs plus a noise pair (XYZ/USDT) for a
         // commodity the journal never touches. Eager keeps everything;
         // selective must drop the noise but reach the same valuations.
         let cfg = "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\", \"USDT\"]\nprecision = 2\n\
-                   [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n";
+                   [[commodity]]\nsymbol = \"£\"\naliases = [\"GBP\"]\nprecision = 2\n";
         let journal = "2024-01-10 * buy\n    assets:crypto  ABC2 @ $30000\n    assets:bank\n";
-        let prices = "P 2024-01-10 USD EUR 0.9\nP 2024-01-10 ABC USDT 30000\nP 2024-01-10 XYZ USDT 2000\n";
+        let prices = "P 2024-01-10 USD GBP 0.9\nP 2024-01-10 ABC USDT 30000\nP 2024-01-10 XYZ USDT 2000\n";
 
         with_toml("sel_cfg", cfg, |c| {
             with_tmp("sel_jrn", journal, |jrn| {
                 with_tmp("sel_prc", prices, |prc| {
                     let eager = load(&[c, prc, jrn]).unwrap();
-                    let sel = load_selective(&[c, jrn], &[prc], Some("€")).unwrap();
+                    let sel = load_selective(&[c, jrn], &[prc], Some("£")).unwrap();
 
                     // Both reach the held commodity's valuation chain. The
-                    // index stores resolved alias forms, so the `USD EUR`
-                    // price lives under `$`/`€`.
+                    // index stores resolved alias forms, so the `USD GBP`
+                    // price lives under `$`/`£`.
                     assert!(eager.prices.find("ABC", "$", "2024-01-11").is_some());
                     assert!(sel.prices.find("ABC", "$", "2024-01-11").is_some());
-                    assert!(sel.prices.find("$", "€", "2024-01-11").is_some());
+                    assert!(sel.prices.find("$", "£", "2024-01-11").is_some());
 
                     // The noise pair is present eagerly but filtered out
                     // selectively — XYZ never appears in the journal.
@@ -744,19 +744,19 @@ mod tests {
 
     #[test]
     fn selective_expands_target_aliases() {
-        // The `-X` target is given as the canonical `€`, but the price file
-        // spells the pair `USD EUR`. Alias expansion of the target must pull
-        // `EUR` into the needed set so the pair survives the filter.
+        // The `-X` target is given as the canonical `£`, but the price file
+        // spells the pair `USD GBP`. Alias expansion of the target must pull
+        // `GBP` into the needed set so the pair survives the filter.
         let cfg = "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\"]\nprecision = 2\n\
-                   [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n";
+                   [[commodity]]\nsymbol = \"£\"\naliases = [\"GBP\"]\nprecision = 2\n";
         let journal = "2024-01-10 * spend\n    expenses:x  $10\n    assets:bank\n";
-        let prices = "P 2024-01-10 USD EUR 0.9\n";
+        let prices = "P 2024-01-10 USD GBP 0.9\n";
 
         with_toml("ali_cfg", cfg, |c| {
             with_tmp("ali_jrn", journal, |jrn| {
                 with_tmp("ali_prc", prices, |prc| {
-                    let sel = load_selective(&[c, jrn], &[prc], Some("€")).unwrap();
-                    assert!(sel.prices.find("$", "€", "2024-01-11").is_some());
+                    let sel = load_selective(&[c, jrn], &[prc], Some("£")).unwrap();
+                    assert!(sel.prices.find("$", "£", "2024-01-11").is_some());
                 });
             });
         });
@@ -764,21 +764,21 @@ mod tests {
 
     #[test]
     fn selective_parity_values_usdc_via_hub() {
-        // USDC declared `parity $`; the DB has only USD/EUR. `-X €` must reach
-        // USDC → € by chaining the synthetic 1:1 parity edge (USDC→$) with the
-        // fiat hub ($→€), and the selective loader must keep the $→€ pair.
+        // USDC declared `parity $`; the DB has only USD/GBP. `-X £` must reach
+        // USDC → £ by chaining the synthetic 1:1 parity edge (USDC→$) with the
+        // fiat hub ($→£), and the selective loader must keep the $→£ pair.
         let cfg = "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\"]\nprecision = 2\n\
                    [[commodity]]\nsymbol = \"USDC\"\nparities = [\"$\"]\nprecision = 2\n\
-                   [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n";
+                   [[commodity]]\nsymbol = \"£\"\naliases = [\"GBP\"]\nprecision = 2\n";
         let journal = "2024-01-10 * in\n    assets:exchange  USDC10\n    equity\n";
-        let prices = "P 2024-01-10 USD EUR 0.9\n";
+        let prices = "P 2024-01-10 USD GBP 0.9\n";
         with_toml("par_cfg", cfg, |c| {
             with_tmp("par_jrn", journal, |jrn| {
                 with_tmp("par_prc", prices, |prc| {
-                    let sel = load_selective(&[c, jrn], &[prc], Some("€")).unwrap();
-                    // USDC → € chains: USDC→$ (parity, ×1) then $→€ (×0.9).
+                    let sel = load_selective(&[c, jrn], &[prc], Some("£")).unwrap();
+                    // USDC → £ chains: USDC→$ (parity, ×1) then $→£ (×0.9).
                     assert_eq!(
-                        sel.prices.find("USDC", "€", "2024-01-11"),
+                        sel.prices.find("USDC", "£", "2024-01-11"),
                         Some(crate::decimal::Decimal::parse("0.9").unwrap())
                     );
                 });

@@ -57,7 +57,7 @@ impl Index {
     }
 
     /// Rate for `from → to` at or before `date`. Uses BFS over the
-    /// commodity graph so multi-hop paths (e.g. USD → CHF → EUR) work
+    /// commodity graph so multi-hop paths (e.g. USD → CHF → GBP) work
     /// when direct edges are missing. Every stored edge is reversible
     /// on demand via its reciprocal.
     pub fn find(&self, from: &str, to: &str, date: &str) -> Option<Decimal> {
@@ -145,7 +145,7 @@ fn latest_rate(dates: &BTreeMap<u32, Decimal>, day: u32) -> Option<Decimal> {
 mod tests {
     use super::*;
 
-    /// Two equal-hop routes USD→EUR exist (via A at 2.0, via B at 3.0).
+    /// Two equal-hop routes USD→GBP exist (via A at 2.0, via B at 3.0).
     /// `find`'s BFS must resolve the same one on every run regardless of
     /// HashMap seed; `neighbors` sorts, so the alphabetically first hop
     /// (A) always wins. Rebuilding the index each iteration exercises a
@@ -156,18 +156,18 @@ mod tests {
         let build = || {
             let mut idx = Index::new();
             let (a, b): (Arc<str>, Arc<str>) = (Arc::from("A"), Arc::from("B"));
-            let (usd, eur): (Arc<str>, Arc<str>) = (Arc::from("USD"), Arc::from("EUR"));
+            let (usd, gbp): (Arc<str>, Arc<str>) = (Arc::from("USD"), Arc::from("GBP"));
             idx.add(usd.clone(), a.clone(), day, Decimal::from(1));
             idx.add(usd.clone(), b.clone(), day, Decimal::from(1));
-            idx.add(a, eur.clone(), day, Decimal::from(2));
-            idx.add(b, eur, day, Decimal::from(3));
+            idx.add(a, gbp.clone(), day, Decimal::from(2));
+            idx.add(b, gbp, day, Decimal::from(3));
             idx
         };
-        let expected = build().find("USD", "EUR", "2024-06-01");
+        let expected = build().find("USD", "GBP", "2024-06-01");
         assert!(expected.is_some());
         for _ in 0..50 {
             assert_eq!(
-                build().find("USD", "EUR", "2024-06-01"),
+                build().find("USD", "GBP", "2024-06-01"),
                 expected,
                 "find must be deterministic across equal-length paths"
             );

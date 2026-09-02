@@ -138,7 +138,7 @@ pub(super) fn balance_tx(
         //
         // Tolerance: residuals that round to zero at the commodity's
         // display precision are accepted. Per-unit cost multiplication
-        // (e.g. `0.26184800 BTC @ €11292.58`) produces trailing digits
+        // (e.g. `0.26184800 BTC @ $11292.58`) produces trailing digits
         // beyond what the user wrote; any real bookkeeping error is
         // large enough to show up in the rounded display anyway.
         let mut residuals: Vec<Residual> = sums
@@ -185,9 +185,9 @@ fn effective_amount(p: &Posting) -> Option<Amount> {
     // tolerance (via `is_display_zero`). Cost-derived effective
     // amounts carry no user-visible precision in the target
     // commodity — the user wrote e.g. `0.26184800 BTC`, not the
-    // resulting `€...`. So cost-paths set `decimals: 0`; the
+    // resulting `$...`. So cost-paths set `decimals: 0`; the
     // max-decimals tracker then picks up the tolerance from any
-    // *direct* posting in the same commodity (e.g. a plain `€44.06`
+    // *direct* posting in the same commodity (e.g. a plain `$44.06`
     // in the same tx), defaulting to 0 if the commodity only ever
     // appears via cost conversion.
     if let Some(lot) = &p.lot_cost {
@@ -283,8 +283,8 @@ mod tests {
     fn missing_in_multi_commodity_expands_to_per_commodity_postings() {
         // Trailing posting without an amount soaks up every commodity
         // in the transaction — ledger-cli semantics. `assets:other`
-        // expands into two postings: one in USD, one in EUR.
-        let src = "2024-06-15 * X\n    expenses:food   5 USD\n    assets:eur  -5 EUR\n    assets:other\n";
+        // expands into two postings: one in USD, one in GBP.
+        let src = "2024-06-15 * X\n    expenses:food   5 USD\n    assets:gbp  -5 GBP\n    assets:other\n";
         let tx = balance_one(src).unwrap();
         // Original 3 postings → 4 after expansion.
         assert_eq!(tx.postings.len(), 4);
@@ -295,14 +295,14 @@ mod tests {
             .iter()
             .map(|lp| lp.value.amount.as_ref().unwrap().commodity.as_str())
             .collect();
-        assert!(commodities.contains(&"EUR"));
+        assert!(commodities.contains(&"GBP"));
         assert!(commodities.contains(&"USD"));
         // Values negate each commodity's sum.
         for lp in last_two {
             let amt = lp.value.amount.as_ref().unwrap();
             match amt.commodity.as_str() {
                 "USD" => assert_eq!(amt.value, Decimal::from(-5)),
-                "EUR" => assert_eq!(amt.value, Decimal::from(5)),
+                "GBP" => assert_eq!(amt.value, Decimal::from(5)),
                 _ => panic!("unexpected commodity"),
             }
         }
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn multi_commodity_balanced_is_accepted() {
-        let src = "2024-06-15 * X\n    a:x  5 USD\n    a:y  -5 USD\n    a:z  10 EUR\n    a:w  -10 EUR\n";
+        let src = "2024-06-15 * X\n    a:x  5 USD\n    a:y  -5 USD\n    a:z  10 GBP\n    a:w  -10 GBP\n";
         assert!(balance_one(src).is_ok());
     }
 
@@ -369,34 +369,34 @@ mod tests {
 
     #[test]
     fn per_unit_cost_balances_across_commodities() {
-        let src = "2024-06-15 * X\n    expenses:food  5 USD @ 0.92 EUR\n    assets:eur    -4.60 EUR\n";
+        let src = "2024-06-15 * X\n    expenses:food  5 USD @ 0.92 GBP\n    assets:gbp    -4.60 GBP\n";
         assert!(balance_one(src).is_ok());
     }
 
     #[test]
     fn total_cost_balances() {
-        let src = "2024-06-15 * X\n    expenses:food  5 USD @@ 4.60 EUR\n    assets:eur    -4.60 EUR\n";
+        let src = "2024-06-15 * X\n    expenses:food  5 USD @@ 4.60 GBP\n    assets:gbp    -4.60 GBP\n";
         assert!(balance_one(src).is_ok());
     }
 
     #[test]
     fn per_unit_cost_infers_missing_in_cost_commodity() {
-        let src = "2024-06-15 * X\n    expenses:food  5 USD @ 0.92 EUR\n    assets:eur\n";
+        let src = "2024-06-15 * X\n    expenses:food  5 USD @ 0.92 GBP\n    assets:gbp\n";
         let tx = balance_one(src).unwrap();
         let inferred = tx.postings[1].value.amount.as_ref().unwrap();
-        assert_eq!(inferred.commodity, "EUR");
+        assert_eq!(inferred.commodity, "GBP");
         assert_eq!(inferred.value, Decimal::parse("-4.60").unwrap());
     }
 
     #[test]
     fn per_unit_cost_unbalanced_errors() {
-        let src = "2024-06-15 * X\n    expenses:food  5 USD @ 0.92 EUR\n    assets:eur    -4 EUR\n";
+        let src = "2024-06-15 * X\n    expenses:food  5 USD @ 0.92 GBP\n    assets:gbp    -4 GBP\n";
         assert!(balance_one(src).is_err());
     }
 
     #[test]
     fn total_cost_with_negative_posting() {
-        let src = "2024-06-15 * X\n    assets:usd    -5 USD @@ 4.60 EUR\n    assets:eur     4.60 EUR\n";
+        let src = "2024-06-15 * X\n    assets:usd    -5 USD @@ 4.60 GBP\n    assets:gbp     4.60 GBP\n";
         assert!(balance_one(src).is_ok());
     }
 
@@ -426,55 +426,55 @@ mod tests {
     #[test]
     fn total_lot_cost_weighs_the_whole_lot() {
         // `{{TOTAL}}` weights the leg by the whole-lot figure, not
-        // quantity × cost: 10 ABC {{200 EUR}} balances against -200 EUR
+        // quantity × cost: 10 ABC {{200 GBP}} balances against -200 GBP
         // (weight 200), and would NOT balance if read as per-unit 200
         // (which would weigh 2000).
         assert!(balance_one(
-            "2024-01-01 * buy\n\tassets:x  10 ABC {{200 EUR}}\n\tassets:cash  -200 EUR\n"
+            "2024-01-01 * buy\n\tassets:x  10 ABC {{200 GBP}}\n\tassets:cash  -200 GBP\n"
         )
         .is_ok());
         // The per-unit reading (10 × 200 = 2000) must NOT balance here.
         assert!(balance_one(
-            "2024-01-01 * buy\n\tassets:x  10 ABC {200 EUR}\n\tassets:cash  -200 EUR\n"
+            "2024-01-01 * buy\n\tassets:x  10 ABC {200 GBP}\n\tassets:cash  -200 GBP\n"
         )
         .is_err());
     }
 
     #[test]
     fn high_precision_lot_cost_does_not_tighten_tolerance() {
-        // `AAF -7524 {=€0.0380117}` computes a lot cost of
-        // €-286.0000308 against `€286.00` → residual 0.0000308 €.
+        // `ABC -7524 {=$0.0380117}` computes a lot cost of
+        // $-286.0000308 against `$286.00` → residual 0.0000308 $.
         // That must round to display-zero at the amount's 0 decimals
-        // (and the journal-wide 2 decimals for €), not at the cost's
+        // (and the journal-wide 2 decimals for $), not at the cost's
         // 7 decimals.
         let src = "2020-09-02 * x\n\
-                   \tassets:fcu    AAF-7524 {=€0.0380117}\n\
-                   \texpenses:t   €286.00\n";
+                   \tassets:abc    ABC-7524 {=$0.0380117}\n\
+                   \texpenses:t   $286.00\n";
         assert!(balance_one(src).is_ok());
     }
 
     #[test]
     fn high_precision_source_does_not_tighten_tolerance() {
-        // `0.26184800 BTC @ €11292.58` converts to €2956.9394878400.
-        // Against -3001.00 + 44.06 € the residual is ~0.00051216 €,
-        // which must round to display-zero at the explicit €-posting
+        // `0.26184800 BTC @ $11292.58` converts to $2956.9394878400.
+        // Against -3001.00 + 44.06 $ the residual is ~0.00051216 $,
+        // which must round to display-zero at the explicit $-posting
         // decimals (2), not inherit BTC's 8 decimals.
         let src = "2018-01-11 * x\n\
-                   \tassets:btc   BTC 0.26184800 @ €11292.58\n\
-                   \tassets:eur   €-3001.00\n\
-                   \texpenses:t   €44.06\n";
+                   \tassets:btc   BTC 0.26184800 @ $11292.58\n\
+                   \tassets:usd   $-3001.00\n\
+                   \texpenses:t   $44.06\n";
         assert!(balance_one(src).is_ok());
     }
 
     #[test]
     fn residual_within_display_precision_is_accepted() {
-        // 0.26184800 BTC @ €11292.58 = 2956.9394878400 €
-        // against -3001.00 + 44.06 = -2956.94 → residual -0.0005 €
+        // 0.26184800 BTC @ $11292.58 = 2956.9394878400 $
+        // against -3001.00 + 44.06 = -2956.94 → residual -0.0005 $
         // Rounded to 2 decimals that's 0.00, so the tx balances.
         let src = "2024-06-15 * rounding\n\
-                   \tassets:btc   0.26184800 BTC @ €11292.58\n\
-                   \tassets:eur   €-3001.00\n\
-                   \texpenses:fee €44.06\n";
+                   \tassets:btc   0.26184800 BTC @ $11292.58\n\
+                   \tassets:usd   $-3001.00\n\
+                   \texpenses:fee $44.06\n";
         assert!(balance_one(src).is_ok());
     }
 

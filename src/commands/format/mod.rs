@@ -324,8 +324,8 @@ fn infers_last(tx: &Transaction) -> bool {
 /// (non-virtual) posting weighs to the same commodity, the missing amount is
 /// the negated sum of those weights — compute it so it can be written out
 /// explicitly. A `@`/`@@` priced posting weighs its *cost* (the balance
-/// commodity), so `AAE-29563 @@ €195.85` counts as −€195.85 and the fill lands
-/// in €. Lot-cost (`{…}`) postings are still left alone. Returns (index of the
+/// commodity), so `ABC-29563 @@ $195.85` counts as −$195.85 and the fill lands
+/// in $. Lot-cost (`{…}`) postings are still left alone. Returns (index of the
 /// empty posting, rendered amount).
 fn fills(tx: &Transaction) -> Option<(usize, String)> {
     if tx.postings.len() <= 2 {
@@ -640,7 +640,7 @@ fn extract_posting_parts(source_line: &str) -> PostingParts {
 /// any whitespace between them. Turns `USD -1200.00` into
 /// `USD-1200.00` and leaves `USD-300.00` / `$5.00` untouched.
 /// Only touches leading-commodity amounts; trailing-commodity form
-/// like `100 EUR` stays as-is.
+/// like `100 GBP` stays as-is.
 fn normalise_commodity_glue(s: &str) -> String {
     let Some(idx) = s.find(|c: char| c.is_ascii_digit() || c == '-' || c == '.') else {
         return s.to_string();

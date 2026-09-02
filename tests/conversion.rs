@@ -9,29 +9,29 @@ use acc::decimal::Decimal;
 #[test]
 fn rebalance_uses_txdate_rate() {
     let mut j = common::load(
-        "P 2024-01-01 USD EUR 0.90\n\
-         P 2024-06-01 USD EUR 0.95\n\
+        "P 2024-01-01 USD GBP 0.90\n\
+         P 2024-06-01 USD GBP 0.95\n\
          2024-06-15 * x\n\
          \tassets:usd   100 USD\n\
          \tequity:open -100 USD\n",
     );
-    acc::rebalancer::rebalance(&mut j.transactions, "EUR", &j.prices);
+    acc::rebalancer::rebalance(&mut j.transactions, "GBP", &j.prices);
     let amt = j.transactions[0].value.postings[0].value.amount.as_ref().unwrap();
     // Latest rate ≤ 2024-06-15 is 0.95 → 100 × 0.95 = 95
     assert_eq!(amt.value, Decimal::from(95));
-    assert_eq!(amt.commodity, "EUR");
+    assert_eq!(amt.commodity, "GBP");
 }
 
 #[test]
 fn rebalance_uses_inverse_rate_when_direct_missing() {
     let mut j = common::load(
-        "P 2024-06-15 USD EUR 0.5\n\
+        "P 2024-06-15 USD GBP 0.5\n\
          2024-06-15 * x\n\
-         \ta  100 EUR\n\
-         \tb  -100 EUR\n",
+         \ta  100 GBP\n\
+         \tb  -100 GBP\n",
     );
     acc::rebalancer::rebalance(&mut j.transactions, "USD", &j.prices);
-    // No direct EUR→USD stored; inverse of USD→EUR 0.5 = 2.0
+    // No direct GBP→USD stored; inverse of USD→GBP 0.5 = 2.0
     let amt = j.transactions[0].value.postings[0].value.amount.as_ref().unwrap();
     assert_eq!(amt.value, Decimal::from(200));
     assert_eq!(amt.commodity, "USD");
@@ -41,12 +41,12 @@ fn rebalance_uses_inverse_rate_when_direct_missing() {
 fn rebalance_multi_hop_via_cross_commodity() {
     let mut j = common::load(
         "P 2024-06-15 USD CHF 0.9\n\
-         P 2024-06-15 CHF EUR 1.02\n\
+         P 2024-06-15 CHF GBP 1.02\n\
          2024-06-15 * x\n\
          \ta  100 USD\n\
          \tb  -100 USD\n",
     );
-    acc::rebalancer::rebalance(&mut j.transactions, "EUR", &j.prices);
+    acc::rebalancer::rebalance(&mut j.transactions, "GBP", &j.prices);
     let amt = j.transactions[0].value.postings[0].value.amount.as_ref().unwrap();
     // 100 × 0.9 × 1.02 = 91.8
     let expected = Decimal::from(100) * Decimal::parse("0.9").unwrap() * Decimal::parse("1.02").unwrap();
@@ -60,7 +60,7 @@ fn missing_rate_leaves_amount_unchanged() {
          \ta  100 USD\n\
          \tb  -100 USD\n",
     );
-    acc::rebalancer::rebalance(&mut j.transactions, "EUR", &j.prices);
+    acc::rebalancer::rebalance(&mut j.transactions, "GBP", &j.prices);
     let amt = j.transactions[0].value.postings[0].value.amount.as_ref().unwrap();
     // No P-directive → rebalancer leaves it as USD
     assert_eq!(amt.commodity, "USD");
@@ -71,32 +71,32 @@ fn missing_rate_leaves_amount_unchanged() {
 fn same_commodity_is_noop() {
     let mut j = common::load(
         "2024-06-15 * x\n\
-         \ta  100 EUR\n\
-         \tb  -100 EUR\n",
+         \ta  100 GBP\n\
+         \tb  -100 GBP\n",
     );
-    acc::rebalancer::rebalance(&mut j.transactions, "EUR", &j.prices);
+    acc::rebalancer::rebalance(&mut j.transactions, "GBP", &j.prices);
     let amt = j.transactions[0].value.postings[0].value.amount.as_ref().unwrap();
     assert_eq!(amt.value, Decimal::from(100));
-    assert_eq!(amt.commodity, "EUR");
+    assert_eq!(amt.commodity, "GBP");
 }
 
 #[test]
 fn rebalance_lot_posting_converts_via_cost_weight() {
     // A posting held at cost `{}` converts via its balance weight
-    // (quantity × cost-basis), NOT its market value: -10 ASSET {95 EUR}
-    // → €-950, even though the ASSET market price is 200. The lot/cost
+    // (quantity × cost-basis), NOT its market value: -10 ASSET {95 GBP}
+    // → £-950, even though the ASSET market price is 200. The lot/cost
     // annotations are dropped after conversion.
     let mut j = common::load(
-        "P 2024-06-01 ASSET EUR 200\n\
+        "P 2024-06-01 ASSET GBP 200\n\
          2024-06-01 * sell\n\
-         \tassets:broker  -10 ASSET {95 EUR}\n\
-         \tassets:cash    1900 EUR\n\
-         \tincome:capital -950 EUR\n",
+         \tassets:broker  -10 ASSET {95 GBP}\n\
+         \tassets:cash    1900 GBP\n\
+         \tincome:capital -950 GBP\n",
     );
-    acc::rebalancer::rebalance(&mut j.transactions, "EUR", &j.prices);
+    acc::rebalancer::rebalance(&mut j.transactions, "GBP", &j.prices);
     let broker = j.transactions[0].value.postings[0].value.amount.as_ref().unwrap();
     assert_eq!(broker.value, Decimal::from(-950)); // weight, not market -2000
-    assert_eq!(broker.commodity, "EUR");
+    assert_eq!(broker.commodity, "GBP");
     assert!(j.transactions[0].value.postings[0].value.lot_cost.is_none());
 }
 
@@ -110,18 +110,18 @@ fn rebalance_lot_posting_converts_via_cost_weight() {
 fn cta_labels_transit_drift_on_declared_account() {
     let mut j = common::load_cfg(
         "[cta]\ngain = \"income:cta\"\nloss = \"expenses:cta\"\n",
-        "P 2024-01-15 EUR USD 1.10\n\
-         P 2024-06-15 EUR USD 1.05\n\
-         P 2024-12-15 EUR USD 1.08\n\
+        "P 2024-01-15 GBP USD 1.10\n\
+         P 2024-06-15 GBP USD 1.05\n\
+         P 2024-12-15 GBP USD 1.08\n\
          2024-01-15 * salary arrives\n\
-         \tassets:checking       10 EUR\n\
-         \tincome:salary        -10 EUR\n\
+         \tassets:checking       10 GBP\n\
+         \tincome:salary        -10 GBP\n\
          2024-06-15 * move to savings\n\
-         \tassets:savings        10 EUR\n\
-         \tassets:checking      -10 EUR\n\
+         \tassets:savings        10 GBP\n\
+         \tassets:checking      -10 GBP\n\
          2024-12-15 * grocery spend\n\
-         \texpenses:food         10 EUR\n\
-         \tassets:savings       -10 EUR\n",
+         \texpenses:food         10 GBP\n\
+         \tassets:savings       -10 GBP\n",
     );
     assert_eq!(j.cta_gain.as_deref(), Some("income:cta"));
     assert_eq!(j.cta_loss.as_deref(), Some("expenses:cta"));

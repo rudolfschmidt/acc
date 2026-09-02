@@ -32,7 +32,7 @@
 //! back to the **booked** (trade) rate: a lot opens at its booked cost in
 //! the counter-commodity, and a disposal realizes `proceeds − cost` as a
 //! single `capital` posting. Mixed-currency native disposals (bought in
-//! EUR, sold in USD) can't be netted and are skipped; they need `-X`.
+//! GBP, sold in USD) can't be netted and are skipped; they need `-X`.
 //!
 //! ## Injection
 //!
@@ -228,7 +228,7 @@ pub fn realize_capital(
             // (acquisition) always opens a long. A negative remainder (a
             // disposal that outran the queue) opens a SHORT only when the
             // position is traded against the target money — a 2-commodity
-            // trade whose counter IS the target (e.g. USD sold for EUR):
+            // trade whose counter IS the target (e.g. USD sold for GBP):
             // there an uncovered disposal is a genuine short, closed by a
             // later purchase. For crypto↔crypto (counter ≠ target) it is
             // the counter-side of a normal trade or a missing cost basis;
@@ -783,21 +783,21 @@ mod tests {
 
     #[test]
     fn short_then_cover_realizes_gain_with_x() {
-        // Pay out 100 USD before owning any (market 1.05 €/USD), then buy
+        // Pay out 100 USD before owning any (market 1.05 £/USD), then buy
         // it back at 1.03: a short USD position. USD is traded against the
-        // target (EUR), so the disposal opens a genuine short; closing it
-        // below where it opened is a 100 × (1.05 − 1.03) = €2 gain.
+        // target (GBP), so the disposal opens a genuine short; closing it
+        // below where it opened is a 100 × (1.05 − 1.03) = £2 gain.
         let src = "\
-            P 2024-01-01 USD EUR 1.05\n\
-            P 2024-06-01 USD EUR 1.03\n\
+            P 2024-01-01 USD GBP 1.05\n\
+            P 2024-06-01 USD GBP 1.03\n\
             2024-01-01 spend\n\
             \tassets:usd    -100 USD\n\
-            \texpenses:work   105 EUR\n\
+            \texpenses:work   105 GBP\n\
             2024-06-01 cover\n\
-            \tassets:bank   -103 EUR\n\
+            \tassets:bank   -103 GBP\n\
             \tassets:usd     100 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, &caps(), Some("EUR"), &db, &prec);
+        realize_capital(&mut txs, &caps(), Some("GBP"), &db, &prec);
         assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-2").unwrap());
     }
 
@@ -810,10 +810,10 @@ mod tests {
         // round-trip realizes (market 700→900 = 200); the BTC side stays a
         // plain leg, so there is no second, spurious capital posting.
         let src = "\
-            P 2024-01-01 ETH EUR 700\n\
-            P 2024-01-01 BTC EUR 10000\n\
-            P 2024-06-01 ETH EUR 900\n\
-            P 2024-06-01 BTC EUR 11000\n\
+            P 2024-01-01 ETH GBP 700\n\
+            P 2024-01-01 BTC GBP 10000\n\
+            P 2024-06-01 ETH GBP 900\n\
+            P 2024-06-01 BTC GBP 11000\n\
             2024-01-01 buy ETH with BTC\n\
             \tassets:eth      1 ETH\n\
             \tassets:btc  -0.07 BTC\n\
@@ -821,21 +821,21 @@ mod tests {
             \tassets:eth     -1 ETH\n\
             \tassets:btc   0.08 BTC\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, &caps(), Some("EUR"), &db, &prec);
+        realize_capital(&mut txs, &caps(), Some("GBP"), &db, &prec);
         assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-200").unwrap());
         assert_eq!(gain_on(&txs, "expenses:capital"), Decimal::zero());
     }
 
     #[test]
     fn oversell_against_non_target_opens_no_short() {
-        // Under -X EUR, an asset-vs-asset over-sell: buy 1 BTC for USD,
+        // Under -X GBP, an asset-vs-asset over-sell: buy 1 BTC for USD,
         // sell 2 BTC. The counter (USD) is not the target, but the lotter
-        // values BTC at its EUR market rate, so the covered lot realizes
+        // values BTC at its GBP market rate, so the covered lot realizes
         // its market move (180 − 90 = 90) and the uncovered 1 BTC survives
         // as a plain leg with no cost basis — exactly one split leg.
         let src = "\
-            P 2024-01-01 BTC EUR 90\n\
-            P 2024-06-01 BTC EUR 180\n\
+            P 2024-01-01 BTC GBP 90\n\
+            P 2024-06-01 BTC GBP 180\n\
             2024-01-01 buy\n\
             \tassets:btc    1 BTC @ 100 USD\n\
             \tassets:cash  -100 USD\n\
@@ -843,7 +843,7 @@ mod tests {
             \tassets:btc   -2 BTC @ 200 USD\n\
             \tassets:cash   400 USD\n";
         let (mut txs, db, prec) = setup(src);
-        realize_capital(&mut txs, &caps(), Some("EUR"), &db, &prec);
+        realize_capital(&mut txs, &caps(), Some("GBP"), &db, &prec);
         // Exactly one covered lot carries a {} cost; the uncovered 1 BTC
         // is a plain leg.
         assert_eq!(split_legs(&txs, "BTC").len(), 1);

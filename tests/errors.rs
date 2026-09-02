@@ -35,7 +35,7 @@ fn conflicting_commodity_aliases() {
     // Two commodities claiming the same `$` alias — a single config file.
     let tmp = TempJournal::with_config(
         "[[commodity]]\nsymbol = \"USD\"\naliases = [\"$\"]\nprecision = 2\n\
-         [[commodity]]\nsymbol = \"EUR\"\naliases = [\"$\"]\nprecision = 2\n",
+         [[commodity]]\nsymbol = \"GBP\"\naliases = [\"$\"]\nprecision = 2\n",
         "",
     );
     let e = acc::load(&tmp.files()).expect_err("load should fail");
@@ -72,7 +72,7 @@ fn single_posting_rejected() {
 
 #[test]
 fn invalid_price_rate() {
-    let e = load_err("P 2024-06-15 USD EUR not-a-number\n");
+    let e = load_err("P 2024-06-15 USD GBP not-a-number\n");
     assert!(matches!(e, acc::LoadError::Parse { .. }));
 }
 
@@ -80,8 +80,8 @@ fn invalid_price_rate() {
 fn expression_division_by_zero() {
     let e = load_err(
         "2024-06-15 * X\n\
-         \tassets:bank   (€100/0)\n\
-         \tequity:open  €-100\n",
+         \tassets:bank   (£100/0)\n\
+         \tequity:open  £-100\n",
     );
     assert!(matches!(e, acc::LoadError::Parse { .. }));
 }
@@ -90,8 +90,8 @@ fn expression_division_by_zero() {
 fn expression_with_two_commodities_fails() {
     let e = load_err(
         "2024-06-15 * X\n\
-         \tassets:bank   (€100 + $50)\n\
-         \tequity:open  €-100\n",
+         \tassets:bank   (£100 + $50)\n\
+         \tequity:open  £-100\n",
     );
     assert!(matches!(e, acc::LoadError::Parse { .. }));
 }

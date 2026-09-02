@@ -38,8 +38,8 @@ pub struct Journal {
     /// every posting amount / cost / balance-assertion. Reports use
     /// this to render all amounts of a commodity consistently.
     pub precisions: HashMap<String, usize>,
-    /// `alias → canonical`. Lets the CLI resolve `-X EUR` to `€` when
-    /// the journal declared `commodity € / alias EUR`, so the target
+    /// `alias → canonical`. Lets the CLI resolve `-X GBP` to `£` when
+    /// the journal declared `commodity £ / alias GBP`, so the target
     /// symbol matches the form stored in postings and the price DB.
     pub aliases: HashMap<String, String>,
     /// Cosmetic display labels from the config's `[[label]]` tables, one set per

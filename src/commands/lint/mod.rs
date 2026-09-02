@@ -237,7 +237,7 @@ fn loc(file: &str, line: usize) -> String {
 }
 
 /// Multi-character commodity symbols must be all uppercase.
-/// Single-character symbols (`$`, `€`, `£`) are exempt — most are
+/// Single-character symbols (`$`, `£`, `£`) are exempt — most are
 /// not ASCII letters anyway and carry no natural case.
 fn lint_commodity_casing(txs: &[Located<Transaction>]) -> Lint {
     let mut issues = Vec::new();
@@ -496,7 +496,7 @@ mod tests {
         let txs = setup(
             "2024-01-01 * x\n\
              \tassets:a   10 USD\n\
-             \tassets:b   -5 €\n\
+             \tassets:b   -5 £\n\
              \tequity:o\n",
         );
         assert!(lint_commodity_casing(&txs).issues.is_empty());
@@ -534,8 +534,8 @@ mod tests {
         // No `capital gain` declared → `$capital:gain` survives verbatim.
         let txs = setup(
             "2024-01-01 * x\n\
-             \tassets:a       -1 EUR\n\
-             \t$capital:gain   1 EUR\n",
+             \tassets:a       -1 GBP\n\
+             \t$capital:gain   1 GBP\n",
         );
         let lint = lint_unresolved_role_refs(&txs);
         assert_eq!(lint.issues.len(), 1);
@@ -548,8 +548,8 @@ mod tests {
         let txs = setup_cfg(
             "[capital]\ngain = \"income:cap\"\n",
             "2024-01-01 * x\n\
-             \tassets:a       -1 EUR\n\
-             \t$capital:gain   1 EUR\n",
+             \tassets:a       -1 GBP\n\
+             \t$capital:gain   1 GBP\n",
         );
         assert!(lint_unresolved_role_refs(&txs).issues.is_empty());
     }
@@ -563,8 +563,8 @@ mod tests {
         // segments → flagged, wherever it sits in the transaction.
         let bad = setup_file(
             "2024-01-01 * x\n\
-             \tassets:cash      -10 EUR\n\
-             \texpenses:travel   10 EUR\n",
+             \tassets:cash      -10 GBP\n\
+             \texpenses:travel   10 GBP\n",
             "/ledger/food-groceries/x.ledger",
         );
         assert_eq!(lint_dir_category(&bad, base, &cats).issues.len(), 1);
@@ -573,8 +573,8 @@ mod tests {
         // regardless of its position or root.
         let good = setup_file(
             "2024-01-01 * x\n\
-             \texpenses:food:groceries   10 EUR\n\
-             \tassets:cash              -10 EUR\n",
+             \texpenses:food:groceries   10 GBP\n\
+             \tassets:cash              -10 GBP\n",
             "/ledger/food-groceries/x.ledger",
         );
         assert!(lint_dir_category(&good, base, &cats).issues.is_empty());
@@ -582,8 +582,8 @@ mod tests {
         // No category posting at all (pure transfer) → skipped, not flagged.
         let transfer = setup_file(
             "2024-01-01 * x\n\
-             \tassets:a   -10 EUR\n\
-             \tassets:b    10 EUR\n",
+             \tassets:a   -10 GBP\n\
+             \tassets:b    10 GBP\n",
             "/ledger/food-groceries/x.ledger",
         );
         assert!(lint_dir_category(&transfer, base, &cats).issues.is_empty());
@@ -591,8 +591,8 @@ mod tests {
         // An `@…` directory is exempt.
         let cash = setup_file(
             "2024-01-01 * x\n\
-             \tassets:cash      -10 EUR\n\
-             \texpenses:travel   10 EUR\n",
+             \tassets:cash      -10 GBP\n\
+             \texpenses:travel   10 GBP\n",
             "/ledger/@cash/x.ledger",
         );
         assert!(lint_dir_category(&cash, base, &cats).issues.is_empty());
@@ -604,8 +604,8 @@ mod tests {
         let cats = ["expenses:".to_string()];
         let bad = setup_file(
             "2024-01-01 * x\n\
-             \tassets:cash      -10 EUR\n\
-             \texpenses:travel   10 EUR\n",
+             \tassets:cash      -10 GBP\n\
+             \texpenses:travel   10 GBP\n",
             "/ledger/food-groceries/x.ledger",
         );
         let lint = lint_dir_category(&bad, base, &cats);
@@ -627,9 +627,9 @@ mod tests {
         // flagged — a correct sibling no longer excuses it.
         let txs = setup_file(
             "2024-01-01 * x\n\
-             \tassets:cash                 -10 EUR\n\
-             \texpenses:medical:treatment    6 EUR\n\
-             \texpenses:medical-treatment    4 EUR\n",
+             \tassets:cash                 -10 GBP\n\
+             \texpenses:medical:treatment    6 GBP\n\
+             \texpenses:medical-treatment    4 GBP\n",
             "/ledger/medical-treatment/x.ledger",
         );
         let lint = lint_dir_category(&txs, base, &cats);
@@ -644,8 +644,8 @@ mod tests {
         let base = "/ledger";
         let tx = setup_file(
             "2024-01-01 * x\n\
-             \tassets:cash      -10 EUR\n\
-             \texpenses:travel   10 EUR\n",
+             \tassets:cash      -10 GBP\n\
+             \texpenses:travel   10 GBP\n",
             "/ledger/food-groceries/x.ledger",
         );
         let lint = lint_dir_category(&tx, base, &[]);

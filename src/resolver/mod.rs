@@ -15,7 +15,7 @@
 //! - all other entries (Commodity/Account scaffolds, Comment) are
 //!   dropped — their information has been extracted.
 //!
-//! Errors on alias conflicts (`$ → USD` and later `$ → EUR`) and on
+//! Errors on alias conflicts (`$ → USD` and later `$ → GBP`) and on
 //! duplicate fx / cta / capital account declarations.
 
 use std::collections::{HashMap, HashSet};
@@ -106,8 +106,8 @@ pub struct Resolved {
     /// regardless of what the posting amounts contain.
     pub precisions: HashMap<String, usize>,
     /// `alias → canonical` map collected from `commodity` directives.
-    /// Handed downstream so CLI targets like `-X EUR` can be resolved
-    /// to `€` before they reach the rebalancer or the price DB.
+    /// Handed downstream so CLI targets like `-X GBP` can be resolved
+    /// to `£` before they reach the rebalancer or the price DB.
     pub aliases: HashMap<String, String>,
     /// Cosmetic display labels from the config's `[[label]]` tables, one set per
     /// view (`balance` / `register`).
@@ -178,7 +178,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
                 // conversion: S keeps its own symbol (it is NOT an alias, so
                 // never folded) but values 1:1 to T. Emit it as a synthetic
                 // price so the ordinary valuation path handles it — the
-                // index/BFS chain it (e.g. USDC → $ → €), and `latest_rate`
+                // index/BFS chain it (e.g. USDC → $ → £), and `latest_rate`
                 // falls back to the earliest entry, so this single day-0 edge
                 // covers every date. Any real dated S→T price is newer and
                 // wins. The target is alias-resolved like any price commodity;
@@ -226,7 +226,7 @@ pub fn resolve(entries: Vec<Located<Entry>>) -> Result<Resolved, ResolveError> {
     // assertions in chronological order. Within one day, a transaction that
     // asserts a balance of *zero* (`= 0`) sorts *after* those that don't, so a
     // same-day true-up (e.g. a year-end `= 0` correction) sees all the day's
-    // other postings first. Non-zero assertions (`= €2176.52`) are ordinary
+    // other postings first. Non-zero assertions (`= $2176.52`) are ordinary
     // mid-history checkpoints and keep their file position. `sort_by_key` is
     // stable, so file order is kept among transactions that tie on both keys.
     transactions.sort_by_key(|a| (a.value.date, asserts_zero(&a.value)));
@@ -610,11 +610,11 @@ mod tests {
 
     #[test]
     fn applies_alias_to_price() {
-        let entries = with(vec![commodity("USD", &["$"], &[], None)], "P 2024-06-15 $ EUR 0.92\n");
+        let entries = with(vec![commodity("USD", &["$"], &[], None)], "P 2024-06-15 $ GBP 0.92\n");
         let out = resolve(entries).unwrap();
         assert_eq!(out.prices.len(), 1);
         assert_eq!(&*out.prices[0].value.base, "USD");
-        assert_eq!(&*out.prices[0].value.quote, "EUR");
+        assert_eq!(&*out.prices[0].value.quote, "GBP");
     }
 
     #[test]
@@ -719,7 +719,7 @@ mod tests {
     fn conflicting_aliases_error() {
         let err = resolve(vec![
             commodity("USD", &["$"], &[], None),
-            commodity("EUR", &["$"], &[], None),
+            commodity("GBP", &["$"], &[], None),
         ])
         .unwrap_err();
         assert!(err.message.contains("alias"));
@@ -744,7 +744,7 @@ mod tests {
                 role("capital loss", "expenses:cap:market"),
                 role("cta gain", "income:cap:cta"),
             ],
-            "2024-06-15 * sell\n    assets:eth  -6 EUR\n    $capital:gain  2 EUR\n    $capital:loss  2 EUR\n    $cta:gain  2 EUR\n",
+            "2024-06-15 * sell\n    assets:eth  -6 GBP\n    $capital:gain  2 GBP\n    $capital:loss  2 GBP\n    $cta:gain  2 GBP\n",
         );
         let out = resolve(entries).unwrap();
         let acct = |i: usize| out.transactions[0].value.postings[i].value.account.as_str();
@@ -761,7 +761,7 @@ mod tests {
         // is what flags the leftover `$…` account.
         let entries = with(
             vec![role("capital gain", "income:cap")],
-            "2024-06-15 * x\n    a  -2 EUR\n    $unknown:gain  1 EUR\n    $captial:gain  1 EUR\n",
+            "2024-06-15 * x\n    a  -2 GBP\n    $unknown:gain  1 GBP\n    $captial:gain  1 GBP\n",
         );
         let out = resolve(entries).unwrap();
         let acct = |i: usize| out.transactions[0].value.postings[i].value.account.as_str();

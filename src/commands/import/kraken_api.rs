@@ -35,7 +35,7 @@ use super::{directive, expand, match_account, read, Match, Rule};
 /// The entry fields a categorization rule may match on.
 const FIELDS: &[&str] = &["type", "asset", "refid", "txid"];
 
-/// One normalized Kraken ledger entry. `asset` is the clean code (EUR/LTC/…);
+/// One normalized Kraken ledger entry. `asset` is the clean code (GBP/LTC/…);
 /// `amount`/`fee` are decimal strings; `raw` is the verbatim `{<id>: {…}}`
 /// payload for the `; api:` comment.
 struct Entry {
@@ -43,7 +43,7 @@ struct Entry {
     refid: String,  // groups the two legs of a trade / instant-buy
     time: String,   // "YYYY-MM-DD HH:MM:SS" (sorts chronologically)
     kind: String,   // deposit | withdrawal | trade | spend | receive
-    asset: String,  // clean code: EUR, LTC, XRP, BTC, USDC
+    asset: String,  // clean code: GBP, LTC, XRP, BTC, USDC
     amount: String, // signed decimal string
     fee: String,    // unsigned decimal string
     raw: String,    // `{<id>: {…}}` payload for the `; api:` comment
@@ -150,8 +150,8 @@ struct Profile {
     rules: Vec<Rule>,
     default_account: String,
     /// Currency code → ledger symbol, from the `commodities` file's `alias`
-    /// declarations (EUR→€, USD→$). A true synonym is folded to its symbol so
-    /// the ledger source reads `€`, not `EUR`. `parity` commodities (USDC/USDT)
+    /// declarations (GBP→£, USD→$). A true synonym is folded to its symbol so
+    /// the ledger source reads `£`, not `GBP`. `parity` commodities (USDC/USDT)
     /// are NOT aliases and stay as their code — parity is a report-time
     /// valuation, never a source substitution.
     aliases: HashMap<String, String>,
@@ -215,7 +215,7 @@ impl Profile {
             rules.push(Rule { conds, account: acc });
         }
 
-        // Currency aliases (EUR→€, USD→$) from the optional `commodities` file.
+        // Currency aliases (GBP→£, USD→$) from the optional `commodities` file.
         // Best-effort: absent/unreadable → empty map, codes pass through verbatim.
         let aliases = match directives.get("commodities") {
             Some(p) => load_aliases(&expand(p)),
@@ -234,7 +234,7 @@ impl Profile {
     }
 
     /// The ledger commodity for a Kraken asset code: its alias canonical form
-    /// (EUR→€, USD→$) when the commodities file declares one, else the code
+    /// (GBP→£, USD→$) when the commodities file declares one, else the code
     /// itself. `parity` commodities (USDC/USDT) are not aliases, so they keep
     /// their code — parity is a valuation relationship, applied at report time,
     /// never folded into the source.
@@ -255,7 +255,7 @@ impl Profile {
     /// there is a fee (account gets `amount - fee`, the fee its own posting, the
     /// counter `-amount`); two with the counter left bare when there is none.
     fn render_single(&self, e: &Entry) -> String {
-        let sym = self.commodity(&e.asset); // EUR→€ etc.; parity codes stay verbatim
+        let sym = self.commodity(&e.asset); // GBP→£ etc.; parity codes stay verbatim
         let counter = self.categorize(e);
         let mut s = format!("{} * {}\n\t; api: {}\n", e.date(), self.title, e.raw);
         if is_zero(&e.fee) {
@@ -573,8 +573,8 @@ mod tests {
 
     #[test]
     fn deposit_without_fee_is_two_postings_bare_counter() {
-        let s = profile().render_single(&entry("deposit", "EUR", "26.6500", "0.0000"));
-        assert!(s.contains("assets:kraken  EUR26.6500"));
+        let s = profile().render_single(&entry("deposit", "GBP", "26.6500", "0.0000"));
+        assert!(s.contains("assets:kraken  GBP26.6500"));
         assert!(s.trim_end().ends_with("assets:transit:kraken"));
         assert!(!s.contains("expenses:kraken-fee"));
     }
@@ -591,55 +591,55 @@ mod tests {
 
     #[test]
     fn trade_books_received_leg_at_spent_cost_with_fee() {
-        let cost = entry("trade", "EUR", "-1063.7500", "0.0000"); // spent (−)
+        let cost = entry("trade", "GBP", "-1063.7500", "0.0000"); // spent (−)
         let base = entry("trade", "LTC", "23.2869965000", "0.0582176000"); // received (+)
         let s = profile().render_trade(&base, &cost);
-        assert!(s.contains("assets:kraken  LTC23.2869965000 @@ EUR1063.7500"));
-        assert!(s.contains("assets:kraken  EUR-1063.7500"));
+        assert!(s.contains("assets:kraken  LTC23.2869965000 @@ GBP1063.7500"));
+        assert!(s.contains("assets:kraken  GBP-1063.7500"));
         assert!(s.contains("expenses:kraken-fee  LTC0.0582176000"));
         assert!(s.contains("assets:kraken  LTC-0.0582176000"));
     }
 
     #[test]
     fn instant_buy_spent_leg_fee_leaves_account() {
-        // spend EUR -24.75 fee 0.25 (cost), receive XRP +8.86782 fee 0 (base).
-        let cost = entry("spend", "EUR", "-24.7500", "0.2500");
+        // spend GBP -24.75 fee 0.25 (cost), receive XRP +8.86782 fee 0 (base).
+        let cost = entry("spend", "GBP", "-24.7500", "0.2500");
         let base = entry("receive", "XRP", "8.86782000", "0.00000000");
         let s = profile().render_trade(&base, &cost);
-        assert!(s.contains("assets:kraken  XRP8.86782000 @@ EUR24.7500"));
-        assert!(s.contains("assets:kraken  EUR-24.7500"));
-        assert!(s.contains("expenses:kraken-fee  EUR0.2500"));
-        assert!(s.contains("assets:kraken  EUR-0.2500"));
+        assert!(s.contains("assets:kraken  XRP8.86782000 @@ GBP24.7500"));
+        assert!(s.contains("assets:kraken  GBP-24.7500"));
+        assert!(s.contains("expenses:kraken-fee  GBP0.2500"));
+        assert!(s.contains("assets:kraken  GBP-0.2500"));
     }
 
     #[test]
     fn stablecoin_stays_its_own_commodity() {
         // USDC is written as its own code, never folded to $ — aliases are
         // report-time display only, never baked into the ledger source.
-        let cost = entry("trade", "EUR", "-74.0004", "0.0000");
+        let cost = entry("trade", "GBP", "-74.0004", "0.0000");
         let base = entry("trade", "USDC", "86.70225511", "0.00000000");
         let s = profile().render_trade(&base, &cost);
-        assert!(s.contains("assets:kraken  USDC86.70225511 @@ EUR74.0004"));
-        assert!(s.contains("assets:kraken  EUR-74.0004"));
+        assert!(s.contains("assets:kraken  USDC86.70225511 @@ GBP74.0004"));
+        assert!(s.contains("assets:kraken  GBP-74.0004"));
     }
 
     #[test]
     fn alias_folds_currency_symbol_but_parity_code_stays() {
-        // A commodities `alias EUR→€` (a true synonym) makes the import write €;
+        // A commodities `alias GBP→£` (a true synonym) makes the import write £;
         // USDC has no alias (it's `parity $`, report-time only), so it stays USDC.
         let mut p = profile();
-        p.aliases.insert("EUR".to_string(), "€".to_string());
-        let cost = entry("trade", "EUR", "-74.0004", "0.0000");
+        p.aliases.insert("GBP".to_string(), "£".to_string());
+        let cost = entry("trade", "GBP", "-74.0004", "0.0000");
         let base = entry("trade", "USDC", "86.70225511", "0.00000000");
         let s = p.render_trade(&base, &cost);
-        assert!(s.contains("assets:kraken  USDC86.70225511 @@ €74.0004"));
-        assert!(s.contains("assets:kraken  €-74.0004"));
+        assert!(s.contains("assets:kraken  USDC86.70225511 @@ £74.0004"));
+        assert!(s.contains("assets:kraken  £-74.0004"));
     }
 
     #[test]
     fn existing_ids_reads_the_api_map_key() {
-        let src = "2026-03-01 * k\n\t; api: {\"LID1\":{\"type\":\"deposit\"}}\n\tassets:kraken €1\n\
-                   \n2026-03-02 * k\n\t; api: {\"LID2\":{\"type\":\"withdrawal\"}}\n\tassets:kraken €1\n";
+        let src = "2026-03-01 * k\n\t; api: {\"LID1\":{\"type\":\"deposit\"}}\n\tassets:kraken £1\n\
+                   \n2026-03-02 * k\n\t; api: {\"LID2\":{\"type\":\"withdrawal\"}}\n\tassets:kraken £1\n";
         let ids = existing_ids(src);
         assert!(ids.contains("LID1") && ids.contains("LID2"));
         assert_eq!(ids.len(), 2);

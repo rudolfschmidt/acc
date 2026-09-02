@@ -256,14 +256,14 @@ mod tests {
     #[test]
     fn transit_drift_emits_cta_release_tx() {
         let src = "\
-            P 2024-01-15 EUR USD 1.10\n\
-            P 2024-06-15 EUR USD 1.05\n\
+            P 2024-01-15 GBP USD 1.10\n\
+            P 2024-06-15 GBP USD 1.05\n\
             2024-01-15 * receive\n\
-            \tassets:checking   10 EUR\n\
-            \tincome:salary    -10 EUR\n\
+            \tassets:checking   10 GBP\n\
+            \tincome:salary    -10 GBP\n\
             2024-06-15 * spend\n\
-            \texpenses:food     10 EUR\n\
-            \tassets:checking  -10 EUR\n";
+            \texpenses:food     10 GBP\n\
+            \tassets:checking  -10 GBP\n";
         let (mut txs, db) = setup(src);
         translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
 
@@ -282,7 +282,7 @@ mod tests {
             Decimal::parse("-0.50").unwrap()
         );
         let credit = &release.value.postings[1].value;
-        // EUR weakened 1.10→1.05 during the holding period; the
+        // GBP weakened 1.10→1.05 during the holding period; the
         // transit held less target-value at outflow than inflow, so
         // the positive running drift routes to the loss account.
         assert_eq!(credit.account, "expenses:cta");
@@ -295,10 +295,10 @@ mod tests {
     #[test]
     fn non_transit_account_untouched() {
         let src = "\
-            P 2024-01-15 EUR USD 1.10\n\
+            P 2024-01-15 GBP USD 1.10\n\
             2024-01-15 * receive only\n\
-            \tassets:checking   10 EUR\n\
-            \tincome:salary    -10 EUR\n";
+            \tassets:checking   10 GBP\n\
+            \tincome:salary    -10 GBP\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
         translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
@@ -308,14 +308,14 @@ mod tests {
     #[test]
     fn no_drift_no_release() {
         let src = "\
-            P 2024-01-15 EUR USD 1.10\n\
-            P 2024-06-15 EUR USD 1.10\n\
+            P 2024-01-15 GBP USD 1.10\n\
+            P 2024-06-15 GBP USD 1.10\n\
             2024-01-15 * receive\n\
-            \tassets:checking   10 EUR\n\
-            \tincome:salary    -10 EUR\n\
+            \tassets:checking   10 GBP\n\
+            \tincome:salary    -10 GBP\n\
             2024-06-15 * spend\n\
-            \texpenses:food     10 EUR\n\
-            \tassets:checking  -10 EUR\n";
+            \texpenses:food     10 GBP\n\
+            \tassets:checking  -10 GBP\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
         translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
@@ -326,11 +326,11 @@ mod tests {
     fn missing_rate_skips_group() {
         let src = "\
             2024-01-15 * receive\n\
-            \tassets:checking   10 EUR\n\
-            \tincome:salary    -10 EUR\n\
+            \tassets:checking   10 GBP\n\
+            \tincome:salary    -10 GBP\n\
             2024-06-15 * spend\n\
-            \texpenses:food     10 EUR\n\
-            \tassets:checking  -10 EUR\n";
+            \texpenses:food     10 GBP\n\
+            \tassets:checking  -10 GBP\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
         translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
@@ -345,16 +345,16 @@ mod tests {
         // taint exclusion was proven unnecessary (2026-06-21). USD flows
         // in @1.10 and back out @1.05; native sum 0, target drift 0.50.
         let src = "\
-            P 2024-01-15 USD EUR 1.10\n\
-            P 2024-06-15 USD EUR 1.05\n\
+            P 2024-01-15 USD GBP 1.10\n\
+            P 2024-06-15 USD GBP 1.05\n\
             2024-01-15 * in\n\
             \tcounterparty:partner    -100 USD\n\
-            \tincome:sales   110 EUR\n\
+            \tincome:sales   110 GBP\n\
             2024-06-15 * out\n\
             \tcounterparty:partner     100 USD\n\
-            \tassets:bank   -105 EUR\n";
+            \tassets:bank   -105 GBP\n";
         let (mut txs, db) = setup(src);
-        translate(&mut txs, "EUR", &db, "income:cta", "expenses:cta", 2);
+        translate(&mut txs, "GBP", &db, "income:cta", "expenses:cta", 2);
         let release = txs
             .iter()
             .find(|lt| lt.value.description == "commodity translation adjustment")

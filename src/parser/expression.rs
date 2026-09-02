@@ -3,7 +3,7 @@
 //!
 //! The parser is a tiny recursive-descent evaluator for `+ - * /` with
 //! parenthesised sub-expressions and unary minus. Commodity symbols
-//! are stripped out before arithmetic so `(€11784.00 / 12)` works the
+//! are stripped out before arithmetic so `(£11784.00 / 12)` works the
 //! same as `(11784.00 / 12)`; the commodity then rides along as the
 //! result's commodity label.
 //!
@@ -57,7 +57,7 @@ fn find_close(text: &str) -> Result<usize, String> {
 /// Separate commodity characters from math characters. Commodities
 /// are collected as a list of whitespace-/math-delimited runs; having
 /// more than one distinct commodity inside a single expression is a
-/// hard error (`1 EUR + 1 USD` makes no numeric sense). Zero
+/// hard error (`1 GBP + 1 USD` makes no numeric sense). Zero
 /// commodities is fine — the result carries an empty commodity.
 fn split_commodity(text: &str) -> Result<(String, String), String> {
     let mut commodities: Vec<String> = Vec::new();
@@ -253,15 +253,15 @@ mod tests {
 
     #[test]
     fn commodity_before_expression() {
-        let (commodity, value, _) = parse("(€11784.00 / 12)").unwrap();
-        assert_eq!(commodity, "€");
+        let (commodity, value, _) = parse("(£11784.00 / 12)").unwrap();
+        assert_eq!(commodity, "£");
         assert_eq!(value, Decimal::parse("982").unwrap());
     }
 
     #[test]
     fn commodity_after_expression() {
-        let (commodity, value, _) = parse("(100 EUR / 4)").unwrap();
-        assert_eq!(commodity, "EUR");
+        let (commodity, value, _) = parse("(100 GBP / 4)").unwrap();
+        assert_eq!(commodity, "GBP");
         assert_eq!(value, Decimal::from(25));
     }
 
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn two_commodities_error() {
-        let err = parse("(1 EUR + 1 USD)").unwrap_err();
+        let err = parse("(1 GBP + 1 USD)").unwrap_err();
         assert!(err.contains("at most one commodity"));
     }
 }

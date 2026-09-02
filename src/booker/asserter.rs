@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn commodity_tracked_separately_per_account() {
         let src = "2024-01-01 * A\n    assets:bank   100 USD\n    equity:a  -100 USD\n\
-                   2024-01-02 * B\n    assets:bank   50 EUR = 50 EUR\n    equity:b  -50 EUR\n";
+                   2024-01-02 * B\n    assets:bank   50 GBP = 50 GBP\n    equity:b  -50 GBP\n";
         assert!(asserted(src).is_ok());
     }
 
@@ -287,20 +287,20 @@ mod tests {
     fn star_zero_flattens_every_commodity_skipping_zeros() {
         // `= *0` zeroes each non-zero commodity of the account; a commodity
         // already at zero produces no correction posting.
-        let src = "2024-01-01 * build\n    assets:w   30 USD\n    assets:w   2 EUR\n\
+        let src = "2024-01-01 * build\n    assets:w   30 USD\n    assets:w   2 GBP\n\
                    \tassets:w   0 GBP\n    equity:o\n\
                    2024-02-01 * flatten\n    assets:w   = *0\n    equity:reset\n";
         let out = asserted(src).unwrap();
         let flatten = &out[1].value;
-        // Two corrections (USD, EUR) + the bare counter expanded per commodity.
+        // Two corrections (USD, GBP) + the bare counter expanded per commodity.
         let corrections: Vec<_> = flatten
             .postings
             .iter()
             .filter(|lp| lp.value.account == "assets:w")
             .collect();
-        assert_eq!(corrections.len(), 2, "USD + EUR zeroed, GBP (already 0) skipped");
+        assert_eq!(corrections.len(), 2, "USD + GBP zeroed, GBP (already 0) skipped");
         // The account is flat afterwards in every commodity.
-        for c in ["USD", "EUR"] {
+        for c in ["USD", "GBP"] {
             let mut out2 = out.clone();
             // running balance check: apply everything and confirm zero.
             let bal: Decimal = out2

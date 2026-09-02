@@ -990,7 +990,7 @@ fn start(raw_args: Vec<String>, inject: crate::Inject) -> Result<(), crate::Erro
     .map_err(|e| crate::Error::from(e.to_string()))?;
 
     // Resolve the `-X` target through the journal's aliases so
-    // `-X EUR` and `-X €` both collapse to the canonical symbol the
+    // `-X GBP` and `-X £` both collapse to the canonical symbol the
     // price DB and postings are stored under. Without this, the
     // lookup silently misses when the CLI uses one spelling and the
     // journal the other.

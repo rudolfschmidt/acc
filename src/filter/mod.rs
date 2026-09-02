@@ -15,7 +15,7 @@
 //! desc <foo>         same as @foo (keyword form for values with spaces)
 //! #XYZ               transaction-code equals "XYZ" (case-insensitive)
 //! code <XYZ>         same as #XYZ
-//! com <EUR>          posting commodity equals "EUR" (case-insensitive)
+//! com <GBP>          posting commodity equals "GBP" (case-insensitive)
 //! not <pat>          negate the following single pattern
 //! and / or           combinators. Default between bare tokens is OR.
 //! ```
@@ -745,7 +745,7 @@ mod tests {
         let txs = vec![tx(
             "2025-01-01",
             "a",
-            vec![posting("expenses:coffee", "EUR", -5), posting("assets:cash", "EUR", 5)],
+            vec![posting("expenses:coffee", "GBP", -5), posting("assets:cash", "GBP", 5)],
         )];
         let out = run(&["^ex"], txs);
         assert_eq!(out.len(), 1);
@@ -758,7 +758,7 @@ mod tests {
         let txs = vec![tx(
             "2025-01-01",
             "a",
-            vec![posting("expenses:coffee", "EUR", -5), posting("assets:cash", "EUR", 5)],
+            vec![posting("expenses:coffee", "GBP", -5), posting("assets:cash", "GBP", 5)],
         )];
         let out = run(&["cash$"], txs);
         assert_eq!(out[0].value.postings.len(), 1);
@@ -770,7 +770,7 @@ mod tests {
         let txs = vec![tx(
             "2025-01-01",
             "a",
-            vec![posting("expenses:coffee", "EUR", -5), posting("expenses:coffee:bar", "EUR", 5)],
+            vec![posting("expenses:coffee", "GBP", -5), posting("expenses:coffee:bar", "GBP", 5)],
         )];
         let out = run(&["^expenses:coffee$"], txs);
         assert_eq!(out[0].value.postings.len(), 1);
@@ -784,12 +784,12 @@ mod tests {
                 tx(
                     "2025-01-01",
                     "Amazon order",
-                    vec![posting("expenses:x", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                    vec![posting("expenses:x", "GBP", -5), posting("assets:cc", "GBP", 5)],
                 ),
                 tx(
                     "2025-01-02",
                     "Walmart",
-                    vec![posting("expenses:y", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                    vec![posting("expenses:y", "GBP", -5), posting("assets:cc", "GBP", 5)],
                 ),
             ]
         };
@@ -808,13 +808,13 @@ mod tests {
                     "2025-01-01",
                     "a",
                     Some("INV-42"),
-                    vec![posting("expenses:x", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                    vec![posting("expenses:x", "GBP", -5), posting("assets:cc", "GBP", 5)],
                 ),
                 tx_coded(
                     "2025-01-02",
                     "b",
                     Some("INV-43"),
-                    vec![posting("expenses:y", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                    vec![posting("expenses:y", "GBP", -5), posting("assets:cc", "GBP", 5)],
                 ),
             ]
         };
@@ -831,7 +831,7 @@ mod tests {
             tx(
                 "2025-01-01",
                 "a",
-                vec![posting("expenses:x", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:x", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
             tx(
                 "2025-01-02",
@@ -839,13 +839,13 @@ mod tests {
                 vec![posting("expenses:y", "USD", -5), posting("assets:cc", "USD", 5)],
             ),
         ];
-        let out = run(&["com", "EUR"], txs);
+        let out = run(&["com", "GBP"], txs);
         assert_eq!(out.len(), 1);
         assert!(out[0]
             .value
             .postings
             .iter()
-            .all(|lp| lp.value.amount.as_ref().map(|a| a.commodity.as_str()) == Some("EUR")));
+            .all(|lp| lp.value.amount.as_ref().map(|a| a.commodity.as_str()) == Some("GBP")));
     }
 
     #[test]
@@ -853,10 +853,10 @@ mod tests {
         let txs = vec![tx(
             "2025-01-01",
             "a",
-            vec![posting("expenses:x", "EUR", -5), posting("assets:cc", "EUR", 5)],
+            vec![posting("expenses:x", "GBP", -5), posting("assets:cc", "GBP", 5)],
         )];
         // Lowercase pattern matches uppercase commodity.
-        let out = run(&["com", "eur"], txs);
+        let out = run(&["com", "gbp"], txs);
         assert_eq!(out.len(), 1);
     }
 
@@ -865,7 +865,7 @@ mod tests {
         let txs = vec![tx(
             "2025-01-01",
             "a",
-            vec![posting("expenses:coffee", "EUR", -5), posting("assets:cc", "EUR", 5)],
+            vec![posting("expenses:coffee", "GBP", -5), posting("assets:cc", "GBP", 5)],
         )];
         let out = run(&["not", "^ex"], txs);
         assert_eq!(out.len(), 1);
@@ -879,12 +879,12 @@ mod tests {
             tx(
                 "2025-01-01",
                 "Amazon",
-                vec![posting("expenses:x", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:x", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
             tx(
                 "2025-01-02",
                 "Walmart",
-                vec![posting("expenses:y", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:y", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
         ];
         let out = run(&["not", "desc", "amazon"], txs);
@@ -898,7 +898,7 @@ mod tests {
             tx(
                 "2025-01-01",
                 "a",
-                vec![posting("expenses:x", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:x", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
             tx(
                 "2025-01-02",
@@ -906,7 +906,7 @@ mod tests {
                 vec![posting("expenses:y", "USD", -5), posting("assets:cc", "USD", 5)],
             ),
         ];
-        let out = run(&["not", "com", "EUR"], txs);
+        let out = run(&["not", "com", "GBP"], txs);
         assert_eq!(out.len(), 1);
         assert!(out[0]
             .value
@@ -920,13 +920,13 @@ mod tests {
         let txs = vec![tx(
             "2025-01-01",
             "a",
-            vec![posting("expenses:x", "EUR", -5), posting("assets:cc", "USD", 5)],
+            vec![posting("expenses:x", "GBP", -5), posting("assets:cc", "USD", 5)],
         )];
-        let out = run(&["^ex", "and", "com", "EUR"], txs);
+        let out = run(&["^ex", "and", "com", "GBP"], txs);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value.postings.len(), 1);
         assert_eq!(account(&out[0], 0), "expenses:x");
-        assert_eq!(commodity_of(&out[0], 0), "EUR");
+        assert_eq!(commodity_of(&out[0], 0), "GBP");
     }
 
     #[test]
@@ -935,12 +935,12 @@ mod tests {
             tx(
                 "2025-01-01",
                 "Amazon",
-                vec![posting("expenses:books", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:books", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
             tx(
                 "2025-01-02",
                 "Walmart",
-                vec![posting("expenses:food", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:food", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
         ];
         let out = run(&["^ex", "and", "@amazon"], txs);
@@ -955,17 +955,17 @@ mod tests {
             tx(
                 "2025-01-01",
                 "a",
-                vec![posting("expenses:coffee", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:coffee", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
             tx(
                 "2025-01-02",
                 "b",
-                vec![posting("income:salary", "EUR", 5), posting("assets:cc", "EUR", -5)],
+                vec![posting("income:salary", "GBP", 5), posting("assets:cc", "GBP", -5)],
             ),
             tx(
                 "2025-01-03",
                 "c",
-                vec![posting("li:loan", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("li:loan", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
         ];
         let out = run(&["^ex", "^in"], txs);
@@ -979,17 +979,17 @@ mod tests {
             tx(
                 "2025-01-01",
                 "Amazon",
-                vec![posting("expenses:books", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:books", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
             tx(
                 "2025-01-02",
                 "Walmart",
-                vec![posting("expenses:food", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:food", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
             tx(
                 "2025-01-03",
                 "any",
-                vec![posting("income:salary", "EUR", 5), posting("assets:cc", "EUR", -5)],
+                vec![posting("income:salary", "GBP", 5), posting("assets:cc", "GBP", -5)],
             ),
         ];
         let out = run(&["^ex", "and", "@amazon", "or", "^in"], txs);
@@ -1002,12 +1002,12 @@ mod tests {
             tx(
                 "2025-01-01",
                 "foo bar baz",
-                vec![posting("expenses:x", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:x", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
             tx(
                 "2025-01-02",
                 "foobar",
-                vec![posting("expenses:y", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:y", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
         ];
         let out = run(&["desc", "foo bar"], txs);
@@ -1021,12 +1021,12 @@ mod tests {
             tx(
                 "2025-01-01",
                 "foo bar baz",
-                vec![posting("expenses:x", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:x", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
             tx(
                 "2025-01-02",
                 "foobar",
-                vec![posting("expenses:y", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:y", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
         ];
         let out = run(&["@foo bar"], txs);
@@ -1039,12 +1039,12 @@ mod tests {
             tx(
                 "2025-01-01",
                 "a",
-                vec![posting("expenses:x", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:x", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
             tx(
                 "2025-02-01",
                 "b",
-                vec![posting("expenses:y", "EUR", -5), posting("assets:cc", "EUR", 5)],
+                vec![posting("expenses:y", "GBP", -5), posting("assets:cc", "GBP", 5)],
             ),
         ];
         let pats: Vec<String> = Vec::new();
@@ -1091,7 +1091,7 @@ mod tests {
 
     #[test]
     fn matches_account_only_accepts_when_only_non_account_dims_constrain() {
-        let m = PatternMatcher::from_parts(&["com".into(), "EUR".into()]);
+        let m = PatternMatcher::from_parts(&["com".into(), "GBP".into()]);
         assert!(m.matches("any:account"));
     }
 
@@ -1113,7 +1113,7 @@ mod tests {
         let txs = vec![tx(
             "2025-01-01",
             "irrelevant",
-            vec![posting("foo:bar", "EUR", -5), posting("assets:cc", "EUR", 5)],
+            vec![posting("foo:bar", "GBP", -5), posting("assets:cc", "GBP", 5)],
         )];
         let out = run(&["foo", "desc"], txs);
         assert_eq!(out.len(), 1);
@@ -1126,7 +1126,7 @@ mod tests {
         let txs = vec![tx(
             "2025-01-01",
             "a",
-            vec![posting("expenses:coffee", "EUR", -5), posting("assets:cc", "EUR", 5)],
+            vec![posting("expenses:coffee", "GBP", -5), posting("assets:cc", "GBP", 5)],
         )];
         let out = run(&["not", "not", "^ex"], txs);
         assert_eq!(out.len(), 1);
@@ -1143,9 +1143,9 @@ mod tests {
             "2025-01-01",
             "a",
             vec![
-                posting("assets:in", "EUR", 5),
-                posting("assets:out", "EUR", -5),
-                posting("assets:zero", "EUR", 0),
+                posting("assets:in", "GBP", 5),
+                posting("assets:out", "GBP", -5),
+                posting("assets:zero", "GBP", 0),
             ],
         )];
         let out = run_sign(&[], false, SignFilter::NonNegative, txs);
@@ -1159,9 +1159,9 @@ mod tests {
             "2025-01-01",
             "a",
             vec![
-                posting("assets:in", "EUR", 5),
-                posting("assets:out", "EUR", -5),
-                posting("assets:zero", "EUR", 0),
+                posting("assets:in", "GBP", 5),
+                posting("assets:out", "GBP", -5),
+                posting("assets:zero", "GBP", 0),
             ],
         )];
         let out = run_sign(&[], false, SignFilter::NonPositive, txs);
@@ -1176,7 +1176,7 @@ mod tests {
         let txs = vec![tx(
             "2025-01-01",
             "a",
-            vec![posting("assets:a", "EUR", 5), posting("assets:b", "EUR", 5)],
+            vec![posting("assets:a", "GBP", 5), posting("assets:b", "GBP", 5)],
         )];
         let out = run_sign(&[], false, SignFilter::NonPositive, txs);
         assert!(out.is_empty());
@@ -1201,9 +1201,9 @@ mod tests {
             "2025-01-01",
             "a",
             vec![
-                posting("assets:vendor", "EUR", 100),
-                posting("expenses:a", "EUR", -60),
-                posting("expenses:b", "EUR", -40),
+                posting("assets:vendor", "GBP", 100),
+                posting("expenses:a", "GBP", -60),
+                posting("expenses:b", "GBP", -40),
             ],
         )];
         let out = run_sign(&["^assets:vendor"], true, SignFilter::NonNegative, txs);
@@ -1220,9 +1220,9 @@ mod tests {
             "2025-01-05",
             "Vendor",
             vec![
-                posting("expenses:food", "EUR", 30),
-                posting("expenses:fee", "EUR", 5),
-                posting("assets:vendor", "EUR", -35),
+                posting("expenses:food", "GBP", 30),
+                posting("expenses:fee", "GBP", 5),
+                posting("assets:vendor", "GBP", -35),
             ],
         )];
         let out = run_display(&["^assets:vendor"], false, false, "^ex", txs);
@@ -1237,8 +1237,8 @@ mod tests {
                 "2025-01-05",
                 "Vendor",
                 vec![
-                    posting("expenses:food", "EUR", 30),
-                    posting("assets:vendor", "EUR", -30),
+                    posting("expenses:food", "GBP", 30),
+                    posting("assets:vendor", "GBP", -30),
                 ],
             )]
         };
@@ -1255,16 +1255,16 @@ mod tests {
                 "2025-01-05",
                 "a",
                 vec![
-                    posting("expenses:food", "EUR", 30),
-                    posting("assets:cash", "EUR", -30),
+                    posting("expenses:food", "GBP", 30),
+                    posting("assets:cash", "GBP", -30),
                 ],
             ),
             tx(
                 "2025-01-06",
                 "b",
                 vec![
-                    posting("income:job", "EUR", -50),
-                    posting("assets:cash", "EUR", 50),
+                    posting("income:job", "GBP", -50),
+                    posting("assets:cash", "GBP", 50),
                 ],
             ),
         ];
@@ -1281,8 +1281,8 @@ mod tests {
             "2025-01-05",
             "Vendor",
             vec![
-                posting("income:job", "EUR", -50),
-                posting("assets:vendor", "EUR", 50),
+                posting("income:job", "GBP", -50),
+                posting("assets:vendor", "GBP", 50),
             ],
         )];
         let out = run_display(&["^assets:vendor"], false, false, "^ex", txs);
@@ -1295,8 +1295,8 @@ mod tests {
             "2025-01-05",
             "a",
             vec![
-                posting("assets:bank:cash", "EUR", 10),
-                posting("assets:bank:savings", "EUR", -10),
+                posting("assets:bank:cash", "GBP", 10),
+                posting("assets:bank:savings", "GBP", -10),
             ],
         )];
         let out = run_display(&[], false, false, "cash$", txs);
@@ -1310,9 +1310,9 @@ mod tests {
             "2025-01-01",
             "a",
             vec![
-                posting("assets:a", "EUR", 100),
-                posting("assets:b", "EUR", -100),
-                posting("assets:c", "EUR", 50),
+                posting("assets:a", "GBP", 100),
+                posting("assets:b", "GBP", -100),
+                posting("assets:c", "GBP", 50),
             ],
         )];
         let out = run_amount("100", txs);
@@ -1325,7 +1325,7 @@ mod tests {
         let txs = vec![tx(
             "2025-01-01",
             "a",
-            vec![posting("assets:a", "EUR", 100), posting("assets:b", "EUR", -100)],
+            vec![posting("assets:a", "GBP", 100), posting("assets:b", "GBP", -100)],
         )];
         let out = run_amount("-100", txs);
         assert_eq!(accounts(&out[0]), vec!["assets:b"]);
@@ -1337,9 +1337,9 @@ mod tests {
             "2025-01-01",
             "a",
             vec![
-                posting("assets:a", "EUR", 150),
-                posting("assets:b", "EUR", 100),
-                posting("assets:c", "EUR", -200),
+                posting("assets:a", "GBP", 150),
+                posting("assets:b", "GBP", 100),
+                posting("assets:c", "GBP", -200),
             ],
         )];
         let out = run_amount(">100", txs);
@@ -1352,9 +1352,9 @@ mod tests {
             "2025-01-01",
             "a",
             vec![
-                posting("assets:a", "EUR", 50),
-                posting("assets:b", "EUR", 100),
-                posting("assets:c", "EUR", 101),
+                posting("assets:a", "GBP", 50),
+                posting("assets:b", "GBP", 100),
+                posting("assets:c", "GBP", 101),
             ],
         )];
         let out = run_amount("<=100", txs);
@@ -1366,7 +1366,7 @@ mod tests {
         let txs = vec![tx(
             "2025-01-01",
             "a",
-            vec![posting("assets:a", "EUR", 5), posting("assets:b", "EUR", -5)],
+            vec![posting("assets:a", "GBP", 5), posting("assets:b", "GBP", -5)],
         )];
         // No posting is exactly 999, so the whole transaction is dropped.
         assert!(run_amount("999", txs).is_empty());
@@ -1390,9 +1390,9 @@ mod tests {
             "2025-01-01",
             "a",
             vec![
-                posting("assets:a", "EUR", 100),
-                posting("assets:b", "EUR", -100),
-                posting("assets:c", "EUR", 50),
+                posting("assets:a", "GBP", 100),
+                posting("assets:b", "GBP", -100),
+                posting("assets:c", "GBP", 50),
             ],
         )];
         // `<>100` keeps everything except exactly +100 (signed).
@@ -1427,8 +1427,8 @@ mod tests {
             "2025-02-01",
             "a",
             vec![
-                posting("expenses:food", "EUR", 150),
-                posting("assets:cash", "EUR", -150),
+                posting("expenses:food", "GBP", 150),
+                posting("assets:cash", "GBP", -150),
             ],
         )];
         let out = run_related_amount(">100", &[], txs);
@@ -1444,8 +1444,8 @@ mod tests {
             "2025-02-01",
             "a",
             vec![
-                posting("expenses:food", "EUR", 50),
-                posting("assets:cash", "EUR", -50),
+                posting("expenses:food", "GBP", 50),
+                posting("assets:cash", "GBP", -50),
             ],
         )];
         let out = run_related_amount(">100", &[], txs);
@@ -1461,9 +1461,9 @@ mod tests {
             "2025-02-01",
             "a",
             vec![
-                posting("expenses:food", "EUR", 150),
-                posting("expenses:small", "EUR", 10),
-                posting("assets:cash", "EUR", -160),
+                posting("expenses:food", "GBP", 150),
+                posting("expenses:small", "GBP", 10),
+                posting("assets:cash", "GBP", -160),
             ],
         )];
         let out = run_related_amount(">100", &["^expenses"], txs);

@@ -542,7 +542,7 @@ mod tests {
     fn amounts_share_one_right_aligned_column() {
         let layout = RowLayout { name_col: 20, amount_w: 10, width: 60 };
         // Different name lengths AND amount widths; all must end in one column.
-        let cases = [("a", "€1.00"), ("equity", "€-45988.48"), ("ex", "€21.21")];
+        let cases = [("a", "$1.00"), ("equity", "$-45678.90"), ("ex", "$21.21")];
         for (name, amount) in cases {
             let line = row_line(name, None, amount, Color::Green, false, layout);
             assert_eq!(
@@ -554,9 +554,9 @@ mod tests {
         // The longest name (length == name_col) with the widest amount keeps
         // exactly GAP of lead; a narrower amount gets more (right-aligned).
         let longest = "x".repeat(layout.name_col);
-        let widest = row_line(&longest, None, "€-45988.48", Color::Green, false, layout);
+        let widest = row_line(&longest, None, "$-45678.90", Color::Green, false, layout);
         assert_eq!(widest.spans[1].content.chars().count(), GAP);
-        let narrow = row_line(&longest, None, "€1.00", Color::Green, false, layout);
+        let narrow = row_line(&longest, None, "$1.00", Color::Green, false, layout);
         assert!(narrow.spans[1].content.chars().count() > GAP);
     }
 
@@ -564,9 +564,9 @@ mod tests {
     fn draw_renders_amounts_right_aligned() {
         // Tree with different-length names and amount widths.
         let mut root = Account::root();
-        root.find_or_create("equity").add_amount("€", Decimal::new(-4598848, 100));
-        root.find_or_create("ex").add_amount("€", Decimal::new(2121, 100));
-        root.find_or_create("aim").add_amount("€", Decimal::new(-47408, 100));
+        root.find_or_create("equity").add_amount("$", Decimal::new(-4567890, 100));
+        root.find_or_create("ex").add_amount("$", Decimal::new(2121, 100));
+        root.find_or_create("aim").add_amount("$", Decimal::new(-47408, 100));
         let journal = Journal::default();
 
         let app = App::new(&root, &journal, false);
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn draw_shows_register_label_inline() {
         let mut root = Account::root();
-        root.find_or_create("cc:12").add_amount("€", Decimal::new(4242, 100));
+        root.find_or_create("cc:12").add_amount("$", Decimal::new(4242, 100));
         let mut journal = Journal::default();
         journal
             .labels_register

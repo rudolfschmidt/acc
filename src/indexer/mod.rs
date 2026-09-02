@@ -53,22 +53,22 @@ mod tests {
 
     #[test]
     fn builds_direct_lookup() {
-        let db = build("P 2024-06-15 USD EUR 0.92\n");
-        assert_eq!(db.find("USD", "EUR", "2024-06-16"), Some(Decimal::parse("0.92").unwrap()));
+        let db = build("P 2024-06-15 USD GBP 0.92\n");
+        assert_eq!(db.find("USD", "GBP", "2024-06-16"), Some(Decimal::parse("0.92").unwrap()));
     }
 
     #[test]
     fn inverse_is_computed_on_the_fly() {
-        let db = build("P 2024-06-15 USD EUR 0.5\n");
-        assert_eq!(db.find("EUR", "USD", "2024-06-16"), Some(Decimal::from(2)));
+        let db = build("P 2024-06-15 USD GBP 0.5\n");
+        assert_eq!(db.find("GBP", "USD", "2024-06-16"), Some(Decimal::from(2)));
     }
 
     #[test]
     fn multi_hop_path() {
-        let src = "P 2024-06-15 USD CHF 0.9\nP 2024-06-15 CHF EUR 1.02\n";
+        let src = "P 2024-06-15 USD CHF 0.9\nP 2024-06-15 CHF GBP 1.02\n";
         let db = build(src);
-        // USD → CHF (0.9) → EUR (1.02) = 0.918
-        let rate = db.find("USD", "EUR", "2024-06-16").unwrap();
+        // USD → CHF (0.9) → GBP (1.02) = 0.918
+        let rate = db.find("USD", "GBP", "2024-06-16").unwrap();
         assert_eq!(rate, Decimal::parse("0.9").unwrap() * Decimal::parse("1.02").unwrap());
     }
 
@@ -80,10 +80,10 @@ mod tests {
 
     #[test]
     fn latest_before_date() {
-        let src = "P 2024-01-01 USD EUR 0.9\nP 2024-06-01 USD EUR 0.92\n";
+        let src = "P 2024-01-01 USD GBP 0.9\nP 2024-06-01 USD GBP 0.92\n";
         let db = build(src);
-        assert_eq!(db.find("USD", "EUR", "2024-03-01"), Some(Decimal::parse("0.9").unwrap()));
-        assert_eq!(db.find("USD", "EUR", "2024-07-01"), Some(Decimal::parse("0.92").unwrap()));
+        assert_eq!(db.find("USD", "GBP", "2024-03-01"), Some(Decimal::parse("0.9").unwrap()));
+        assert_eq!(db.find("USD", "GBP", "2024-07-01"), Some(Decimal::parse("0.92").unwrap()));
     }
 
     #[test]
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn zero_rate_ignored() {
-        let src = "P 2024-06-15 USD EUR 0\n";
+        let src = "P 2024-06-15 USD GBP 0\n";
         let db = build(src);
         assert!(db.is_empty());
     }
@@ -104,9 +104,9 @@ mod tests {
         // A negative exchange rate is economically meaningless; storing it
         // would let `find` propagate a sign-flipped conversion. It is
         // dropped, so the pair stays unconvertible (and the amount native).
-        let db = build("P 2024-06-15 USD EUR -0.5\n");
+        let db = build("P 2024-06-15 USD GBP -0.5\n");
         assert!(db.is_empty());
-        assert_eq!(db.find("USD", "EUR", "2024-06-16"), None);
+        assert_eq!(db.find("USD", "GBP", "2024-06-16"), None);
     }
 
     #[test]
@@ -114,24 +114,24 @@ mod tests {
         // Documented behaviour: a lookup dated before the earliest known
         // price falls back to that earliest rate rather than returning
         // None. (This is the one non-historical fallback in `find`.)
-        let db = build("P 2024-06-01 USD EUR 0.90\nP 2024-12-01 USD EUR 0.95\n");
-        assert_eq!(db.find("USD", "EUR", "2020-01-01"), Some(Decimal::parse("0.90").unwrap()));
+        let db = build("P 2024-06-01 USD GBP 0.90\nP 2024-12-01 USD GBP 0.95\n");
+        assert_eq!(db.find("USD", "GBP", "2020-01-01"), Some(Decimal::parse("0.90").unwrap()));
     }
 
     #[test]
     fn same_day_last_price_wins() {
         // Two prices for the same pair on the same day: the later P
         // directive in the file overwrites the earlier one.
-        let db = build("P 2024-01-01 USD EUR 0.90\nP 2024-01-01 USD EUR 0.95\n");
-        assert_eq!(db.find("USD", "EUR", "2024-01-01"), Some(Decimal::parse("0.95").unwrap()));
+        let db = build("P 2024-01-01 USD GBP 0.90\nP 2024-01-01 USD GBP 0.95\n");
+        assert_eq!(db.find("USD", "GBP", "2024-01-01"), Some(Decimal::parse("0.95").unwrap()));
     }
 
     #[test]
     fn applies_aliases_from_resolver() {
         let cfg = "[[commodity]]\nsymbol = \"USD\"\naliases = [\"$\"]\nprecision = 2\n";
-        let db = build_cfg(cfg, "P 2024-06-15 $ EUR 0.92\n");
+        let db = build_cfg(cfg, "P 2024-06-15 $ GBP 0.92\n");
         // Resolver should have replaced $ with USD before indexing
-        assert_eq!(db.find("USD", "EUR", "2024-06-16"), Some(Decimal::parse("0.92").unwrap()));
+        assert_eq!(db.find("USD", "GBP", "2024-06-16"), Some(Decimal::parse("0.92").unwrap()));
     }
 
 }

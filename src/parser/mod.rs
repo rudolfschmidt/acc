@@ -631,14 +631,14 @@ fn find_account_separator(bytes: &[u8]) -> usize {
     bytes.len()
 }
 
-/// Parse a single amount like `100 USD`, `$5.00`, `-5 EUR`, or `€-5.00`.
+/// Parse a single amount like `100 USD`, `$5.00`, `-5 GBP`, or `£-5.00`.
 /// Returns the parsed `Amount` and the trailing text after it.
 ///
 /// Amount ends at `@`, `=`, or end-of-string — those markers belong to
 /// cost/assertion clauses.
 fn parse_amount(text: &str, line: usize) -> Result<(Amount, &str), ParseError> {
     // `{` and `[` terminate the amount — they open Ledger lot
-    // annotations (`{€58.11}` cost basis, `[2017-12-31]` lot date)
+    // annotations (`{$58.11}` cost basis, `[2017-12-31]` lot date)
     // that sit between the amount and `@`. `parse_posting` discards
     // those blocks; here we just stop the amount scan.
     let end = text.find(['@', '=', '{', '[']).unwrap_or(text.len());
@@ -654,7 +654,7 @@ fn parse_amount(text: &str, line: usize) -> Result<(Amount, &str), ParseError> {
     // `(EXPR COMMODITY)`. Evaluated at parse time with `+ - * /`.
     // The result's `decimals` is 0 — expressions produce derived
     // values, not user-chosen display precisions. Explicit postings
-    // in the same commodity (e.g. a direct `€5.00`) set the display
+    // in the same commodity (e.g. a direct `$5.00`) set the display
     // precision; if the commodity only ever appears via expressions,
     // the default fallback (2) kicks in at render time.
     if *first == b'(' {
@@ -713,13 +713,13 @@ mod tests {
 
     #[test]
     fn parse_price_basic() {
-        let got = parse("P 2024-06-15 USD EUR 0.92\n").unwrap();
+        let got = parse("P 2024-06-15 USD GBP 0.92\n").unwrap();
         assert_eq!(got.len(), 1);
         match &got[0].value {
             Entry::Price(p) => {
                 assert_eq!(p.date.to_string(), "2024-06-15");
                 assert_eq!(&*p.base, "USD");
-                assert_eq!(&*p.quote, "EUR");
+                assert_eq!(&*p.quote, "GBP");
                 assert_eq!(p.rate, Decimal::parse("0.92").unwrap());
             }
             other => panic!("expected Price, got {:?}", other),
@@ -729,7 +729,7 @@ mod tests {
 
     #[test]
     fn parse_price_missing_rate_errors() {
-        assert!(parse("P 2024-06-15 USD EUR\n").is_err());
+        assert!(parse("P 2024-06-15 USD GBP\n").is_err());
     }
 
     // --- Periodic transactions ---
@@ -830,7 +830,7 @@ mod tests {
 
     #[test]
     fn parse_posting_with_cost() {
-        let src = "2024-06-15 * Coffee\n    expenses:food  5 USD @ 0.92 EUR\n";
+        let src = "2024-06-15 * Coffee\n    expenses:food  5 USD @ 0.92 GBP\n";
         let got = parse(src).unwrap();
         if let Entry::Transaction(tx) = &got[0].value {
             let p = &tx.postings[0].value;
@@ -840,7 +840,7 @@ mod tests {
 
     #[test]
     fn parse_posting_with_total_cost() {
-        let src = "2024-06-15 * Coffee\n    expenses:food  5 USD @@ 4.60 EUR\n";
+        let src = "2024-06-15 * Coffee\n    expenses:food  5 USD @@ 4.60 GBP\n";
         let got = parse(src).unwrap();
         if let Entry::Transaction(tx) = &got[0].value {
             assert!(matches!(tx.postings[0].value.costs, Some(Costs::Total(_))));
@@ -858,9 +858,9 @@ mod tests {
 
     #[test]
     fn parse_posting_with_lot_cost_annotation() {
-        // `{€58.11}` is a Ledger per-unit lot cost-basis tag, kept
+        // `{$58.11}` is a Ledger per-unit lot cost-basis tag, kept
         // alongside the amount and the @market price.
-        let src = "2024-06-15 * Sell\n    assets:broker  -4 ABC {€58.11} @ €250.00\n    income:cap  4 ABC\n";
+        let src = "2024-06-15 * Sell\n    assets:broker  -4 ABC {$58.11} @ $250.00\n    income:cap  4 ABC\n";
         let got = parse(src).unwrap();
         if let Entry::Transaction(tx) = &got[0].value {
             let p = &tx.postings[0].value;
@@ -883,26 +883,26 @@ mod tests {
             let Entry::Transaction(tx) = &got[0].value else { panic!() };
             tx.postings[0].value.lot_cost.clone().unwrap()
         };
-        let per_unit = lot("2024-06-15 * x\n    a  10 ABC {20 EUR}\n    b  -200 EUR\n");
+        let per_unit = lot("2024-06-15 * x\n    a  10 ABC {20 GBP}\n    b  -200 GBP\n");
         assert!(!per_unit.total);
         assert_eq!(per_unit.amount.value, crate::decimal::Decimal::from(20));
 
-        let total = lot("2024-06-15 * x\n    a  10 ABC {{200 EUR}}\n    b  -200 EUR\n");
+        let total = lot("2024-06-15 * x\n    a  10 ABC {{200 GBP}}\n    b  -200 GBP\n");
         assert!(total.total);
         assert_eq!(total.amount.value, crate::decimal::Decimal::from(200));
 
-        let fixed = lot("2024-06-15 * x\n    a  10 ABC {=20 EUR}\n    b  -200 EUR\n");
+        let fixed = lot("2024-06-15 * x\n    a  10 ABC {=20 GBP}\n    b  -200 GBP\n");
         assert!(fixed.fixed && !fixed.total);
 
-        let fixed_total = lot("2024-06-15 * x\n    a  10 ABC {{=200 EUR}}\n    b  -200 EUR\n");
+        let fixed_total = lot("2024-06-15 * x\n    a  10 ABC {{=200 GBP}}\n    b  -200 GBP\n");
         assert!(fixed_total.fixed && fixed_total.total);
     }
 
     #[test]
     fn parse_posting_with_lot_date_annotation() {
         // `[2017-12-31]` is a lot-date tag, kept for display when it
-        // accompanies a lot cost (here `{=€0.2395}`).
-        let src = "2024-06-15 * Move\n    assets:broker  ABC 20 {=€0.2395} [2017-12-31]\n    income:x  -20 ABC\n";
+        // accompanies a lot cost (here `{=$0.2395}`).
+        let src = "2024-06-15 * Move\n    assets:broker  ABC 20 {=$0.2395} [2017-12-31]\n    income:x  -20 ABC\n";
         let got = parse(src).unwrap();
         if let Entry::Transaction(tx) = &got[0].value {
             let p = &tx.postings[0].value;

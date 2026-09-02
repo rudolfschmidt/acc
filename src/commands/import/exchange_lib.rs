@@ -2,7 +2,7 @@
 //!
 //! Signed decimal-string arithmetic — so a fee nets exactly at each amount's
 //! own natural precision (no fixed 4dp/8dp) — plus the commodity-alias reader
-//! (a currency code → its ledger symbol, EUR→€ / USD→$). A `parity` commodity
+//! (a currency code → its ledger symbol, GBP→£ / USD→$). A `parity` commodity
 //! (USDC/USDT) is deliberately NOT folded: parity is a report-time valuation,
 //! never a source substitution.
 
@@ -60,7 +60,7 @@ pub(super) fn signed(v: i128, dp: u32) -> String {
 }
 
 /// Read a `commodities.toml` for its aliases only: each `[[commodity]]`'s
-/// `aliases` fold to its `symbol` (EUR→€, USD→$). `parities` are ignored — a
+/// `aliases` fold to its `symbol` (GBP→£, USD→$). `parities` are ignored — a
 /// parity commodity keeps its own symbol (it values 1:1 at report time), so
 /// folding it here would be wrong. Best-effort: a missing, unreadable or
 /// unparseable file yields an empty map.
@@ -114,12 +114,12 @@ mod tests {
             &path,
             "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\"]\nprecision = 2\n\
              [[commodity]]\nsymbol = \"USDC\"\nparities = [\"$\"]\nprecision = 2\n\
-             [[commodity]]\nsymbol = \"€\"\naliases = [\"EUR\"]\nprecision = 2\n",
+             [[commodity]]\nsymbol = \"£\"\naliases = [\"GBP\"]\nprecision = 2\n",
         )
         .unwrap();
         let map = load_aliases(&path);
         assert_eq!(map.get("USD").map(String::as_str), Some("$"));
-        assert_eq!(map.get("EUR").map(String::as_str), Some("€"));
+        assert_eq!(map.get("GBP").map(String::as_str), Some("£"));
         assert!(!map.contains_key("USDC")); // parity, not an alias
         std::fs::remove_file(&path).ok();
     }

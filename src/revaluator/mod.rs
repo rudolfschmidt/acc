@@ -214,26 +214,26 @@ mod tests {
 
     #[test]
     fn open_position_marked_to_latest_rate() {
-        // Bought 1000 USD for 800 EUR (rate 0.80), spent 900 USD for 855
-        // EUR (rate 0.95). Net open: +100 USD. Historical EUR = 800 − 855
+        // Bought 1000 USD for 800 GBP (rate 0.80), spent 900 USD for 855
+        // GBP (rate 0.95). Net open: +100 USD. Historical GBP = 800 − 855
         // = −55. Latest rate 0.95 → current = 100 × 0.95 = +95.
         // Revaluation diff = 95 − (−55) = +150 → the account is marked
         // from −55 to +95, +150 booked to the gain account.
         let src = "\
-            P 2024-01-01 USD EUR 0.80\n\
-            P 2024-06-01 USD EUR 0.95\n\
+            P 2024-01-01 USD GBP 0.80\n\
+            P 2024-06-01 USD GBP 0.95\n\
             2024-01-01 * buy\n\
             \tassets:usd    1000 USD\n\
-            \tassets:bank   -800 EUR\n\
+            \tassets:bank   -800 GBP\n\
             2024-06-01 * spend\n\
-            \texpenses:x     855 EUR\n\
+            \texpenses:x     855 GBP\n\
             \tassets:usd    -900 USD\n";
         let (mut txs, db, prec) = setup(src);
-        revaluate(&mut txs, "EUR", &db, &accounts(), prec);
+        revaluate(&mut txs, "GBP", &db, &accounts(), prec);
         // The revaluation posting itself (target currency) on assets:usd.
-        assert_eq!(balance(&txs, "assets:usd", "EUR"), Decimal::parse("150").unwrap());
+        assert_eq!(balance(&txs, "assets:usd", "GBP"), Decimal::parse("150").unwrap());
         // Gain booked (income, negative).
-        assert_eq!(balance(&txs, "income:reval", "EUR"), Decimal::parse("-150").unwrap());
+        assert_eq!(balance(&txs, "income:reval", "GBP"), Decimal::parse("-150").unwrap());
         // Native USD untouched.
         assert_eq!(balance(&txs, "assets:usd", "USD"), Decimal::parse("100").unwrap());
     }
@@ -243,31 +243,31 @@ mod tests {
         // 1000 USD in and 1000 USD out — net zero → no revaluation (the
         // translator handles realized transit drift, not the revaluator).
         let src = "\
-            P 2024-01-01 USD EUR 0.80\n\
-            P 2024-06-01 USD EUR 0.95\n\
+            P 2024-01-01 USD GBP 0.80\n\
+            P 2024-06-01 USD GBP 0.95\n\
             2024-01-01 * in\n\
             \tassets:usd    1000 USD\n\
-            \tassets:bank   -800 EUR\n\
+            \tassets:bank   -800 GBP\n\
             2024-06-01 * out\n\
-            \texpenses:x     950 EUR\n\
+            \texpenses:x     950 GBP\n\
             \tassets:usd   -1000 USD\n";
         let (mut txs, db, prec) = setup(src);
         let before = txs.len();
-        revaluate(&mut txs, "EUR", &db, &accounts(), prec);
+        revaluate(&mut txs, "GBP", &db, &accounts(), prec);
         assert_eq!(txs.len(), before, "closed position must not be revalued");
     }
 
     #[test]
     fn target_commodity_not_revalued() {
-        // A plain EUR account under -X EUR is already in the target — no
+        // A plain GBP account under -X GBP is already in the target — no
         // revaluation, no transaction added.
         let src = "\
             2024-01-01 * x\n\
-            \tassets:bank   100 EUR\n\
-            \tequity:open  -100 EUR\n";
+            \tassets:bank   100 GBP\n\
+            \tequity:open  -100 GBP\n";
         let (mut txs, db, prec) = setup(src);
         let before = txs.len();
-        revaluate(&mut txs, "EUR", &db, &accounts(), prec);
+        revaluate(&mut txs, "GBP", &db, &accounts(), prec);
         assert_eq!(txs.len(), before);
     }
 }

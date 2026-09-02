@@ -170,7 +170,7 @@ mod tests {
             "base": "USD",
             "rates": {
                 "AUD": 1.532,
-                "EUR": 0.816,
+                "GBP": 0.816,
                 "CHF": 0.89
             }
         }"#;
@@ -179,7 +179,7 @@ mod tests {
         // sorted alphabetically
         assert_eq!(r[0].0, "AUD");
         assert_eq!(r[1].0, "CHF");
-        assert_eq!(r[2].0, "EUR");
+        assert_eq!(r[2].0, "GBP");
     }
 
     #[test]
