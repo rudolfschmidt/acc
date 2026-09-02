@@ -94,6 +94,19 @@ pub(crate) fn render_range(
     write_excerpt(f, file, start, end)
 }
 
+/// [`render_range`] as a `String` — for embedders whose error channel is a
+/// plain `String` (the inject hook), so a rule's refusal renders exactly
+/// like acc's own transaction-scoped errors.
+pub fn source_error(file: &str, start: usize, end: usize, headline: &str) -> String {
+    struct Rendered<'a>(&'a str, usize, usize, &'a str);
+    impl fmt::Display for Rendered<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            render_range(f, self.0, self.1, self.2, self.3)
+        }
+    }
+    Rendered(file, start, end, headline).to_string()
+}
+
 /// Render a line-scoped error. Scans backward from `error_line` for
 /// the enclosing transaction header so the shown excerpt covers as
 /// much context as is useful.
