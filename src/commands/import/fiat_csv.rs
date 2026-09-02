@@ -58,10 +58,62 @@ pub(super) fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), E
     let existing = std::fs::read_to_string(&profile.output_file).unwrap_or_default();
     let mut seen = existing_identities(&existing, &profile, ncols);
 
+    // `pair.type`: collect each currency exchange's legs — rows of the pair
+    // type sharing (date, reference). A group renders as one transaction at
+    // its first leg's position; the other legs leave the row-by-row flow.
+    let mut group_at: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut followers: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    if let Some(pt) = &profile.pair_type {
+        let mut groups: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        for (i, row) in rows.iter().enumerate() {
+            let reference = profile.field_val(row, "reference");
+            if !reference.is_empty() && profile.field_val(row, "type").contains(pt.as_str()) {
+                groups
+                    .entry((profile.field_val(row, "date"), reference))
+                    .or_default()
+                    .push(i);
+            }
+        }
+        for members in groups.into_values().filter(|m| m.len() >= 2) {
+            followers.extend(members.iter().skip(1).copied());
+            group_at.insert(members[0], members);
+        }
+    }
+
     // Generate ledger text for every row not already present.
     let mut new_blocks: Vec<String> = Vec::new();
     let mut skipped = 0usize;
-    for row in &rows {
+    for (i, row) in rows.iter().enumerate() {
+        if followers.contains(&i) {
+            continue;
+        }
+        if let Some(members) = group_at.get(&i) {
+            // An exchange group dedups as a whole: all legs present → skip
+            // them all; none → book the merged transaction. A partial state
+            // means an earlier import booked some legs individually — going
+            // on would double them, so stop and say which group.
+            let keys: Vec<String> =
+                members.iter().map(|&m| profile.identity_key(&rows[m])).collect();
+            let present =
+                keys.iter().filter(|k| seen.get(*k).is_some_and(|c| *c > 0)).count();
+            if present == members.len() {
+                for k in &keys {
+                    *seen.get_mut(k).unwrap() -= 1;
+                }
+                skipped += members.len();
+            } else if present > 0 {
+                return Err(Error::from(format!(
+                    "import: exchange group of {} (reference {}) is partially imported — \
+                     remove the partial booking, then re-run",
+                    profile.field_val(row, "date"),
+                    profile.field_val(row, "reference"),
+                )));
+            } else {
+                let legs: Vec<&Vec<String>> = members.iter().map(|&m| &rows[m]).collect();
+                new_blocks.push(profile.render_exchange(&legs));
+            }
+            continue;
+        }
         // A rule whose target is the reserved word `skip` drops the row
         // entirely — for statement lines that move no money (authorization
         // holds and their reversals, pending echoes of later bookings).
@@ -104,6 +156,17 @@ struct Profile {
     /// deposit covering the payment it pairs with) — emit it before the
     /// row it references. Requires `field.txid` and `field.reference`.
     funding_first: bool,
+    /// `commodity.field NAME`: a multi-currency account — each row's booked
+    /// commodity comes from this column (code mapped through the commodities
+    /// file, unknown codes verbatim), falling back to `output.commodity`
+    /// when the cell is empty.
+    commodity_field: Option<String>,
+    /// `pair.type SUBSTRING`: rows of this type are a currency exchange's
+    /// legs — one row per commodity, all referencing the transaction they
+    /// fund. Legs sharing (date, reference) merge into ONE transaction whose
+    /// postings all sit on the bank account and balance as a trade.
+    /// Requires `field.reference`.
+    pair_type: Option<String>,
     output_file: PathBuf,
     title: String,
     account: String,   // bank-side account
@@ -176,6 +239,29 @@ impl Profile {
             }
         }
 
+        let commodity_field = match directives.get("commodity.field") {
+            None => None,
+            Some(name) => {
+                if !fields.contains_key(name) {
+                    return Err(Error::from(format!(
+                        "import: commodity.field '{}' has no field.* mapping",
+                        name
+                    )));
+                }
+                Some(name.clone())
+            }
+        };
+        let pair_type = match directives.get("pair.type") {
+            None => None,
+            Some(t) => {
+                if !fields.contains_key("reference") || !fields.contains_key("type") {
+                    return Err(Error::from(
+                        "import: pair.type needs field.reference and field.type mappings",
+                    ));
+                }
+                Some(t.clone())
+            }
+        };
         let funding_first = match directives.get("order.funding").map(String::as_str) {
             None => false,
             Some("first") => {
@@ -270,6 +356,8 @@ impl Profile {
                 }
             },
             funding_first,
+            commodity_field,
+            pair_type,
             output_file,
             title,
             account,
@@ -334,11 +422,47 @@ impl Profile {
         }
     }
 
+    /// The commodity symbol a row books in: the `commodity.field` column's
+    /// code mapped through the commodities file (unknown codes verbatim),
+    /// else the profile-wide `output.commodity`.
+    fn row_commodity(&self, row: &[String]) -> String {
+        let code = self
+            .commodity_field
+            .as_deref()
+            .map(|f| self.field_val(row, f))
+            .unwrap_or_default();
+        if code.is_empty() {
+            self.commodity.clone()
+        } else {
+            self.sym.get(&code.to_uppercase()).cloned().unwrap_or(code)
+        }
+    }
+
+    /// Render a currency exchange's legs (`pair.type` rows sharing one
+    /// (date, reference)) as ONE transaction: every leg books its signed
+    /// amount, in its own commodity, on the bank account — the legs balance
+    /// each other as a trade, no counter account. Each keeps its own
+    /// `; csv:` source line, so dedup still sees every row.
+    fn render_exchange(&self, legs: &[&Vec<String>]) -> String {
+        let date = to_iso(&self.field_val(legs[0], "date"), self.date_pattern.as_deref());
+        let mut s = String::new();
+        s.push_str(&format!("{} * {}\n", date, self.title));
+        for row in legs {
+            let csv =
+                row.iter().map(|f| format!("\"{}\"", f)).collect::<Vec<_>>().join(",");
+            s.push_str(&format!("\t; csv: {}\n", csv));
+            let amount =
+                fmt_amount(&self.field_val(row, "amount"), self.precision, self.comma_decimal);
+            s.push_str(&format!("\t{}  {}{}\n", self.account, self.row_commodity(row), amount));
+        }
+        s.trim_end().to_string()
+    }
+
     /// Render one row as a ledger transaction block (no trailing newline).
     fn render_transaction(&self, row: &[String]) -> String {
         let date = to_iso(&self.field_val(row, "date"), self.date_pattern.as_deref());
         let amount = fmt_amount(&self.field_val(row, "amount"), self.precision, self.comma_decimal);
-        let bank = format!("{}{}", self.commodity, amount);
+        let bank = format!("{}{}", self.row_commodity(row), amount);
         let counter = self.categorize(row);
 
         let csv = row
@@ -855,6 +979,48 @@ mod tests {
         // `other` and the key `Bank Deposit`; direction follows the sign.
         assert_eq!(p.categorize(&mk("Bank Deposit to Account", "5.00")), "a:transit:other:main");
         assert_eq!(p.categorize(&mk("Payment", "-5.00")), "exp:misc");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exchange_legs_render_as_one_multi_commodity_transaction() {
+        let dir = std::env::temp_dir().join(format!("acc-import-pair-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let com = write(
+            &dir,
+            "com.toml",
+            "[[commodity]]\nsymbol = \"$\"\naliases = [\"USD\"]\nprecision = 2\n\
+             [[commodity]]\nsymbol = \"£\"\naliases = [\"GBP\"]\nprecision = 2\n",
+        );
+        let conf = write(
+            &dir,
+            "bank.conf",
+            &format!(
+                "field.date 0\nfield.type 1\nfield.currency 2\nfield.amount 3\n\
+                 field.txid 4\nfield.reference 5\nfield.payee 6\n\
+                 commodities {}\noutput.file /tmp/x.ledger\noutput.title t\n\
+                 output.account a:bank\noutput.commodity $\nidentity txid\n\
+                 commodity.field currency\npair.type Conversion\n\
+                 default => exp:{{payee}}\n",
+                com.display()
+            ),
+        );
+        let p = Profile::load(conf.to_str().unwrap()).unwrap();
+        let usd: Vec<String> = vec!["2025-01-01", "Conversion", "USD", "-11.00", "T2", "T1", ""]
+            .into_iter().map(String::from).collect();
+        let gbp: Vec<String> = vec!["2025-01-01", "Conversion", "GBP", "8.00", "T3", "T1", ""]
+            .into_iter().map(String::from).collect();
+        let block = p.render_exchange(&[&usd, &gbp]);
+        // One transaction, both legs on the bank account in their own
+        // commodity, each with its own ; csv: source line.
+        assert_eq!(block.matches("; csv:").count(), 2);
+        assert!(block.contains("a:bank  $-11.00"));
+        assert!(block.contains("a:bank  £8.00"));
+        assert_eq!(block.matches("2025-01-01 * t").count(), 1);
+        // Per-row commodity also drives ordinary rows.
+        let single: Vec<String> = vec!["2025-01-02", "Payment", "GBP", "-5.00", "T9", "", "Foo"]
+            .into_iter().map(String::from).collect();
+        assert!(p.render_transaction(&single).contains("a:bank  £-5.00"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
