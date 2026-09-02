@@ -135,7 +135,7 @@ impl Profile {
                 // `transit.self` keeps its dot, so it falls through to the
                 // directive branch below.
                 let rest = rest.trim();
-                let (addr, name) = rest.split_once(char::is_whitespace).ok_or_else(|| {
+                let (addr, name) = rest.rsplit_once(char::is_whitespace).ok_or_else(|| {
                     Error::from(format!("import: transit '{}' is not <address> <account>", rest))
                 })?;
                 raw_transits.push((addr.trim().to_string(), name.trim().to_string()));

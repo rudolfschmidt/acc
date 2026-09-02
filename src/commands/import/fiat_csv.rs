@@ -146,12 +146,15 @@ impl Profile {
                     raw_rules.push((lhs.to_string(), account));
                 }
             } else if let Some(rest) = line.strip_prefix("transit ") {
-                // `transit <counterparty-iban> <other account leaf>`. Note
+                // `transit <counterparty-key> <other account leaf>`. Split at
+                // the LAST whitespace: the leaf is a single account segment,
+                // while the key may carry spaces (a partner's display name —
+                // IBANs and addresses never do, so they parse the same). Note
                 // `transit.prefix` keeps its dot, so it does not match here
                 // and falls through to the directive branch below.
                 let rest = rest.trim();
-                let (iban, name) = rest.split_once(char::is_whitespace).ok_or_else(|| {
-                    Error::from(format!("import: transit '{}' is not <iban> <account>", rest))
+                let (iban, name) = rest.rsplit_once(char::is_whitespace).ok_or_else(|| {
+                    Error::from(format!("import: transit '{}' is not <key> <account>", rest))
                 })?;
                 raw_transits.push((iban.trim().to_string(), name.trim().to_string()));
             } else if let Some((key, val)) = line.split_once(char::is_whitespace) {
@@ -823,6 +826,35 @@ mod tests {
         // non-matching row books normally.
         assert_eq!(p.categorize(&mk("General Authorization")), "skip");
         assert_eq!(p.categorize(&mk("Payment")), "exp:foo-shop");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn transit_key_may_carry_spaces() {
+        let dir = std::env::temp_dir().join(format!("acc-import-transit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let com = write(&dir, "com.toml", "[[commodity]]\nsymbol = \"$\"\nprecision = 2\n");
+        let conf = write(
+            &dir,
+            "bank.conf",
+            &format!(
+                "field.date 0\nfield.type 1\nfield.amount 2\n\
+                 commodities {}\noutput.file /tmp/x.ledger\noutput.title t\n\
+                 output.account a:bank\noutput.commodity $\nidentity date amount\n\
+                 transit.field type\ntransit.self a:transit:main\n\
+                 transit Bank Deposit other\n\
+                 default => exp:misc\n",
+                com.display()
+            ),
+        );
+        let p = Profile::load(conf.to_str().unwrap()).unwrap();
+        let mk = |kind: &str, amount: &str| -> Vec<String> {
+            vec!["2025-01-01", kind, amount].into_iter().map(String::from).collect()
+        };
+        // The multi-word key splits at the LAST whitespace, so the leaf is
+        // `other` and the key `Bank Deposit`; direction follows the sign.
+        assert_eq!(p.categorize(&mk("Bank Deposit to Account", "5.00")), "a:transit:other:main");
+        assert_eq!(p.categorize(&mk("Payment", "-5.00")), "exp:misc");
         std::fs::remove_dir_all(&dir).ok();
     }
 
