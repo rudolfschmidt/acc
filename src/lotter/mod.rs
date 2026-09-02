@@ -112,7 +112,7 @@ pub struct CapitalAccounts<'a> {
 /// Track lots FIFO and inject one realized capital-gain/loss posting per
 /// disposal. See module docs for the valuation semantics.
 pub fn realize_capital(
-    txs: &mut Vec<Located<Transaction>>,
+    txs: &mut [Located<Transaction>],
     accounts: &CapitalAccounts,
     target: Option<&str>,
     db: &Index,

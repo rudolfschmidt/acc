@@ -254,7 +254,7 @@ mod tests {
     fn assertion_fails_on_mismatch() {
         let src = "2024-01-01 * Deposit\n    assets:bank   100 USD = 999 USD\n    equity:opening  -100 USD\n";
         let err = asserted(src).unwrap_err();
-        match err.kind {
+        match *err.kind {
             BookErrorKind::AssertionFailed { ref account, .. } => {
                 assert_eq!(account, "assets:bank");
             }
@@ -333,6 +333,6 @@ mod tests {
         let src = "2024-01-01 * seed\n    foo   10 USD\n    bar\n\
                    2024-02-01 * bad\n    foo   = *5\n    bar\n";
         let err = asserted(src).unwrap_err();
-        assert!(matches!(err.kind, BookErrorKind::AllCommodityNonZero { .. }));
+        assert!(matches!(*err.kind, BookErrorKind::AllCommodityNonZero { .. }));
     }
 }

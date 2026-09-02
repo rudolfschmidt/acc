@@ -12,9 +12,12 @@ use std::sync::Arc;
 
 use crate::decimal::Decimal;
 
+/// One source commodity's edges: `to → (day → rate)`.
+type Rates = HashMap<Arc<str>, BTreeMap<u32, Decimal>>;
+
 #[derive(Debug, Default)]
 pub struct Index {
-    prices: HashMap<Arc<str>, HashMap<Arc<str>, BTreeMap<u32, Decimal>>>,
+    prices: HashMap<Arc<str>, Rates>,
 }
 
 impl Index {

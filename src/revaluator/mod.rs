@@ -70,9 +70,9 @@ pub fn revaluate(
             let Some(a) = &lp.value.amount else { continue };
             let key = (lp.value.account.clone(), a.commodity.clone());
             let e = groups.entry(key).or_insert((Decimal::zero(), Decimal::zero(), false));
-            e.0 = e.0 + a.value;
+            e.0 += a.value;
             match crate::rebalancer::target_value(&lp.value, target, db, &date) {
-                Some(v) => e.1 = e.1 + v,
+                Some(v) => e.1 += v,
                 None => e.2 = true,
             }
         }
@@ -111,7 +111,7 @@ pub fn revaluate(
     }
 
     txs.extend(out);
-    txs.sort_by(|a, b| a.value.date.cmp(&b.value.date));
+    txs.sort_by_key(|t| t.value.date);
 }
 
 /// Build the synthetic revaluation transaction: the account gets a
@@ -201,12 +201,11 @@ mod tests {
         let mut sum = Decimal::zero();
         for lt in txs {
             for lp in &lt.value.postings {
-                if lp.value.account == account {
-                    if let Some(a) = &lp.value.amount {
-                        if a.commodity == commodity {
-                            sum = sum + a.value;
-                        }
-                    }
+                if lp.value.account == account
+                    && let Some(a) = &lp.value.amount
+                    && a.commodity == commodity
+                {
+                    sum += a.value;
                 }
             }
         }

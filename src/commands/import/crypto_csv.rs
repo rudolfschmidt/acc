@@ -6,7 +6,7 @@
 //! rows carry a `journal_type`:
 //!   * `FIAT_DEPOSIT`                 — fiat onto the account
 //!   * `TRADING` (two rows, one per   — an in-account conversion, the crypto leg
-//!      instrument, same `trade_id`)    booked `@@` the fiat magnitude
+//!     instrument, same `trade_id`)     booked `@@` the fiat magnitude
 //!   * `TRADE_FEE` (same `trade_id`)  — the trade's fee, in its own commodity
 //!   * `ONCHAIN_DEPOSIT` / `_WITHDRAWAL` — crypto moving in / out on-chain
 //!

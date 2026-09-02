@@ -300,6 +300,7 @@ enum Dir {
 /// it uniquely links my wallets' views of an internal transfer):
 ///   - their `out` list → `incoming` (txid → SENDER leaf, for my receives),
 ///   - their `in`  list → `outgoing` (txid → RECIPIENT leaf, for my sends).
+///
 /// Each leaf is `<coin>-<last4 of that wallet's address>`, computed here so the
 /// shared code needs no coin knowledge. Purely RPC discovery; no conf is read.
 fn transit_maps(

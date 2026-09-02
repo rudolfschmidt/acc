@@ -38,9 +38,10 @@ use crate::parser::transaction::Transaction;
 /// secondary projection *after* transaction selection: it narrows which
 /// postings are shown, by the sign of their amount. Zero counts as both
 /// non-negative and non-positive, so a zero posting survives either flag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SignFilter {
     /// No sign constraint.
+    #[default]
     Any,
     /// `--pos`: keep postings whose amount is `>= 0`.
     NonNegative,
@@ -166,50 +167,39 @@ impl AmountFilter {
 /// The non-transaction fields of `Journal` (prices, role accounts,
 /// precisions) pass through unchanged — they are either global
 /// metadata or derived before the filter runs.
-pub fn filter(
-    journal: Journal,
-    patterns: &[String],
-    begin: Option<&str>,
-    end: Option<&str>,
-    related: bool,
-    whole_transactions: bool,
-    sign: SignFilter,
-    display: Option<&str>,
-    amount: Option<&AmountFilter>,
-) -> Journal {
+pub fn filter(journal: Journal, selection: &Selection) -> Journal {
     // Only `transactions` is transformed; every other field passes
     // through unchanged, so `..journal` carries them — including any
     // field added to `Journal` later, with no edit needed here.
-    let transactions = filter_transactions(
-        journal.transactions,
-        patterns,
-        begin,
-        end,
-        related,
-        whole_transactions,
-        sign,
-        display,
-        amount,
-    );
+    let transactions = filter_transactions(journal.transactions, selection);
     Journal {
         transactions,
         ..journal
     }
 }
 
+/// Everything a report command asks the filter phase for. `Default` is
+/// "keep it all": no patterns, no date range, matched postings only.
+#[derive(Default)]
+pub struct Selection<'a> {
+    pub patterns: &'a [String],
+    pub begin: Option<&'a str>,
+    pub end: Option<&'a str>,
+    pub related: bool,
+    pub whole_transactions: bool,
+    pub sign: SignFilter,
+    pub display: Option<&'a str>,
+    pub amount: Option<&'a AmountFilter>,
+}
+
 /// Core transform — kept separate so tests can exercise filter logic
 /// without constructing a full `Journal`.
 fn filter_transactions(
     transactions: Vec<Located<Transaction>>,
-    patterns: &[String],
-    begin: Option<&str>,
-    end: Option<&str>,
-    related: bool,
-    whole_transactions: bool,
-    sign: SignFilter,
-    display: Option<&str>,
-    amount: Option<&AmountFilter>,
+    selection: &Selection,
 ) -> Vec<Located<Transaction>> {
+    let &Selection { patterns, begin, end, related, whole_transactions, sign, display, amount } =
+        selection;
     let matcher = (!patterns.is_empty()).then(|| PatternMatcher::from_parts(patterns));
     let display_matcher = display.map(PatternMatcher::new);
 
@@ -290,7 +280,7 @@ fn filter_transactions(
             } else if related {
                 // `-r`: show the siblings of the matched postings. Needs at
                 // least one match, else there is nothing to relate to.
-                if !lt.value.postings.iter().any(|lp| matched(lp)) {
+                if !lt.value.postings.iter().any(&matched) {
                     return None;
                 }
                 lt.value.postings.retain(|lp| !matched(lp));
@@ -696,12 +686,12 @@ mod tests {
 
     fn run(patterns: &[&str], txs: Vec<Located<Transaction>>) -> Vec<Located<Transaction>> {
         let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
-        filter_transactions(txs, &pats, None, None, false, false, SignFilter::Any, None, None)
+        filter_transactions(txs, &Selection { patterns: &pats, ..Default::default() })
     }
 
     fn run_amount(expr: &str, txs: Vec<Located<Transaction>>) -> Vec<Located<Transaction>> {
         let af = AmountFilter::parse(expr).unwrap();
-        filter_transactions(txs, &[], None, None, false, false, SignFilter::Any, None, Some(&af))
+        filter_transactions(txs, &Selection { amount: Some(&af), ..Default::default() })
     }
 
     fn run_sign(
@@ -711,7 +701,10 @@ mod tests {
         txs: Vec<Located<Transaction>>,
     ) -> Vec<Located<Transaction>> {
         let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
-        filter_transactions(txs, &pats, None, None, false, whole_transactions, sign, None, None)
+        filter_transactions(
+            txs,
+            &Selection { patterns: &pats, whole_transactions, sign, ..Default::default() },
+        )
     }
 
     fn run_display(
@@ -724,14 +717,13 @@ mod tests {
         let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
         filter_transactions(
             txs,
-            &pats,
-            None,
-            None,
-            related,
-            whole_transactions,
-            SignFilter::Any,
-            Some(display),
-            None,
+            &Selection {
+                patterns: &pats,
+                related,
+                whole_transactions,
+                display: Some(display),
+                ..Default::default()
+            },
         )
     }
 
@@ -1058,14 +1050,12 @@ mod tests {
         let pats: Vec<String> = Vec::new();
         let out = filter_transactions(
             txs,
-            &pats,
-            Some("2025-01-15"),
-            Some("2025-02-15"),
-            false,
-            false,
-            SignFilter::Any,
-            None,
-            None,
+            &Selection {
+                patterns: &pats,
+                begin: Some("2025-01-15"),
+                end: Some("2025-02-15"),
+                ..Default::default()
+            },
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value.date.to_string(), "2025-02-01");
@@ -1425,14 +1415,7 @@ mod tests {
         let pats: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
         filter_transactions(
             txs,
-            &pats,
-            None,
-            None,
-            true,
-            false,
-            SignFilter::Any,
-            None,
-            Some(&af),
+            &Selection { patterns: &pats, related: true, amount: Some(&af), ..Default::default() },
         )
     }
 

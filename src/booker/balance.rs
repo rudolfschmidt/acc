@@ -269,14 +269,14 @@ mod tests {
     fn errors_on_multiple_missing() {
         let src = "2024-06-15 * X\n    expenses:food\n    assets:cash\n";
         let err = balance_one(src).unwrap_err();
-        assert!(matches!(err.kind, BookErrorKind::MultipleMissing));
+        assert!(matches!(*err.kind, BookErrorKind::MultipleMissing));
     }
 
     #[test]
     fn errors_on_unbalanced_sum() {
         let src = "2024-06-15 * X\n    expenses:food   5 USD\n    assets:cash  -3 USD\n";
         let err = balance_one(src).unwrap_err();
-        assert!(matches!(err.kind, BookErrorKind::Unbalanced { .. }));
+        assert!(matches!(*err.kind, BookErrorKind::Unbalanced { .. }));
     }
 
     #[test]
@@ -326,7 +326,7 @@ mod tests {
                    \ta:fee  LTC0.123123123123\n\
                    \ta:x    LTC-0.0108975\n";
         let err = balance_one(src).unwrap_err();
-        assert!(matches!(err.kind, BookErrorKind::Unbalanced { .. }));
+        assert!(matches!(*err.kind, BookErrorKind::Unbalanced { .. }));
     }
 
     #[test]

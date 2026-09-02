@@ -34,6 +34,9 @@ pub(super) fn call(
         "jsonrpc": version, "id": "acc", "method": method, "params": params
     })
     .to_string();
+    // `ureq::Error::Status` carries the whole `Response`; the closure's Err
+    // is matched right below and never propagated, so its size is moot.
+    #[allow(clippy::result_large_err)]
     let post = |header: Option<&str>| {
         let mut req = agent.post(url).set("Content-Type", "application/json");
         if let Some(h) = header {

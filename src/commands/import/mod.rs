@@ -124,7 +124,7 @@ struct Rule {
 /// book to, or `None` to fall through to the profile's default. `get`
 /// returns a field's value; that lookup is all that differs between a CSV
 /// row (by column) and an RPC transfer (by name), so the loop is shared.
-fn match_account<'a>(rules: &'a [Rule], get: impl Fn(&str) -> String) -> Option<&'a str> {
+fn match_account(rules: &[Rule], get: impl Fn(&str) -> String) -> Option<&str> {
     rules
         .iter()
         .find(|rule| {

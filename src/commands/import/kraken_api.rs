@@ -10,6 +10,7 @@
 //!     counter; the fee (if any) is skimmed by Kraken.
 //!   * trade / instant-buy  — two legs sharing a `refid` (one fiat, one crypto),
 //!     an in-account conversion: the crypto leg booked `@@` the fiat magnitude.
+//!
 //! A leg's fee stays in its own commodity and books to the `fee` account.
 //!
 //! Auth is Kraken's API-Key + API-Sign: HMAC-SHA512 over the URI path plus
@@ -484,8 +485,8 @@ fn hmac_sha512(key: &[u8], msg: &[u8]) -> [u8; 64] {
     inner.update(msg);
     let ih = inner.finalize();
     let mut outer = Sha512::new();
-    outer.update(&opad);
-    outer.update(&ih);
+    outer.update(opad);
+    outer.update(ih);
     let mut out = [0u8; 64];
     out.copy_from_slice(&outer.finalize());
     out

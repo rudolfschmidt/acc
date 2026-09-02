@@ -184,12 +184,7 @@ fn write_excerpt(
             writeln!(f)?;
         }
         let lineno = start + i;
-        write!(
-            f,
-            "{} {}",
-            format!("{:>width$} |", lineno, width = width),
-            line,
-        )?;
+        write!(f, "{:>width$} | {}", lineno, line, width = width)?;
         first = false;
     }
     Ok(())

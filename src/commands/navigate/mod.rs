@@ -424,17 +424,16 @@ fn draw(frame: &mut Frame, app: &App) {
             .map(|(c, v)| (format_amount(&c, &v, app.precisions), v.is_negative()))
             .collect();
 
+        let layout = RowLayout { name_col, amount_w: amount_col_w, width };
         if commodities.is_empty() {
-            items.push(make_row(
+            items.push(ListItem::new(row_line(
                 &format!(" {}{}{}", indent, icon, row.account.name),
                 label.as_deref(),
                 "0",
                 Color::DarkGray,
                 selected,
-                name_col,
-                amount_col_w,
-                width,
-            ));
+                layout,
+            )));
         } else {
             for (j, (amount, neg)) in commodities.iter().enumerate() {
                 // The label sits on the first commodity line only; wrapped
@@ -448,16 +447,9 @@ fn draw(frame: &mut Frame, app: &App) {
                     (String::new(), None)
                 };
                 let color = if *neg { Color::Red } else { Color::Green };
-                items.push(make_row(
-                    &name,
-                    label,
-                    amount,
-                    color,
-                    selected,
-                    name_col,
-                    amount_col_w,
-                    width,
-                ));
+                items.push(ListItem::new(row_line(
+                    &name, label, amount, color, selected, layout,
+                )));
             }
         }
     }
@@ -479,26 +471,13 @@ fn draw(frame: &mut Frame, app: &App) {
     );
 }
 
-fn make_row<'a>(
-    name: &str,
-    label: Option<&str>,
-    amount: &str,
-    amount_color: Color,
-    selected: bool,
+/// Column geometry shared by every row of one frame: the name column's
+/// width, the amount field's width, and the full terminal width.
+#[derive(Clone, Copy)]
+struct RowLayout {
     name_col: usize,
     amount_w: usize,
     width: usize,
-) -> ListItem<'a> {
-    ListItem::new(row_line(
-        name,
-        label,
-        amount,
-        amount_color,
-        selected,
-        name_col,
-        amount_w,
-        width,
-    ))
 }
 
 /// Lay out one row: the account name (plus its optional `reg`-style label),
@@ -512,10 +491,9 @@ fn row_line<'a>(
     amount: &str,
     amount_color: Color,
     selected: bool,
-    name_col: usize,
-    amount_w: usize,
-    width: usize,
+    layout: RowLayout,
 ) -> Line<'a> {
+    let RowLayout { name_col, amount_w, width } = layout;
     let bg = if selected { SEL_BG } else { Color::Reset };
     let name_style = if selected {
         Style::default()
@@ -562,25 +540,23 @@ mod tests {
 
     #[test]
     fn amounts_share_one_right_aligned_column() {
-        let name_col = 20;
-        let amount_w = 10;
-        let width = 60;
+        let layout = RowLayout { name_col: 20, amount_w: 10, width: 60 };
         // Different name lengths AND amount widths; all must end in one column.
         let cases = [("a", "€1.00"), ("equity", "€-45988.48"), ("ex", "€21.21")];
         for (name, amount) in cases {
-            let line = row_line(name, None, amount, Color::Green, false, name_col, amount_w, width);
+            let line = row_line(name, None, amount, Color::Green, false, layout);
             assert_eq!(
                 amount_end_col(&line),
-                name_col + GAP + amount_w,
+                layout.name_col + GAP + layout.amount_w,
                 "name={name} amount={amount}"
             );
         }
         // The longest name (length == name_col) with the widest amount keeps
         // exactly GAP of lead; a narrower amount gets more (right-aligned).
-        let longest = "x".repeat(name_col);
-        let widest = row_line(&longest, None, "€-45988.48", Color::Green, false, name_col, amount_w, width);
+        let longest = "x".repeat(layout.name_col);
+        let widest = row_line(&longest, None, "€-45988.48", Color::Green, false, layout);
         assert_eq!(widest.spans[1].content.chars().count(), GAP);
-        let narrow = row_line(&longest, None, "€1.00", Color::Green, false, name_col, amount_w, width);
+        let narrow = row_line(&longest, None, "€1.00", Color::Green, false, layout);
         assert!(narrow.spans[1].content.chars().count() > GAP);
     }
 

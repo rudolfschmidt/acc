@@ -59,14 +59,7 @@ pub fn entries(
     let pattern = [account.to_string()];
     let scoped = crate::filter::filter(
         journal,
-        &pattern,
-        None,
-        None,
-        false,
-        false,
-        crate::filter::SignFilter::Any,
-        None,
-        None,
+        &crate::filter::Selection { patterns: &pattern, ..Default::default() },
     );
 
     let (out, count) =

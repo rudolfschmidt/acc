@@ -325,7 +325,7 @@ fn extend_block(
     text: &str,
     line: usize,
     file: &Arc<str>,
-    entries: &mut Vec<Located<Entry>>,
+    entries: &mut [Located<Entry>],
 ) -> Result<(), ParseError> {
     let Some(last) = entries.last_mut() else {
         return Err(ParseError::new(line, 1, "indented directive not expected here"));

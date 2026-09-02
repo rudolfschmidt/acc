@@ -6,12 +6,14 @@ use crate::decimal::Decimal;
 /// Booker-phase error. Carries enough source context (file, start+end
 /// line, plus a structured kind) for the loader to render a
 /// ledger-cli-style message with the offending transaction quoted back.
+/// The kind is boxed so `Result<_, BookError>` stays small on the happy
+/// path — the largest variants carry Decimals and account names.
 #[derive(Debug, Clone)]
 pub struct BookError {
     pub file: Arc<str>,
     pub start_line: usize,
     pub end_line: usize,
-    pub kind: BookErrorKind,
+    pub kind: Box<BookErrorKind>,
 }
 
 /// One residual commodity in an unbalanced transaction.
@@ -50,13 +52,13 @@ pub enum BookErrorKind {
 
 impl BookError {
     pub fn new(file: Arc<str>, start_line: usize, end_line: usize, kind: BookErrorKind) -> Self {
-        Self { file, start_line, end_line, kind }
+        Self { file, start_line, end_line, kind: Box::new(kind) }
     }
 
     /// Single-line headline (with residual/assertion detail inlined in
     /// parentheses). Used as the `path:line: MESSAGE` header.
     pub fn headline(&self) -> String {
-        match &self.kind {
+        match &*self.kind {
             BookErrorKind::Unbalanced { residuals } => {
                 let joined = residuals
                     .iter()

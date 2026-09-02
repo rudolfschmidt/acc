@@ -283,8 +283,7 @@ fn render(entries: &[Located<Entry>], source: &str, sort: bool, infer: bool, fil
                         account_width,
                         amount_width,
                         src,
-                        false,
-                        None,
+                        AmountMode::Verbatim,
                         &mut out,
                     );
                 }
@@ -430,21 +429,14 @@ fn render_transaction(
     let last = tx.postings.len().saturating_sub(1);
     for (i, lp) in tx.postings.iter().enumerate() {
         let src = source_lines.get(lp.line.saturating_sub(1)).copied();
-        let infer_amount = infer_last && i == last;
-        let fill_amount = filled
-            .as_ref()
-            .filter(|(idx, _)| *idx == i)
-            .map(|(_, s)| s.as_str());
-        render_posting(
-            &lp.value,
-            lp.line,
-            account_width,
-            amount_width,
-            src,
-            infer_amount,
-            fill_amount,
-            out,
-        );
+        let mode = if infer_last && i == last {
+            AmountMode::Infer
+        } else if let Some((_, s)) = filled.as_ref().filter(|(idx, _)| *idx == i) {
+            AmountMode::Fill(s)
+        } else {
+            AmountMode::Verbatim
+        };
+        render_posting(&lp.value, lp.line, account_width, amount_width, src, mode, out);
     }
 }
 
@@ -457,14 +449,23 @@ fn render_transaction(
 /// otherwise be re-emitted from their evaluated `Decimal` and lose
 /// their source form (rendering as `$0` because the expression
 /// parser records `decimals = 0`).
+/// How a posting's amount column is produced: copied verbatim from the
+/// source tail, dropped (`--infer` on the balancing posting), or written
+/// as the computed balance (`--fill` on the empty posting). Infer and
+/// fill are mutually exclusive per posting; the enum makes that structural.
+enum AmountMode<'a> {
+    Verbatim,
+    Infer,
+    Fill(&'a str),
+}
+
 fn render_posting(
     p: &Posting,
     posting_line: usize,
     account_width: usize,
     amount_width: usize,
     source_line: Option<&str>,
-    infer_amount: bool,
-    fill: Option<&str>,
+    mode: AmountMode,
     out: &mut String,
 ) {
     let account = render_account(p);
@@ -472,7 +473,7 @@ fn render_posting(
         .map(extract_posting_parts)
         .unwrap_or_default();
 
-    if infer_amount {
+    if matches!(mode, AmountMode::Infer) {
         // `--infer`: drop the redundant balancing amount so it auto-balances. If
         // the posting carries an inline comment (the tail — `infers_last` excluded
         // costs / assertions), pad it through the now-empty amount column so it
@@ -489,7 +490,7 @@ fn render_posting(
             out.push_str(&parts.tail);
         }
         out.push('\n');
-    } else if let Some(amount) = fill {
+    } else if let AmountMode::Fill(amount) = mode {
         // `--fill`: write the computed balancing amount on the otherwise
         // empty posting, aligned like any other. The source line carries no
         // amount, only an optional assertion / comment — kept as the tail.

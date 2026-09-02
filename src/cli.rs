@@ -1036,14 +1036,16 @@ fn start(raw_args: Vec<String>, inject: crate::Inject) -> Result<(), crate::Erro
         .map(|e| crate::filter::AmountFilter::parse(e).unwrap_or_else(|err| fail(&err)));
     let mut journal = crate::filter::filter(
         journal,
-        command.patterns(),
-        begin,
-        end,
-        related,
-        whole_transactions,
-        sign,
-        display,
-        amount.as_ref(),
+        &crate::filter::Selection {
+            patterns: command.patterns(),
+            begin,
+            end,
+            related,
+            whole_transactions,
+            sign,
+            display,
+            amount: amount.as_ref(),
+        },
     );
 
     // Multiple `-p`: keep transactions whose date falls within any
