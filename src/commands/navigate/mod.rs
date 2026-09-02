@@ -542,7 +542,7 @@ mod tests {
     fn amounts_share_one_right_aligned_column() {
         let layout = RowLayout { name_col: 20, amount_w: 10, width: 60 };
         // Different name lengths AND amount widths; all must end in one column.
-        let cases = [("a", "$1.00"), ("equity", "$-45678.90"), ("ex", "$21.21")];
+        let cases = [("a", "$1.00"), ("equity", "$-45678.90"), ("foo", "$21.21")];
         for (name, amount) in cases {
             let line = row_line(name, None, amount, Color::Green, false, layout);
             assert_eq!(
@@ -565,8 +565,8 @@ mod tests {
         // Tree with different-length names and amount widths.
         let mut root = Account::root();
         root.find_or_create("equity").add_amount("$", Decimal::new(-4567890, 100));
-        root.find_or_create("ex").add_amount("$", Decimal::new(2121, 100));
-        root.find_or_create("aim").add_amount("$", Decimal::new(-47408, 100));
+        root.find_or_create("foo").add_amount("$", Decimal::new(2121, 100));
+        root.find_or_create("bar").add_amount("$", Decimal::new(-12345, 100));
         let journal = Journal::default();
 
         let app = App::new(&root, &journal, false);
