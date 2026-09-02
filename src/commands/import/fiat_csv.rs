@@ -3,8 +3,20 @@
 //! Driven by a per-bank profile: column mapping, output target, an `identity`
 //! for dedup, and categorization rules. Each imported row keeps its source as
 //! a `; csv:` comment; re-runs skip rows already present.
+//!
+//! Beyond the basics a profile can declare, in pipeline order:
+//! - `amount.decimal comma` — EU-style amounts (`1.234,56`);
+//! - `order.funding first` — emit an instant funding leg before the payment
+//!   its `reference` names;
+//! - `commodity.field NAME` — multi-currency: each row books in its own
+//!   column-named commodity, at that commodity's precision;
+//! - `pair.type SUBSTRING` — merge a currency exchange's per-commodity legs
+//!   into one transaction;
+//! - rules targeting the reserved word `skip` — drop statement lines that
+//!   move no money;
+//! - `transit.*` — book own↔own moves to directional netting accounts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::error::Error;
@@ -14,38 +26,7 @@ use super::{expand, read, slug, Match, Rule, Transit};
 pub(super) fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), Error> {
     let profile = Profile::load(conf_path)?;
 
-    // Any number of exports — files or directories (their `*.csv`), e.g. one
-    // per year. Each file is flipped to oldest-first on its own (the ledger's
-    // convention, even when the bank exports newest-first), then they
-    // concatenate in argument order; dedup runs over the whole set, so
-    // overlapping exports still add every row exactly once.
-    let mut rows: Vec<Vec<String>> = Vec::new();
-    for file in &super::csv_files(csvs)? {
-        let src = std::fs::read_to_string(file)
-            .map_err(|e| Error::from(format!("import: read {}: {}", file.display(), e)))?;
-        let mut file_rows: Vec<Vec<String>> =
-            parse_csv(&src).into_iter().skip(1).filter(|r| !is_blank(r)).collect();
-        if file_rows.is_empty() {
-            continue;
-        }
-        if let Some(first) = rows.first()
-            && file_rows[0].len() != first.len()
-        {
-            return Err(Error::from(format!(
-                "import: {} has {} columns, earlier input has {} — mixed export formats",
-                file.display(),
-                file_rows[0].len(),
-                first.len()
-            )));
-        }
-        if newest_first(&file_rows, &profile) {
-            file_rows.reverse();
-        }
-        rows.append(&mut file_rows);
-    }
-    if rows.is_empty() {
-        return Err(Error::from("import: no data rows in CSV"));
-    }
+    let mut rows = collect_rows(csvs, &profile)?;
     // `order.funding first`: undo the processor's payment-before-cover
     // ordering, so the account never dips negative between an instant
     // funding pair booked at the same moment.
@@ -58,27 +39,7 @@ pub(super) fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), E
     let existing = std::fs::read_to_string(&profile.output_file).unwrap_or_default();
     let mut seen = existing_identities(&existing, &profile, ncols);
 
-    // `pair.type`: collect each currency exchange's legs — rows of the pair
-    // type sharing (date, reference). A group renders as one transaction at
-    // its first leg's position; the other legs leave the row-by-row flow.
-    let mut group_at: HashMap<usize, Vec<usize>> = HashMap::new();
-    let mut followers: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    if let Some(pt) = &profile.pair_type {
-        let mut groups: HashMap<(String, String), Vec<usize>> = HashMap::new();
-        for (i, row) in rows.iter().enumerate() {
-            let reference = profile.field_val(row, "reference");
-            if !reference.is_empty() && profile.field_val(row, "type").contains(pt.as_str()) {
-                groups
-                    .entry((profile.field_val(row, "date"), reference))
-                    .or_default()
-                    .push(i);
-            }
-        }
-        for members in groups.into_values().filter(|m| m.len() >= 2) {
-            followers.extend(members.iter().skip(1).copied());
-            group_at.insert(members[0], members);
-        }
-    }
+    let (group_at, followers) = exchange_groups(&rows, &profile);
 
     // Generate ledger text for every row not already present.
     let mut new_blocks: Vec<String> = Vec::new();
@@ -134,6 +95,71 @@ pub(super) fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), E
     }
 
     super::emit(&new_blocks, rows.len(), "rows", &existing, &profile.output_file, skipped, write)
+}
+
+/// Read the CSV arguments (files or directories, any number — e.g. one per
+/// year) into one row list. Each file is flipped to oldest-first on its own
+/// (the ledger's convention, even when the bank exports newest-first), then
+/// they concatenate in argument order; dedup later runs over the whole set,
+/// so overlapping exports still add every row exactly once.
+fn collect_rows(csvs: &[String], profile: &Profile) -> Result<Vec<Vec<String>>, Error> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for file in &super::csv_files(csvs)? {
+        let src = std::fs::read_to_string(file)
+            .map_err(|e| Error::from(format!("import: read {}: {}", file.display(), e)))?;
+        let mut file_rows: Vec<Vec<String>> =
+            parse_csv(&src).into_iter().skip(1).filter(|r| !is_blank(r)).collect();
+        if file_rows.is_empty() {
+            continue;
+        }
+        if let Some(first) = rows.first()
+            && file_rows[0].len() != first.len()
+        {
+            return Err(Error::from(format!(
+                "import: {} has {} columns, earlier input has {} — mixed export formats",
+                file.display(),
+                file_rows[0].len(),
+                first.len()
+            )));
+        }
+        if newest_first(&file_rows, profile) {
+            file_rows.reverse();
+        }
+        rows.append(&mut file_rows);
+    }
+    if rows.is_empty() {
+        return Err(Error::from("import: no data rows in CSV"));
+    }
+    Ok(rows)
+}
+
+/// `pair.type`: find each currency exchange's legs — rows of the pair type
+/// sharing (date, reference). Returns (first leg index → all member indices,
+/// the non-first members to skip in the row-by-row flow); a group renders as
+/// one transaction at its first leg's position.
+fn exchange_groups(
+    rows: &[Vec<String>],
+    profile: &Profile,
+) -> (HashMap<usize, Vec<usize>>, HashSet<usize>) {
+    let mut group_at: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut followers: HashSet<usize> = HashSet::new();
+    if let Some(pt) = &profile.pair_type {
+        let mut groups: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        for (i, row) in rows.iter().enumerate() {
+            let reference = profile.field_val(row, "reference");
+            if !reference.is_empty() && profile.field_val(row, "type").contains(pt.as_str()) {
+                groups
+                    .entry((profile.field_val(row, "date"), reference))
+                    .or_default()
+                    .push(i);
+            }
+        }
+        for members in groups.into_values().filter(|m| m.len() >= 2) {
+            followers.extend(members.iter().skip(1).copied());
+            group_at.insert(members[0], members);
+        }
+    }
+    (group_at, followers)
 }
 
 // ---------------------------------------------------------------------
@@ -515,7 +541,10 @@ impl Profile {
 
         // Foreign-currency leg: when the row converted into another
         // currency, the counter posting carries that foreign amount;
-        // domestic rows leave it bare for auto-balancing.
+        // domestic rows leave it bare for auto-balancing. Distinct from
+        // `commodity.field`: that one makes the BANK posting multi-currency
+        // (the account holds several commodities); this fx pair prices the
+        // counter of a single-currency account's converted payment.
         let fxc = self.field_val(row, "fx-currency");
         if !fxc.is_empty() && !fxc.eq_ignore_ascii_case("EUR") {
             let symbol = self
@@ -671,13 +700,13 @@ fn fmt_amount(s: &str, precision: usize, comma_decimal: bool) -> String {
 // commodities / csv / io
 // ---------------------------------------------------------------------
 
+/// (currency code → ledger symbol, symbol → decimals) from a commodities file.
+type CommodityMaps = (HashMap<String, String>, HashMap<String, usize>);
+
 /// Parse a `commodities.toml`: return (code→symbol, symbol→precision). Each
 /// `[[commodity]]`'s symbol maps to itself and every alias folds to it — keys
 /// upper-cased, so a source code like `EUR` resolves regardless of case.
-#[allow(clippy::type_complexity)]
-fn load_commodities(
-    path: &Path,
-) -> Result<(HashMap<String, String>, HashMap<String, usize>), Error> {
+fn load_commodities(path: &Path) -> Result<CommodityMaps, Error> {
     let src = std::fs::read_to_string(path)
         .map_err(|e| Error::from(format!("import: read {}: {}", path.display(), e)))?;
     let commodities = crate::loader::config::commodities_from_toml(&src)

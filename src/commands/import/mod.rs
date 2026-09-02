@@ -1,6 +1,8 @@
 //! `import` command — dispatch a per-profile import to its source backend
-//! (`fiat` CSV files, a `monero` wallet RPC, or a `bitcoin`/`litecoin` Bitcoin
-//! Core-family RPC) and append the new, deduped transactions to a `@cash` file.
+//! (`fiat` CSV files; a `monero` wallet RPC or a `bitcoin`/`litecoin` Bitcoin
+//! Core-family RPC, optionally reto-enriched; an exchange — `kraken` via its
+//! REST API, `crypto` via statement CSVs) and append the new, deduped
+//! transactions to a `@cash` file.
 //! This module holds the dispatcher plus the vocabulary EVERY source shares:
 //! the categorization `Rule` grammar, own↔own `Transit`, the diff preview, and
 //! the small IO helpers. Anything used by only the wallet-RPC backends (their
