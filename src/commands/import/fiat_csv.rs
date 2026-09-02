@@ -110,7 +110,7 @@ pub(super) fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), E
                 )));
             } else {
                 let legs: Vec<&Vec<String>> = members.iter().map(|&m| &rows[m]).collect();
-                new_blocks.push(profile.render_exchange(&legs));
+                new_blocks.push(profile.render_exchange(&legs)?);
             }
             continue;
         }
@@ -130,7 +130,7 @@ pub(super) fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), E
             skipped += 1;
             continue;
         }
-        new_blocks.push(profile.render_transaction(row));
+        new_blocks.push(profile.render_transaction(row)?);
     }
 
     super::emit(&new_blocks, rows.len(), "rows", &existing, &profile.output_file, skipped, write)
@@ -170,9 +170,13 @@ struct Profile {
     output_file: PathBuf,
     title: String,
     account: String,   // bank-side account
-    commodity: String, // symbol for the booked amount (€)
-    precision: usize,  // decimals for the booked amount
+    /// `output.commodity` — the booked symbol; with `commodity.field` it is
+    /// only the fallback for rows whose currency cell is empty, and may be
+    /// omitted entirely (an empty cell is then an error).
+    commodity: Option<String>,
+    precision: usize, // fallback decimals when a symbol isn't in `precisions`
     sym: HashMap<String, String>, // currency code (upper) -> symbol
+    precisions: HashMap<String, usize>, // symbol -> decimals (commodities file)
     identity: Vec<String>, // field names that make a row unique
     rules: Vec<Rule>,
     default_account: String, // template, may contain {payee}
@@ -290,13 +294,21 @@ impl Profile {
         let output_file = expand(&get("output.file")?);
         let title = get("output.title")?;
         let account = get("output.account")?;
-        let commodity = get("output.commodity")?;
-
-        // Symbols + precision come from the referenced commodities file.
-        let (sym, precision) = match directives.get("commodities") {
-            Some(p) => load_commodities(&expand(p), &commodity)?,
-            None => (HashMap::new(), 2),
+        // With a per-row commodity column the profile-wide symbol is only a
+        // fallback for empty cells and may be left out.
+        let commodity = match directives.get("output.commodity") {
+            Some(c) => Some(c.clone()),
+            None if commodity_field.is_some() => None,
+            None => return Err(Error::from("import: missing 'output.commodity' in profile")),
         };
+
+        // Symbols + per-commodity precision come from the commodities file.
+        let (sym, precisions) = match directives.get("commodities") {
+            Some(p) => load_commodities(&expand(p))?,
+            None => (HashMap::new(), HashMap::new()),
+        };
+        let precision =
+            commodity.as_deref().and_then(|c| precisions.get(c)).copied().unwrap_or(2);
 
         // identity: the field names that make a row unique.
         let identity = get("identity")?
@@ -358,6 +370,7 @@ impl Profile {
             funding_first,
             commodity_field,
             pair_type,
+            precisions,
             output_file,
             title,
             account,
@@ -424,18 +437,31 @@ impl Profile {
 
     /// The commodity symbol a row books in: the `commodity.field` column's
     /// code mapped through the commodities file (unknown codes verbatim),
-    /// else the profile-wide `output.commodity`.
-    fn row_commodity(&self, row: &[String]) -> String {
+    /// else the profile-wide `output.commodity`. A row with neither is an
+    /// error — silently guessing a currency would corrupt the ledger.
+    fn row_commodity(&self, row: &[String]) -> Result<String, Error> {
         let code = self
             .commodity_field
             .as_deref()
             .map(|f| self.field_val(row, f))
             .unwrap_or_default();
         if code.is_empty() {
-            self.commodity.clone()
+            self.commodity.clone().ok_or_else(|| {
+                Error::from(format!(
+                    "import: row of {} has an empty currency cell and the profile \
+                     sets no output.commodity fallback",
+                    self.field_val(row, "date"),
+                ))
+            })
         } else {
-            self.sym.get(&code.to_uppercase()).cloned().unwrap_or(code)
+            Ok(self.sym.get(&code.to_uppercase()).cloned().unwrap_or(code))
         }
+    }
+
+    /// Decimals for a symbol: its commodities-file declaration, else the
+    /// profile fallback.
+    fn precision_of(&self, symbol: &str) -> usize {
+        self.precisions.get(symbol).copied().unwrap_or(self.precision)
     }
 
     /// Render a currency exchange's legs (`pair.type` rows sharing one
@@ -443,7 +469,7 @@ impl Profile {
     /// amount, in its own commodity, on the bank account — the legs balance
     /// each other as a trade, no counter account. Each keeps its own
     /// `; csv:` source line, so dedup still sees every row.
-    fn render_exchange(&self, legs: &[&Vec<String>]) -> String {
+    fn render_exchange(&self, legs: &[&Vec<String>]) -> Result<String, Error> {
         let date = to_iso(&self.field_val(legs[0], "date"), self.date_pattern.as_deref());
         let mut s = String::new();
         s.push_str(&format!("{} * {}\n", date, self.title));
@@ -451,18 +477,27 @@ impl Profile {
             let csv =
                 row.iter().map(|f| format!("\"{}\"", f)).collect::<Vec<_>>().join(",");
             s.push_str(&format!("\t; csv: {}\n", csv));
-            let amount =
-                fmt_amount(&self.field_val(row, "amount"), self.precision, self.comma_decimal);
-            s.push_str(&format!("\t{}  {}{}\n", self.account, self.row_commodity(row), amount));
+            let symbol = self.row_commodity(row)?;
+            let amount = fmt_amount(
+                &self.field_val(row, "amount"),
+                self.precision_of(&symbol),
+                self.comma_decimal,
+            );
+            s.push_str(&format!("\t{}  {}{}\n", self.account, symbol, amount));
         }
-        s.trim_end().to_string()
+        Ok(s.trim_end().to_string())
     }
 
     /// Render one row as a ledger transaction block (no trailing newline).
-    fn render_transaction(&self, row: &[String]) -> String {
+    fn render_transaction(&self, row: &[String]) -> Result<String, Error> {
         let date = to_iso(&self.field_val(row, "date"), self.date_pattern.as_deref());
-        let amount = fmt_amount(&self.field_val(row, "amount"), self.precision, self.comma_decimal);
-        let bank = format!("{}{}", self.row_commodity(row), amount);
+        let symbol = self.row_commodity(row)?;
+        let amount = fmt_amount(
+            &self.field_val(row, "amount"),
+            self.precision_of(&symbol),
+            self.comma_decimal,
+        );
+        let bank = format!("{}{}", symbol, amount);
         let counter = self.categorize(row);
 
         let csv = row
@@ -504,7 +539,7 @@ impl Profile {
         } else {
             s.push_str(&format!("\t{}", counter));
         }
-        s
+        Ok(s)
     }
 }
 
@@ -636,27 +671,27 @@ fn fmt_amount(s: &str, precision: usize, comma_decimal: bool) -> String {
 // commodities / csv / io
 // ---------------------------------------------------------------------
 
-/// Parse a `commodities.toml`: return (code→symbol, precision-of-target). Each
+/// Parse a `commodities.toml`: return (code→symbol, symbol→precision). Each
 /// `[[commodity]]`'s symbol maps to itself and every alias folds to it — keys
-/// upper-cased, so a source code like `EUR` resolves regardless of case. The
-/// precision is that of the commodity whose symbol is `target` (default 2).
-fn load_commodities(path: &Path, target: &str) -> Result<(HashMap<String, String>, usize), Error> {
+/// upper-cased, so a source code like `EUR` resolves regardless of case.
+#[allow(clippy::type_complexity)]
+fn load_commodities(
+    path: &Path,
+) -> Result<(HashMap<String, String>, HashMap<String, usize>), Error> {
     let src = std::fs::read_to_string(path)
         .map_err(|e| Error::from(format!("import: read {}: {}", path.display(), e)))?;
     let commodities = crate::loader::config::commodities_from_toml(&src)
         .map_err(|e| Error::from(format!("import: parse {}: {}", path.display(), e)))?;
     let mut sym = HashMap::new();
-    let mut precision = 2usize;
+    let mut precisions = HashMap::new();
     for c in commodities {
         sym.insert(c.symbol.to_uppercase(), c.symbol.clone());
         for a in &c.aliases {
             sym.insert(a.to_uppercase(), c.symbol.clone());
         }
-        if c.symbol == target {
-            precision = c.precision;
-        }
+        precisions.insert(c.symbol.clone(), c.precision);
     }
-    Ok((sym, precision))
+    Ok((sym, precisions))
 }
 
 /// Minimal RFC-4180 parser: handles quoted fields with embedded commas,
@@ -897,7 +932,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("acc-import-render-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = test_profile(&dir);
-        let block = p.render_transaction(&row("2025-11-01", "Foo Shop", "-12.5", "EUR"));
+        let block = p.render_transaction(&row("2025-11-01", "Foo Shop", "-12.5", "EUR")).unwrap();
         assert!(block.contains("2025-11-01 * bank | me"));
         assert!(block.contains("; csv:"));
         assert!(block.contains("€-12.50")); // padded to precision
@@ -1010,7 +1045,7 @@ mod tests {
             .into_iter().map(String::from).collect();
         let gbp: Vec<String> = vec!["2025-01-01", "Conversion", "GBP", "8.00", "T3", "T1", ""]
             .into_iter().map(String::from).collect();
-        let block = p.render_exchange(&[&usd, &gbp]);
+        let block = p.render_exchange(&[&usd, &gbp]).unwrap();
         // One transaction, both legs on the bank account in their own
         // commodity, each with its own ; csv: source line.
         assert_eq!(block.matches("; csv:").count(), 2);
@@ -1020,7 +1055,7 @@ mod tests {
         // Per-row commodity also drives ordinary rows.
         let single: Vec<String> = vec!["2025-01-02", "Payment", "GBP", "-5.00", "T9", "", "Foo"]
             .into_iter().map(String::from).collect();
-        assert!(p.render_transaction(&single).contains("a:bank  £-5.00"));
+        assert!(p.render_transaction(&single).unwrap().contains("a:bank  £-5.00"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
