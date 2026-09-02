@@ -136,9 +136,9 @@ fn finish_load(entries: Vec<Located<Entry>>, inject: Inject) -> Result<Journal, 
     // resolves `= TARGET` assignments/assertions against a running balance that
     // now includes the injected postings.
     // The price index is built BEFORE the hook runs, so an embedder's rules
-    // can convert at historical rates (deterministically: without loaded
-    // prices a rule that needs a rate hard-errors instead of booking
-    // differently). The same index then serves the report.
+    // can convert at historical rates. What a rule does when a rate it needs
+    // is not loaded is the embedder's policy — skip the conversion or
+    // hard-error the load. The same index then serves the report.
     let prices = indexer::index(resolved.prices);
     let mut transactions = booker::fill(resolved.transactions)?;
     // A hard-erroring hook stops the whole load: better no report than one
