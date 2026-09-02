@@ -516,7 +516,7 @@ pub fn run() {
 /// then delegate here, since the args are taken as a parameter rather than read
 /// from the environment.
 pub fn run_from(argv: Vec<String>) {
-    run_from_with(argv, &mut |_| Ok(()));
+    run_from_with(argv, &mut |_, _| Ok(()));
 }
 
 /// [`run_from`] with an [`Inject`](crate::Inject) hook: the report path calls

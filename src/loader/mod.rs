@@ -39,7 +39,7 @@ where
     P: AsRef<Path> + Sync,
 {
     let entries = read_and_parse(files)?;
-    finish_load(entries, &mut |_| Ok(()))
+    finish_load(entries, &mut |_, _| Ok(()))
 }
 
 /// Load the journal, then load only the price-DB pairs the report can use.
@@ -59,7 +59,7 @@ pub fn load_selective<P>(
 where
     P: AsRef<Path> + Sync,
 {
-    finish_load(selective_entries(journal_files, price_files, target)?, &mut |_| Ok(()))
+    finish_load(selective_entries(journal_files, price_files, target)?, &mut |_, _| Ok(()))
 }
 
 /// [`load`] with an [`Inject`] hook run before booking — the seam an embedder
@@ -120,7 +120,10 @@ where
 /// embedder (e.g. the wrapper). It runs at the exact point the expander did, so
 /// it sees running, filled amounts; injected postings carry their own amounts
 /// (they are not auto-filled).
-pub type Inject<'a> = &'a mut dyn FnMut(&mut Vec<Located<Transaction>>) -> Result<(), String>;
+pub type Inject<'a> = &'a mut dyn FnMut(
+    &mut Vec<Located<Transaction>>,
+    &indexer::Index,
+) -> Result<(), String>;
 
 /// Resolve → fill → inject → book → index a parsed entry stream into a
 /// `Journal`. On the report path `inject` may add programmatically-built
@@ -132,12 +135,16 @@ fn finish_load(entries: Vec<Located<Entry>>, inject: Inject) -> Result<Journal, 
     // add postings/transactions scaled against those concrete numbers; pass 2
     // resolves `= TARGET` assignments/assertions against a running balance that
     // now includes the injected postings.
+    // The price index is built BEFORE the hook runs, so an embedder's rules
+    // can convert at historical rates (deterministically: without loaded
+    // prices a rule that needs a rate hard-errors instead of booking
+    // differently). The same index then serves the report.
+    let prices = indexer::index(resolved.prices);
     let mut transactions = booker::fill(resolved.transactions)?;
     // A hard-erroring hook stops the whole load: better no report than one
     // built on bookings the embedder's rules flagged as ambiguous.
-    inject(&mut transactions).map_err(LoadError::Inject)?;
+    inject(&mut transactions, &prices).map_err(LoadError::Inject)?;
     let transactions = booker::assert_balances(transactions)?;
-    let prices = indexer::index(resolved.prices);
     let mut precisions = precisions_per_commodity(&transactions);
     // Explicit `precision N` under `commodity` directives wins over
     // whatever the posting amounts happened to contain. Users pin
