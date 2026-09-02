@@ -46,6 +46,12 @@ pub(super) fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), E
     if rows.is_empty() {
         return Err(Error::from("import: no data rows in CSV"));
     }
+    // `order.funding first`: undo the processor's payment-before-cover
+    // ordering, so the account never dips negative between an instant
+    // funding pair booked at the same moment.
+    if profile.funding_first {
+        reorder_funding_first(&mut rows, &profile);
+    }
     let ncols = rows[0].len();
 
     // What's already in the target ledger, as an identity multiset.
@@ -93,6 +99,11 @@ struct Profile {
     /// `amount.decimal comma`: the CSV writes `1.234,56` (comma decimals,
     /// dot thousands). Default is dot decimals with comma thousands.
     comma_decimal: bool,
+    /// `order.funding first`: a row whose `reference` names the txid of an
+    /// earlier same-day row is that row's funding leg (an instant bank
+    /// deposit covering the payment it pairs with) — emit it before the
+    /// row it references. Requires `field.txid` and `field.reference`.
+    funding_first: bool,
     output_file: PathBuf,
     title: String,
     account: String,   // bank-side account
@@ -161,6 +172,24 @@ impl Profile {
                 fields.insert(name.to_string(), cols);
             }
         }
+
+        let funding_first = match directives.get("order.funding").map(String::as_str) {
+            None => false,
+            Some("first") => {
+                if !fields.contains_key("txid") || !fields.contains_key("reference") {
+                    return Err(Error::from(
+                        "import: order.funding needs field.txid and field.reference mappings",
+                    ));
+                }
+                true
+            }
+            Some(other) => {
+                return Err(Error::from(format!(
+                    "import: order.funding = '{}' (expected 'first')",
+                    other
+                )));
+            }
+        };
 
         let get = |key: &str| -> Result<String, Error> {
             directives
@@ -237,6 +266,7 @@ impl Profile {
                     )));
                 }
             },
+            funding_first,
             output_file,
             title,
             account,
@@ -416,6 +446,29 @@ fn to_iso(value: &str, pattern: Option<&str>) -> String {
         return value.to_string();
     }
     format!("{:0>4}-{:0>2}-{:0>2}", y, m, d)
+}
+
+/// Move every funding leg directly before the same-day row its `reference`
+/// names. Processors list an instant funding deposit AFTER the payment it
+/// covers (their books dip negative for a moment); the ledger reads better
+/// with the cover first. Rows whose reference names nothing in the set
+/// (billing-agreement codes, cross-day settlements) stay where they are.
+fn reorder_funding_first(rows: &mut Vec<Vec<String>>, profile: &Profile) {
+    let mut i = 0;
+    while i < rows.len() {
+        let reference = profile.field_val(&rows[i], "reference");
+        if !reference.is_empty() {
+            let date = profile.field_val(&rows[i], "date");
+            let referenced = rows[..i].iter().position(|r| {
+                profile.field_val(r, "txid") == reference && profile.field_val(r, "date") == date
+            });
+            if let Some(j) = referenced {
+                let row = rows.remove(i);
+                rows.insert(j, row);
+            }
+        }
+        i += 1;
+    }
 }
 
 /// Normalize a raw CSV amount to dot-decimal, no grouping. With
@@ -771,5 +824,37 @@ mod tests {
         assert_eq!(p.categorize(&mk("General Authorization")), "skip");
         assert_eq!(p.categorize(&mk("Payment")), "exp:foo-shop");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn funding_first_moves_the_cover_before_its_payment() {
+        let dir = std::env::temp_dir().join(format!("acc-import-fund-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let com = write(&dir, "com.toml", "[[commodity]]\nsymbol = \"$\"\nprecision = 2\n");
+        let conf = write(
+            &dir,
+            "bank.conf",
+            &format!(
+                "field.date 0\nfield.payee 1\nfield.amount 2\nfield.txid 3\nfield.reference 4\n\
+                 commodities {}\noutput.file /tmp/x.ledger\noutput.title t\n\
+                 output.account a:bank\noutput.commodity $\nidentity txid\n\
+                 order.funding first\n\
+                 default => exp:{{payee}}\n",
+                com.display()
+            ),
+        );
+        let p = Profile::load(conf.to_str().unwrap()).unwrap();
+        let mk = |date: &str, amount: &str, txid: &str, reference: &str| -> Vec<String> {
+            vec![date, "Foo", amount, txid, reference].into_iter().map(String::from).collect()
+        };
+        let mut rows = vec![
+            mk("2025-01-01", "-5.00", "TX1", ""),
+            mk("2025-01-01", "5.00", "TX2", "TX1"),   // same-day cover → moves before TX1
+            mk("2025-01-02", "-9.00", "TX3", "B-77"), // names nothing → stays
+            mk("2025-01-03", "9.00", "TX4", "TX3"),   // cross-day → stays
+        ];
+        reorder_funding_first(&mut rows, &p);
+        let order: Vec<&str> = rows.iter().map(|r| r[3].as_str()).collect();
+        assert_eq!(order, ["TX2", "TX1", "TX3", "TX4"]);
     }
 }
