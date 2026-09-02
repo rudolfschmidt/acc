@@ -34,6 +34,14 @@ pub(super) fn run(csv_path: &str, conf_path: &str, write: bool) -> Result<(), Er
     let mut new_blocks: Vec<String> = Vec::new();
     let mut skipped = 0usize;
     for row in &rows {
+        // A rule whose target is the reserved word `skip` drops the row
+        // entirely — for statement lines that move no money (authorization
+        // holds and their reversals, pending echoes of later bookings).
+        // Checked before dedup so a dropped row never consumes an identity.
+        if profile.categorize(row) == "skip" {
+            skipped += 1;
+            continue;
+        }
         let key = profile.identity_key(row);
         if let Some(c) = seen.get_mut(&key)
             && *c > 0
@@ -60,6 +68,9 @@ struct Profile {
     fields: HashMap<String, Vec<usize>>,
     /// Date column layout, e.g. `DD-MM-YYYY`. `None` = already ISO.
     date_pattern: Option<String>,
+    /// `amount.decimal comma`: the CSV writes `1.234,56` (comma decimals,
+    /// dot thousands). Default is dot decimals with comma thousands.
+    comma_decimal: bool,
     output_file: PathBuf,
     title: String,
     account: String,   // bank-side account
@@ -194,6 +205,16 @@ impl Profile {
         Ok(Profile {
             fields,
             date_pattern: directives.get("date.format").cloned(),
+            comma_decimal: match directives.get("amount.decimal").map(String::as_str) {
+                None | Some("dot") => false,
+                Some("comma") => true,
+                Some(other) => {
+                    return Err(Error::from(format!(
+                        "import: amount.decimal = '{}' (expected 'comma' or 'dot')",
+                        other
+                    )));
+                }
+            },
             output_file,
             title,
             account,
@@ -261,7 +282,7 @@ impl Profile {
     /// Render one row as a ledger transaction block (no trailing newline).
     fn render_transaction(&self, row: &[String]) -> String {
         let date = to_iso(&self.field_val(row, "date"), self.date_pattern.as_deref());
-        let amount = fmt_amount(&self.field_val(row, "amount"), self.precision);
+        let amount = fmt_amount(&self.field_val(row, "amount"), self.precision, self.comma_decimal);
         let bank = format!("{}{}", self.commodity, amount);
         let counter = self.categorize(row);
 
@@ -292,7 +313,7 @@ impl Profile {
             // (money out of the account → into the expense). Some banks give
             // it unsigned, so derive the sign from the bank side, not from
             // the foreign value.
-            let mag = self.field_val(row, "fx-amount");
+            let mag = normalize_decimal(&self.field_val(row, "fx-amount"), self.comma_decimal);
             let mag = mag.trim_start_matches('-');
             let signed = if amount.starts_with('-') {
                 mag.to_string()
@@ -375,16 +396,24 @@ fn to_iso(value: &str, pattern: Option<&str>) -> String {
     format!("{:0>4}-{:0>2}-{:0>2}", y, m, d)
 }
 
+/// Normalize a raw CSV amount to dot-decimal, no grouping. With
+/// `comma_decimal` the source writes `1.234,56` (EU banks) — dots are
+/// grouping and the comma is the decimal point; otherwise commas are
+/// grouping (`1,190.00`) and the dot is the decimal point. acc's own
+/// decimal parser rejects thousand separators, so they must not survive.
+fn normalize_decimal(s: &str, comma_decimal: bool) -> String {
+    if comma_decimal {
+        s.replace('.', "").replace(',', ".")
+    } else {
+        s.replace(',', "")
+    }
+}
+
 /// Format a decimal string to exactly `precision` fractional digits.
 /// `-3` → `-3.00`, `-64.60` → `-64.60`, `0.25` → `0.25`,
-/// `-1,190.00` → `-1190.00`.
-///
-/// A comma is always a thousands separator here (some banks group
-/// integers, e.g. `1,190.00`); the importer treats `.` as the only
-/// decimal point, so commas are stripped before formatting. acc's own
-/// decimal parser rejects thousand separators, so they must not survive.
-fn fmt_amount(s: &str, precision: usize) -> String {
-    let s = s.replace(',', "");
+/// `-1,190.00` → `-1190.00`; with `comma_decimal`, `-6,58` → `-6.58`.
+fn fmt_amount(s: &str, precision: usize, comma_decimal: bool) -> String {
+    let s = normalize_decimal(s, comma_decimal);
     let (sign, body) = match s.strip_prefix('-') {
         Some(r) => ("-", r),
         None => ("", s.as_str()),
@@ -485,16 +514,26 @@ mod tests {
     
     #[test]
     fn fmt_amount_pads_to_precision() {
-        assert_eq!(fmt_amount("-3", 2), "-3.00");
-        assert_eq!(fmt_amount("-64.60", 2), "-64.60");
-        assert_eq!(fmt_amount("0.25", 2), "0.25");
-        assert_eq!(fmt_amount("2407.5", 2), "2407.50");
-        assert_eq!(fmt_amount("100", 0), "100");
+        assert_eq!(fmt_amount("-3", 2, false), "-3.00");
+        assert_eq!(fmt_amount("-64.60", 2, false), "-64.60");
+        assert_eq!(fmt_amount("0.25", 2, false), "0.25");
+        assert_eq!(fmt_amount("2407.5", 2, false), "2407.50");
+        assert_eq!(fmt_amount("100", 0, false), "100");
         // Thousands separators (some banks group integers) are stripped — acc's
         // decimal parser rejects them, so they must never reach the ledger.
-        assert_eq!(fmt_amount("1,190.00", 2), "1190.00");
-        assert_eq!(fmt_amount("-1,190.00", 2), "-1190.00");
-        assert_eq!(fmt_amount("1,234,567.8", 2), "1234567.80");
+        assert_eq!(fmt_amount("1,190.00", 2, false), "1190.00");
+        assert_eq!(fmt_amount("-1,190.00", 2, false), "-1190.00");
+        assert_eq!(fmt_amount("1,234,567.8", 2, false), "1234567.80");
+    }
+
+    #[test]
+    fn fmt_amount_comma_decimals() {
+        // `amount.decimal comma`: dot groups, comma is the decimal point.
+        assert_eq!(fmt_amount("-6,58", 2, true), "-6.58");
+        assert_eq!(fmt_amount("250,00", 2, true), "250.00");
+        assert_eq!(fmt_amount("1.234,56", 2, true), "1234.56");
+        assert_eq!(fmt_amount("-1.234.567,8", 2, true), "-1234567.80");
+        assert_eq!(fmt_amount("100", 2, true), "100.00");
     }
     
     #[test]
@@ -681,6 +720,34 @@ mod tests {
         // A different row is not present.
         let fresh = row("2025-11-05", "Bar Baz", "-9.99", "");
         assert!(!seen.contains_key(&p.identity_key(&fresh)));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn skip_rule_target_drops_the_row() {
+        let dir = std::env::temp_dir().join(format!("acc-import-skip-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let com = write(&dir, "com.toml", "[[commodity]]\nsymbol = \"$\"\nprecision = 2\n");
+        let conf = write(
+            &dir,
+            "bank.conf",
+            &format!(
+                "field.date 0\nfield.type 1\nfield.payee 2\nfield.amount 3\n\
+                 commodities {}\noutput.file /tmp/x.ledger\noutput.title t\n\
+                 output.account a:bank\noutput.commodity $\nidentity date amount\n\
+                 type Authorization => skip\n\
+                 default => exp:{{payee}}\n",
+                com.display()
+            ),
+        );
+        let p = Profile::load(conf.to_str().unwrap()).unwrap();
+        let mk = |kind: &str| -> Vec<String> {
+            vec!["2025-01-01", kind, "Foo Shop", "-5.00"].into_iter().map(String::from).collect()
+        };
+        // The matching row resolves to the reserved `skip` target; a
+        // non-matching row books normally.
+        assert_eq!(p.categorize(&mk("General Authorization")), "skip");
+        assert_eq!(p.categorize(&mk("Payment")), "exp:foo-shop");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
