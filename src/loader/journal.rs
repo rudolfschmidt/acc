@@ -49,6 +49,19 @@ pub struct Journal {
     pub labels_register: crate::resolver::LabelSet,
 }
 
+/// The lowercase short code of a commodity for generated transaction
+/// titles: the (lexicographically first) alias declared for the symbol,
+/// lowercased — `€` with `aliases = ["EUR"]` renders as `eur` — falling
+/// back to the lowercased symbol itself when no alias names it.
+pub fn commodity_code(aliases: &HashMap<String, String>, commodity: &str) -> String {
+    aliases
+        .iter()
+        .filter(|(_, primary)| primary.as_str() == commodity)
+        .map(|(alias, _)| alias.to_lowercase())
+        .min()
+        .unwrap_or_else(|| commodity.to_lowercase())
+}
+
 /// Which view is asking for a label — selects the view-specific set.
 #[derive(Debug, Clone, Copy)]
 pub enum LabelView {

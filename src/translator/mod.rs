@@ -10,10 +10,14 @@
 //! synthetic transaction is emitted at that date:
 //!
 //! ```text
-//! <date> * commodity translation adjustment
+//! <date> * commodity translation adjustment <code>
 //!     <transit-account>   -drift TARGET
 //!     <cta-account>       +drift TARGET
 //! ```
+//!
+//! `<code>` is the drifting native commodity's lowercase code (its declared
+//! alias, falling back to the lowercased symbol — see
+//! [`crate::loader::journal::commodity_code`]).
 //!
 //! The two are real postings (not bracket-virtual) — the same shape the
 //! lotter gives its capital postings, so the release transaction reloads
@@ -61,6 +65,7 @@ pub fn translate(
     cta_gain: &str,
     cta_loss: &str,
     precision: usize,
+    aliases: &HashMap<String, String>,
 ) {
     let transit = identify_transit_groups(txs);
     if transit.is_empty() {
@@ -77,7 +82,8 @@ pub fn translate(
         // (we held the native while it weakened). Negative drift =
         // gain (held native while it strengthened).
         let cta = if adj.drift.is_negative() { cta_gain } else { cta_loss };
-        txs.push(build_release_tx(&adj, target, cta, precision));
+        let code = crate::loader::journal::commodity_code(aliases, &adj.commodity);
+        txs.push(build_release_tx(&adj, target, cta, precision, &code));
     }
 
     txs.sort_by_key(|a| a.value.date);
@@ -113,6 +119,9 @@ struct Adjustment {
     file: Arc<str>,
     line: usize,
     account: String,
+    /// The native commodity whose strand produced the drift — named in
+    /// the release transaction's title as its lowercase code.
+    commodity: String,
     drift: Decimal,
 }
 
@@ -163,6 +172,7 @@ fn collect_adjustments(
                     file: lt.file.clone(),
                     line: lt.line,
                     account: key.0.clone(),
+                    commodity: key.1.clone(),
                     drift: entry.1,
                 });
                 entry.1 = Decimal::zero();
@@ -177,8 +187,9 @@ fn build_release_tx(
     target: &str,
     cta_account: &str,
     precision: usize,
+    code: &str,
 ) -> Located<Transaction> {
-    let description = "commodity translation adjustment".to_string();
+    let description = format!("commodity translation adjustment {code}");
     // Real postings (not bracket-virtual): the two legs sum to zero, so
     // the release transaction balances on its own and reloads cleanly —
     // 1:1 copyable, just like the lotter's capital postings. The debit
@@ -265,13 +276,13 @@ mod tests {
             \texpenses:food     10 GBP\n\
             \tassets:checking  -10 GBP\n";
         let (mut txs, db) = setup(src);
-        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
+        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2, &HashMap::new());
 
         // Three txs now: 2 originals + 1 synthetic release.
         assert_eq!(txs.len(), 3);
         let release = txs
             .iter()
-            .find(|lt| lt.value.description == "commodity translation adjustment")
+            .find(|lt| lt.value.description.starts_with("commodity translation adjustment"))
             .expect("release tx missing");
         assert_eq!(release.value.postings.len(), 2);
         // +$11 - $10.50 = +$0.50 drift on checking.
@@ -301,7 +312,7 @@ mod tests {
             \tincome:salary    -10 GBP\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
+        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2, &HashMap::new());
         assert_eq!(txs.len(), original);
     }
 
@@ -318,7 +329,7 @@ mod tests {
             \tassets:checking  -10 GBP\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
+        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2, &HashMap::new());
         assert_eq!(txs.len(), original);
     }
 
@@ -333,7 +344,7 @@ mod tests {
             \tassets:checking  -10 GBP\n";
         let (mut txs, db) = setup(src);
         let original = txs.len();
-        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2);
+        translate(&mut txs, "USD", &db, "income:cta", "expenses:cta", 2, &HashMap::new());
         assert_eq!(txs.len(), original);
     }
 
@@ -354,10 +365,10 @@ mod tests {
             \tcounterparty:partner     100 USD\n\
             \tassets:bank   -105 GBP\n";
         let (mut txs, db) = setup(src);
-        translate(&mut txs, "GBP", &db, "income:cta", "expenses:cta", 2);
+        translate(&mut txs, "GBP", &db, "income:cta", "expenses:cta", 2, &HashMap::new());
         let release = txs
             .iter()
-            .find(|lt| lt.value.description == "commodity translation adjustment")
+            .find(|lt| lt.value.description.starts_with("commodity translation adjustment"))
             .expect("CTA must fire on a multi-commodity pass-through account");
         // counterparty:partner: -100×1.10 + 100×1.05 = -110 + 105 = -5 drift.
         let debit = &release.value.postings[0].value;

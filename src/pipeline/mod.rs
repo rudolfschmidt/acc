@@ -95,6 +95,7 @@ pub fn enrich(journal: &mut Journal, target: Option<&str>, unrealized: bool) {
             cta_gain,
             cta_loss,
             precision,
+            &journal.aliases,
         );
     }
 
@@ -115,6 +116,7 @@ pub fn enrich(journal: &mut Journal, target: Option<&str>, unrealized: bool) {
             &journal.prices,
             &crate::revaluator::RevaluationAccounts { gain: rg, loss: rl },
             precision,
+            &journal.aliases,
         );
     }
 }

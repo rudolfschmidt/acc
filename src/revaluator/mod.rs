@@ -48,6 +48,7 @@ pub fn revaluate(
     db: &Index,
     accounts: &RevaluationAccounts,
     precision: usize,
+    aliases: &HashMap<String, String>,
 ) {
     if txs.is_empty() {
         return;
@@ -107,7 +108,8 @@ pub fn revaluate(
             continue;
         }
         let reval = if diff.is_negative() { accounts.loss } else { accounts.gain };
-        out.push(build_tx(&file, line, reval_date, target, account, commodity, reval, diff, precision));
+        let code = crate::loader::journal::commodity_code(aliases, commodity);
+        out.push(build_tx(&file, line, reval_date, target, account, &code, reval, diff, precision));
     }
 
     txs.extend(out);
@@ -118,7 +120,8 @@ pub fn revaluate(
 /// `+diff` target-currency posting (so its converted balance ends at
 /// `native × latest rate`), the revaluation account gets the offsetting
 /// `-diff`. Both are real and sum to zero, so the transaction balances
-/// and reloads 1:1.
+/// and reloads 1:1. `code` is the revalued commodity's lowercase code,
+/// named in the title.
 #[allow(clippy::too_many_arguments)]
 fn build_tx(
     file: &std::sync::Arc<str>,
@@ -126,7 +129,7 @@ fn build_tx(
     date: Date,
     target: &str,
     account: &str,
-    commodity: &str,
+    code: &str,
     reval_account: &str,
     diff: Decimal,
     precision: usize,
@@ -168,7 +171,7 @@ fn build_tx(
             date,
             state: State::Cleared,
             code: None,
-            description: format!("holding revaluation {commodity}"),
+            description: format!("holding revaluation {code}"),
             postings: vec![
                 Located { file: file.clone(), line, value: asset },
                 Located { file: file.clone(), line, value: counter },
@@ -229,7 +232,7 @@ mod tests {
             \texpenses:x     855 GBP\n\
             \tassets:usd    -900 USD\n";
         let (mut txs, db, prec) = setup(src);
-        revaluate(&mut txs, "GBP", &db, &accounts(), prec);
+        revaluate(&mut txs, "GBP", &db, &accounts(), prec, &HashMap::new());
         // The revaluation posting itself (target currency) on assets:usd.
         assert_eq!(balance(&txs, "assets:usd", "GBP"), Decimal::parse("150").unwrap());
         // Gain booked (income, negative).
@@ -253,7 +256,7 @@ mod tests {
             \tassets:usd   -1000 USD\n";
         let (mut txs, db, prec) = setup(src);
         let before = txs.len();
-        revaluate(&mut txs, "GBP", &db, &accounts(), prec);
+        revaluate(&mut txs, "GBP", &db, &accounts(), prec, &HashMap::new());
         assert_eq!(txs.len(), before, "closed position must not be revalued");
     }
 
@@ -267,7 +270,7 @@ mod tests {
             \tequity:open  -100 GBP\n";
         let (mut txs, db, prec) = setup(src);
         let before = txs.len();
-        revaluate(&mut txs, "GBP", &db, &accounts(), prec);
+        revaluate(&mut txs, "GBP", &db, &accounts(), prec, &HashMap::new());
         assert_eq!(txs.len(), before);
     }
 }
