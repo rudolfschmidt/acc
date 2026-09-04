@@ -213,6 +213,10 @@ struct Profile {
     /// carries the partner IBAN.
     transit: Transit,
     transit_field: String,
+    /// `fee.account` — where a row's separate fee column (declared as
+    /// `field.fee`) books. The bank leg then carries `amount - fee` (the
+    /// real balance move), the counter still receives the full amount.
+    fee_account: Option<String>,
 }
 
 impl Profile {
@@ -379,6 +383,12 @@ impl Profile {
             ));
         }
         let transit_field = transit_field.unwrap_or_default();
+        let fee_account = directives.get("fee.account").cloned();
+        if fields.contains_key("fee") && fee_account.is_none() {
+            return Err(Error::from(
+                "import: 'field.fee' is mapped but no 'fee.account' names where fees book",
+            ));
+        }
 
         Ok(Profile {
             fields,
@@ -408,6 +418,7 @@ impl Profile {
             default_account,
             transit,
             transit_field,
+            fee_account,
         })
     }
 
@@ -514,16 +525,35 @@ impl Profile {
         Ok(s.trim_end().to_string())
     }
 
+    /// A row's separate fee, normalized — `"0"` when no fee field is
+    /// mapped or the cell is empty.
+    fn row_fee(&self, row: &[String], precision: usize) -> String {
+        let raw = self.field_val(row, "fee");
+        if raw.is_empty() {
+            return "0".to_string();
+        }
+        fmt_amount(&raw, precision, self.comma_decimal)
+    }
+
     /// Render one row as a ledger transaction block (no trailing newline).
     fn render_transaction(&self, row: &[String]) -> Result<String, Error> {
         let date = to_iso(&self.field_val(row, "date"), self.date_pattern.as_deref());
         let symbol = self.row_commodity(row)?;
-        let amount = fmt_amount(
-            &self.field_val(row, "amount"),
-            self.precision_of(&symbol),
-            self.comma_decimal,
-        );
-        let bank = format!("{}{}", symbol, amount);
+        let precision = self.precision_of(&symbol);
+        let amount = fmt_amount(&self.field_val(row, "amount"), precision, self.comma_decimal);
+        // A separate fee column: the bank's real balance move is
+        // `amount - fee`; the fee books on `fee.account`, the bare counter
+        // still auto-balances to the full amount.
+        let fee = self.row_fee(row, precision);
+        let bank = if self.fee_account.is_some() && fee.parse::<f64>().unwrap_or(0.0) != 0.0 {
+            let a = crate::decimal::Decimal::parse(&amount)
+                .map_err(|e| Error::from(format!("import: bad amount '{}': {}", amount, e)))?;
+            let f = crate::decimal::Decimal::parse(&fee)
+                .map_err(|e| Error::from(format!("import: bad fee '{}': {}", fee, e)))?;
+            format!("{}{}", symbol, (a - f).format_decimal(precision))
+        } else {
+            format!("{}{}", symbol, amount)
+        };
         let counter = self.categorize(row);
 
         let csv = row
@@ -567,6 +597,11 @@ impl Profile {
             s.push_str(&format!("\t{}  {}", counter, fx));
         } else {
             s.push_str(&format!("\t{}", counter));
+        }
+        if let Some(fa) = &self.fee_account {
+            if fee.parse::<f64>().unwrap_or(0.0) != 0.0 {
+                s.push_str(&format!("\n\t{}  {}{}", fa, symbol, fee));
+            }
         }
         Ok(s)
     }
@@ -626,6 +661,9 @@ fn to_iso(value: &str, pattern: Option<&str>) -> String {
     }
     let (mut y, mut m, mut d) = ("", "", "");
     for (tok, part) in tokens.iter().zip(&parts) {
+        // A date column may carry a time behind the last component
+        // ("2025-05-10 15:47:33"); the date part ends at the whitespace.
+        let part = part.split_whitespace().next().unwrap_or("");
         match tok.chars().next().map(|c| c.to_ascii_uppercase()) {
             Some('Y') => y = part,
             Some('M') => m = part,
@@ -1043,6 +1081,40 @@ mod tests {
         // `other` and the key `Bank Deposit`; direction follows the sign.
         assert_eq!(p.categorize(&mk("Bank Deposit to Account", "5.00")), "a:transit:other:main");
         assert_eq!(p.categorize(&mk("Payment", "-5.00")), "exp:misc");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_separate_fee_column_books_on_the_fee_account() {
+        let dir = std::env::temp_dir().join(format!("acc-import-fee-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let com = write(&dir, "com.toml", "[[commodity]]\nsymbol = \"$\"\nprecision = 2\n");
+        let conf = write(
+            &dir,
+            "bank.conf",
+            &format!(
+                "field.date 0\nfield.payee 1\nfield.amount 2\nfield.fee 3\n\
+                 commodities {}\noutput.file /tmp/x.ledger\noutput.title t\n\
+                 output.account a:bank\noutput.commodity $\nidentity date amount\n\
+                 fee.account exp:bank-fee\n\
+                 default => exp:{{payee}}\n",
+                com.display()
+            ),
+        );
+        let p = Profile::load(conf.to_str().unwrap()).unwrap();
+        let row: Vec<String> =
+            vec!["2025-01-01", "atm", "-100.00", "4.20"].into_iter().map(String::from).collect();
+        let out = p.render_transaction(&row).unwrap();
+        // Bank moves amount - fee; the bare counter gets the full amount;
+        // the fee books explicitly on the fee account.
+        assert!(out.contains("a:bank  $-104.20"), "{out}");
+        assert!(out.contains("exp:bank-fee  $4.20"), "{out}");
+        // A zero-fee row books plainly, no fee leg.
+        let row0: Vec<String> =
+            vec!["2025-01-02", "shop", "-5.00", "0.00"].into_iter().map(String::from).collect();
+        let out0 = p.render_transaction(&row0).unwrap();
+        assert!(out0.contains("a:bank  $-5.00"), "{out0}");
+        assert!(!out0.contains("bank-fee"), "{out0}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
