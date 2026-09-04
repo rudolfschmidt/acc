@@ -86,12 +86,17 @@ impl Account {
             .or_insert(value);
     }
 
-    /// Does this account or any descendant have a non-zero
-    /// display-rounded balance? `precisions` is the per-commodity
-    /// display precision table from `Journal`.
+    /// Would this node print anything? True when the SUBTREE total shows
+    /// non-zero at display precision, or when any child would print. The
+    /// decision runs on the same quantity the tree renders (the subtree
+    /// total), never on the node's own raw balance — otherwise offsetting
+    /// residues inside one branch (own -0.01 against a child's +0.004)
+    /// print a chain of bare zeros while everything visible reads 0.
+    /// `precisions` is the per-commodity display precision table from
+    /// `Journal`.
     pub fn has_balance(&self, precisions: &HashMap<String, usize>) -> bool {
         if self
-            .balance
+            .total()
             .iter()
             .any(|(c, v)| crate::commands::util::shows_nonzero(c, v, precisions))
         {
