@@ -595,6 +595,15 @@ impl Profile {
             };
             let fx = format!("{}{}", symbol, signed);
             s.push_str(&format!("\t{}  {}", counter, fx));
+        } else if self.fee_account.is_some() && fee.parse::<f64>().unwrap_or(0.0) != 0.0 {
+            // Three or more postings: every leg carries its explicit
+            // amount — the counter takes the full amount, sign flipped.
+            // Only plain two-posting entries leave the last leg bare.
+            let flipped = match amount.strip_prefix('-') {
+                Some(mag) => mag.to_string(),
+                None => format!("-{}", amount),
+            };
+            s.push_str(&format!("\t{}  {}{}", counter, symbol, flipped));
         } else {
             s.push_str(&format!("\t{}", counter));
         }
@@ -1109,6 +1118,8 @@ mod tests {
         // the fee books explicitly on the fee account.
         assert!(out.contains("a:bank  $-104.20"), "{out}");
         assert!(out.contains("exp:bank-fee  $4.20"), "{out}");
+        // Three postings: the counter is explicit too, sign flipped.
+        assert!(out.contains("exp:atm  $100.00"), "{out}");
         // A zero-fee row books plainly, no fee leg.
         let row0: Vec<String> =
             vec!["2025-01-02", "shop", "-5.00", "0.00"].into_iter().map(String::from).collect();
