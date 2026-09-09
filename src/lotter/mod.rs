@@ -6,6 +6,14 @@
 //! posting that *acquires* a commodity opens a lot, a posting that
 //! *disposes* of it closes lots front-to-back and realizes the gain.
 //!
+//! A transaction in which every commodity nets to zero is a *transfer*,
+//! not a trade (a plain move, a fee-split withdrawal, a bundled
+//! multi-commodity move): it realizes nothing, but its lots migrate
+//! FIFO from the outgoing to the incoming legs — cost basis and
+//! acquisition date intact — so a commodity bought on one account and
+//! sold from another (exchange → transit → wallet → sale) still
+//! realizes against its original basis.
+//!
 //! ## With `-X TARGET`: the holding-period market move
 //!
 //! Under conversion the lotter books exactly one thing: the **market
@@ -62,6 +70,12 @@ struct Lot {
     cost_per_unit: Decimal,
     cost_commodity: String,
     date: Date,
+    /// The *booked* (trade) per-unit price in the target currency — what
+    /// was actually paid, converted at the acquisition date. Carried for
+    /// the `lots` report only; the capital math runs on `cost_per_unit`.
+    /// `None` natively (there `cost_per_unit` already is the booked
+    /// rate) and for lots without a derivable trade rate.
+    booked_per_unit: Option<Decimal>,
 }
 
 /// One lot closed by a disposal: how much was taken, at what cost, and
@@ -71,6 +85,8 @@ struct ClosedLot {
     cost_per_unit: Decimal,
     cost_commodity: String,
     date: Date,
+    /// The closed lot's booked (trade) per-unit price — see [`Lot`].
+    booked_per_unit: Option<Decimal>,
 }
 
 /// A disposal that realized a capital gain/loss. Phase 1 collects these
@@ -93,6 +109,9 @@ struct Disposal {
     /// Sell price per unit (the proceeds rate) — used as the `@` cost on
     /// the split legs when the source had none.
     proceeds_per_unit: Decimal,
+    /// The disposal's booked (trade) per-unit price in the target — what
+    /// was actually received. `None` natively or without a trade rate.
+    booked_proceeds_per_unit: Option<Decimal>,
     gain: Decimal,
     gain_commodity: String,
     /// `true` when the closing posting was an acquisition (closing a
@@ -109,6 +128,126 @@ pub struct CapitalAccounts<'a> {
     pub capital_loss: &'a str,
 }
 
+/// The per-(account, commodity) FIFO queues the tracker maintains.
+type LotQueues = HashMap<(String, String), VecDeque<Lot>>;
+
+/// One still-open lot at the end of tracking, exported for the `lots`
+/// report: the position it belongs to, the remaining quantity, its cost
+/// basis and the acquisition date. A negative `qty` is an open short.
+pub struct OpenLot {
+    pub account: String,
+    pub commodity: String,
+    pub qty: Decimal,
+    pub cost_per_unit: Decimal,
+    pub cost_commodity: String,
+    pub date: Date,
+    /// The booked (trade) per-unit price in the target — what was
+    /// actually paid. `None` natively (`cost_per_unit` is the booked
+    /// rate there) and for lots without a derivable trade rate.
+    pub booked_per_unit: Option<Decimal>,
+}
+
+/// One realized sale for the `lots` report — one entry per disposal
+/// (trade), with its FIFO cost already aggregated over the closed lots.
+/// Amounts, not rates: `booked_cost` is what was actually paid for the
+/// disposed quantity (summed over the lots that carry a booked rate —
+/// `None` when none does), `booked_proceeds` what the sale actually
+/// returned. The market figures (the capital basis) are always present.
+/// `short` marks a purchase closing a short position.
+pub struct Realization {
+    pub account: String,
+    pub commodity: String,
+    /// Total disposed quantity (positive).
+    pub qty: Decimal,
+    /// Acquisition date of the earliest lot the sale pulled.
+    pub first_buy_date: Date,
+    pub sell_date: Date,
+    /// The valuation commodity: the `-X` target, or natively the
+    /// counter-commodity of the trade.
+    pub value_commodity: String,
+    pub market_cost: Decimal,
+    pub market_proceeds: Decimal,
+    pub booked_cost: Option<Decimal>,
+    pub booked_proceeds: Option<Decimal>,
+    pub short: bool,
+}
+
+/// Run the FIFO tracking over `txs` and return every realized sale, one
+/// entry per disposal, in (account, commodity, sell date) order.
+/// Includes zero-gain sales — this is the report path, not the booking
+/// path. Read-only: nothing is rewritten.
+pub fn realizations(
+    txs: &[Located<Transaction>],
+    target: Option<&str>,
+    db: &Index,
+) -> Vec<Realization> {
+    let (_, disposals) = track(txs, target, db);
+    let mut out = Vec::new();
+    for d in &disposals {
+        let tx = &txs[d.tx_idx].value;
+        let account = &tx.postings[d.posting_idx].value.account;
+        let qty = d.lots.iter().fold(Decimal::zero(), |a, l| a + l.qty);
+        let market_cost = d
+            .lots
+            .iter()
+            .fold(Decimal::zero(), |a, l| a + l.qty.mul_rounded(l.cost_per_unit));
+        let booked: Vec<Decimal> = d
+            .lots
+            .iter()
+            .filter_map(|l| l.booked_per_unit.map(|b| l.qty.mul_rounded(b)))
+            .collect();
+        let booked_cost =
+            (!booked.is_empty()).then(|| booked.iter().fold(Decimal::zero(), |a, v| a + *v));
+        out.push(Realization {
+            account: account.clone(),
+            commodity: d.commodity.clone(),
+            qty,
+            first_buy_date: d.lots.iter().map(|l| l.date).min().expect("closed is non-empty"),
+            sell_date: tx.date,
+            value_commodity: d.gain_commodity.clone(),
+            market_cost,
+            market_proceeds: qty.mul_rounded(d.proceeds_per_unit),
+            booked_cost,
+            booked_proceeds: d.booked_proceeds_per_unit.map(|b| qty.mul_rounded(b)),
+            short: d.acquisition,
+        });
+    }
+    out.sort_by(|a, b| {
+        (&a.account, &a.commodity, a.sell_date, a.first_buy_date)
+            .cmp(&(&b.account, &b.commodity, b.sell_date, b.first_buy_date))
+    });
+    out
+}
+
+/// Run the FIFO tracking over `txs` and return the still-open lots,
+/// flattened in (account, commodity, queue) order — the first lot of a
+/// position is its FIFO front, the one the next disposal will close.
+/// Read-only: nothing is realized, no posting is rewritten.
+pub fn open_lots(
+    txs: &[Located<Transaction>],
+    target: Option<&str>,
+    db: &Index,
+) -> Vec<OpenLot> {
+    let (lots, _) = track(txs, target, db);
+    let mut keys: Vec<&(String, String)> = lots.keys().collect();
+    keys.sort();
+    let mut out = Vec::new();
+    for key in keys {
+        for lot in &lots[key] {
+            out.push(OpenLot {
+                account: key.0.clone(),
+                commodity: key.1.clone(),
+                qty: lot.qty,
+                cost_per_unit: lot.cost_per_unit,
+                cost_commodity: lot.cost_commodity.clone(),
+                date: lot.date,
+                booked_per_unit: lot.booked_per_unit,
+            });
+        }
+    }
+    out
+}
+
 /// Track lots FIFO and inject one realized capital-gain/loss posting per
 /// disposal. See module docs for the valuation semantics.
 pub fn realize_capital(
@@ -118,10 +257,79 @@ pub fn realize_capital(
     db: &Index,
     precisions: &HashMap<String, usize>,
 ) {
-    let mut lots: HashMap<(String, String), VecDeque<Lot>> = HashMap::new();
-    let mut disposals: Vec<Disposal> = Vec::new();
+    let (_, mut disposals) = track(txs, target, db);
+
+    // Only disposals with a displayable gain get rewritten — a zero-gain
+    // sale needs no split legs and no capital posting. (Formerly filtered
+    // inside `track`; moved here so the report path sees every sale.)
+    disposals.retain(|d| {
+        let prec = precisions.get(&d.gain_commodity).copied().unwrap_or(2);
+        !d.gain.is_display_zero(prec)
+    });
+
+    // Phase 2: rewrite each disposal's posting into one leg per closed
+    // lot (annotated `{cost} [lot-date] @ proceeds`) and inject the gain
+    // as a real capital posting in the same transaction.
+    let mut by_tx: HashMap<usize, Vec<Disposal>> = HashMap::new();
+    for d in disposals {
+        by_tx.entry(d.tx_idx).or_default().push(d);
+    }
+    for (tx_idx, disps) in by_tx {
+        rewrite_tx(&mut txs[tx_idx], &disps, accounts, precisions);
+    }
+}
+
+/// Phase 1 — walk the journal chronologically, building the per-(account,
+/// commodity) FIFO queues and collecting the disposals that realized a
+/// gain. Shared by [`realize_capital`] (which then rewrites) and
+/// [`open_lots`] (which reports the queues). Read-only on `txs`.
+fn track(
+    txs: &[Located<Transaction>],
+    target: Option<&str>,
+    db: &Index,
+) -> (LotQueues, Vec<Disposal>) {
+    let mut lots: LotQueues = HashMap::new();
+    // Disposals keyed by (tx, posting) so the day-settling trade retry
+    // can top up an existing disposal when late-arriving lots cover
+    // more of it.
+    let mut disposals: HashMap<(usize, usize), Disposal> = HashMap::new();
+    // Per-(tx, posting) quantity already migrated, so a day-settling
+    // re-pass only moves what a transfer leg still owes — never twice.
+    let mut migrated: HashMap<(usize, usize), Decimal> = HashMap::new();
+    // Per-(tx, posting) still-owed disposal quantity (positive) that
+    // found no lots and opened no short — the trade-retry's ledger.
+    let mut uncovered: HashMap<(usize, usize), Decimal> = HashMap::new();
+    // The current day's transfer transactions, for the settling pass,
+    // and its trades that left something uncovered.
+    let mut day_transfers: Vec<usize> = Vec::new();
+    let mut day_trades: Vec<usize> = Vec::new();
+    let mut current_day: Option<Date> = None;
 
     for (idx, lt) in txs.iter().enumerate() {
+        // Within one day, file order decides processing order — but a
+        // transfer chain (exchange → transit → wallet) may well be
+        // booked with the arrival before the departure, since the legs
+        // live in different files. So at each day boundary, re-run the
+        // finished day's transfers until no lot moves any more: lots
+        // that landed late still reach every onward hop of the same
+        // day. Across days no such settling happens — an arrival dated
+        // before its departure is a data error, not an ordering one.
+        if current_day != Some(lt.value.date) {
+            settle_day(
+                txs,
+                &day_transfers,
+                &day_trades,
+                target,
+                db,
+                &mut lots,
+                &mut migrated,
+                &mut uncovered,
+                &mut disposals,
+            );
+            day_transfers.clear();
+            day_trades.clear();
+            current_day = Some(lt.value.date);
+        }
         // Native per-commodity sums over balance-contributing postings.
         // Drive both the "is this a trade?" test and the implied rate.
         let mut sums: HashMap<String, Decimal> = HashMap::new();
@@ -133,8 +341,22 @@ pub fn realize_capital(
                 *sums.entry(a.commodity.clone()).or_insert(Decimal::zero()) += a.value;
             }
         }
-        // Single-commodity transactions can't realize a capital gain —
-        // there is no exchange, hence no cost basis vs proceeds.
+        // A transaction in which EVERY commodity nets to zero exchanged
+        // nothing into anything — it only moved holdings between
+        // accounts: a plain transfer, a fee-split withdrawal, a bundled
+        // multi-commodity move. That is not a realization event; the
+        // lots migrate with the commodity instead, cost basis and
+        // acquisition date intact. Merely skipping (the old behaviour)
+        // stranded the basis on the source account — the buy on the
+        // exchange and the sell from the wallet never met — and running
+        // a bundled move through the trade path below would realize
+        // phantom capital on a mere relocation. Only when a commodity's
+        // balance crosses into another commodity is there a trade.
+        if sums.values().all(|s| s.is_zero()) {
+            migrate(lt, idx, target, &mut lots, &mut migrated);
+            day_transfers.push(idx);
+            continue;
+        }
         if sums.len() < 2 {
             continue;
         }
@@ -163,6 +385,21 @@ pub fn realize_capital(
             };
             let key = (lp.value.account.clone(), a.commodity.clone());
 
+            // The *booked* trade rate of this leg in the target currency —
+            // what was actually paid or received per unit, converted at
+            // this date. Only meaningful under `-X` (natively `unit_value`
+            // already IS the booked rate); `None` when the transaction
+            // carries no derivable trade rate.
+            let booked = target.and_then(|t| {
+                posting_value(&lp.value, &sums).and_then(|(rate, counter)| {
+                    if counter == t {
+                        Some(rate)
+                    } else {
+                        db.find(&counter, t, &date).map(|fx| rate.mul_rounded(fx))
+                    }
+                })
+            });
+
             // A `{}` lot-cost means the user books the gain by hand
             // (ledger style) — acc consumes lots for FIFO consistency but
             // injects nothing and opens no lot.
@@ -170,91 +407,81 @@ pub fn realize_capital(
 
             let queue = lots.entry(key.clone()).or_default();
 
-            let mut remaining = a.value; // signed: + acquires, − disposes
-            let mut gain = Decimal::zero();
-            let mut closed: Vec<ClosedLot> = Vec::new();
-            let mut mixed = false;
-
-            // Close opposite-sign lots front-to-back: a long lot (qty > 0)
-            // by a disposal (remaining < 0), a short lot (qty < 0) by an
-            // acquisition (remaining > 0). Same sign extends the position,
-            // so stop. Shorts are only ever opened for a position traded
-            // against the target money — see the open condition below.
-            while !remaining.is_zero() {
-                let Some(front) = queue.front() else { break };
-                if front.qty.is_negative() == remaining.is_negative() {
-                    break;
-                }
-                let short = front.qty.is_negative();
-                let take = remaining.abs().min(front.qty.abs());
-                let front = queue.front_mut().unwrap();
-                // Cost vs proceeds in different commodities (mixed currency,
-                // native mode) can't be netted — skip the gain but still
-                // consume the lot for FIFO consistency. Under `-X` both are
-                // the target, so this always matches.
-                if front.cost_commodity == value_commodity {
-                    // (close − open) for a long lot, (open − close) for a
-                    // short — `unit_value − cost`, sign-flipped for shorts.
-                    let per = unit_value - front.cost_per_unit;
-                    let per = if short { Decimal::zero() - per } else { per };
-                    gain += take.mul_rounded(per);
-                    closed.push(ClosedLot {
-                        qty: take,
-                        cost_per_unit: front.cost_per_unit,
-                        cost_commodity: front.cost_commodity.clone(),
-                        date: front.date,
-                    });
-                } else {
-                    mixed = true;
-                }
-                front.qty = if short { front.qty + take } else { front.qty - take };
-                remaining = if remaining.is_negative() {
-                    remaining + take
-                } else {
-                    remaining - take
-                };
-                if front.qty.is_zero() {
-                    queue.pop_front();
-                }
-            }
+            let (closed, gain, mixed, remaining) =
+                close_against(queue, a.value, unit_value, &value_commodity);
 
             if manual {
-                // User-booked disposal: lots consumed, nothing injected,
-                // no new lot opened.
+                // The meaning of a user-written `{}` depends on the side.
+                // On a DISPOSAL the user books the gain by hand (ledger
+                // style): lots consumed, nothing injected, no new lot. On
+                // an ACQUISITION it *declares the cost basis* — a fork
+                // credited at `{0}`, an airdrop, an opening balance with a
+                // known basis. Ignoring it there would strand the whole
+                // position basis-less, so open the lot at the declared
+                // cost (and at the `[date]` if the user wrote one).
+                if !remaining.is_zero() && !remaining.is_negative() {
+                    let lot = lp.value.lot_cost.as_ref().unwrap();
+                    let cost_per_unit = if lot.total {
+                        lot.amount.value.div_rounded(remaining.abs())
+                    } else {
+                        lot.amount.value
+                    };
+                    queue.push_back(Lot {
+                        qty: remaining,
+                        cost_per_unit,
+                        cost_commodity: lot.amount.commodity.clone(),
+                        date: lp.value.lot_date.unwrap_or(lt.value.date),
+                        // A user-written `{}` on an acquisition IS the
+                        // declared real cost — convert it to the target
+                        // for the booked view.
+                        booked_per_unit: target.and_then(|t| {
+                            if lot.amount.commodity == t {
+                                Some(cost_per_unit)
+                            } else {
+                                db.find(&lot.amount.commodity, t, &date)
+                                    .map(|fx| cost_per_unit.mul_rounded(fx))
+                            }
+                        }),
+                    });
+                }
                 continue;
             }
 
-            // Open a lot for the unclosed remainder. A positive remainder
-            // (acquisition) always opens a long. A negative remainder (a
-            // disposal that outran the queue) opens a SHORT only when the
-            // position is traded against the target money — a 2-commodity
-            // trade whose counter IS the target (e.g. USD sold for GBP):
-            // there an uncovered disposal is a genuine short, closed by a
-            // later purchase. For crypto↔crypto (counter ≠ target) it is
-            // the counter-side of a normal trade or a missing cost basis;
-            // opening a short there books phantom capital when a later
-            // acquisition "closes" it. rewrite_tx keeps such an uncovered
-            // amount as a plain proceeds leg — no cost basis, no gain.
-            let against_target =
-                sums.len() == 2 && target.is_some_and(|t| sums.contains_key(t));
-            if !remaining.is_zero() && (!remaining.is_negative() || against_target) {
+            // Open a lot for the unclosed remainder of an ACQUISITION —
+            // always a long.
+            if !remaining.is_zero() && !remaining.is_negative() {
                 queue.push_back(Lot {
                     qty: remaining,
                     cost_per_unit: unit_value,
                     cost_commodity: value_commodity.clone(),
                     date: lt.value.date,
+                    booked_per_unit: booked,
                 });
             }
 
-            // Record a realization if lots were closed with a real gain.
+            // A disposal the queue could not fully cover: remember the
+            // owed rest so the day-settling retry can close it against
+            // lots arriving later the same day. Whatever is STILL owed
+            // at the day's end becomes a genuine SHORT when the position
+            // trades against the target money (see `settle_day`) —
+            // deferred there so same-day coverage always wins, keeping
+            // the result independent of the `-X` target. Other uncovered
+            // rests stay basis-less: rewrite_tx keeps them as plain
+            // proceeds legs — no cost basis, no gain.
+            if remaining.is_negative() {
+                uncovered.insert((idx, p_idx), remaining.abs());
+                if day_trades.last() != Some(&idx) {
+                    day_trades.push(idx);
+                }
+            }
+
+            // Record a realization whenever lots were closed. Zero-gain
+            // sales stay in — the `lots` report shows every sale;
+            // `realize_capital` filters them before rewriting.
             if mixed || closed.is_empty() {
                 continue;
             }
-            let prec = precisions.get(&value_commodity).copied().unwrap_or(2);
-            if gain.is_display_zero(prec) {
-                continue;
-            }
-            disposals.push(Disposal {
+            disposals.insert((idx, p_idx), Disposal {
                 tx_idx: idx,
                 posting_idx: p_idx,
                 commodity: a.commodity.clone(),
@@ -262,6 +489,7 @@ pub fn realize_capital(
                 is_virtual: lp.value.is_virtual,
                 balanced: lp.value.balanced,
                 proceeds_per_unit: unit_value,
+                booked_proceeds_per_unit: booked,
                 gain,
                 gain_commodity: value_commodity,
                 acquisition: !a.value.is_negative(),
@@ -270,16 +498,402 @@ pub fn realize_capital(
         }
     }
 
-    // Phase 2: rewrite each disposal's posting into one leg per closed
-    // lot (annotated `{cost} [lot-date] @ proceeds`) and inject the gain
-    // as a real capital posting in the same transaction.
-    let mut by_tx: HashMap<usize, Vec<Disposal>> = HashMap::new();
-    for d in disposals {
-        by_tx.entry(d.tx_idx).or_default().push(d);
+    // Settle the trailing day (no boundary follows it).
+    settle_day(
+        txs,
+        &day_transfers,
+        &day_trades,
+        target,
+        db,
+        &mut lots,
+        &mut migrated,
+        &mut uncovered,
+        &mut disposals,
+    );
+
+    // Deterministic order for phase 2 and the report.
+    let mut disposals: Vec<Disposal> = disposals.into_values().collect();
+    disposals.sort_by_key(|d| (d.tx_idx, d.posting_idx));
+    (lots, disposals)
+}
+
+/// Close opposite-sign lots front-to-back against `remaining` (signed:
+/// positive acquires / covers shorts, negative disposes of longs — same
+/// sign as the front extends the position, so it stops). Returns the
+/// closed lots, the realized gain, whether lots with a foreign cost
+/// commodity were consumed gain-free (mixed), and the unclosed
+/// remainder.
+fn close_against(
+    queue: &mut VecDeque<Lot>,
+    mut remaining: Decimal,
+    unit_value: Decimal,
+    value_commodity: &str,
+) -> (Vec<ClosedLot>, Decimal, bool, Decimal) {
+    let mut gain = Decimal::zero();
+    let mut closed: Vec<ClosedLot> = Vec::new();
+    let mut mixed = false;
+    while !remaining.is_zero() {
+        let Some(front) = queue.front() else { break };
+        if front.qty.is_negative() == remaining.is_negative() {
+            break;
+        }
+        let short = front.qty.is_negative();
+        let take = remaining.abs().min(front.qty.abs());
+        let front = queue.front_mut().unwrap();
+        // Cost vs proceeds in different commodities (mixed currency,
+        // native mode) can't be netted — skip the gain but still
+        // consume the lot for FIFO consistency. Under `-X` both are
+        // the target, so this always matches.
+        if front.cost_commodity == value_commodity {
+            // (close − open) for a long lot, (open − close) for a
+            // short — `unit_value − cost`, sign-flipped for shorts.
+            let per = unit_value - front.cost_per_unit;
+            let per = if short { Decimal::zero() - per } else { per };
+            gain += take.mul_rounded(per);
+            closed.push(ClosedLot {
+                qty: take,
+                cost_per_unit: front.cost_per_unit,
+                cost_commodity: front.cost_commodity.clone(),
+                date: front.date,
+                booked_per_unit: front.booked_per_unit,
+            });
+        } else {
+            mixed = true;
+        }
+        front.qty = if short { front.qty + take } else { front.qty - take };
+        remaining = if remaining.is_negative() {
+            remaining + take
+        } else {
+            remaining - take
+        };
+        if front.qty.is_zero() {
+            queue.pop_front();
+        }
     }
-    for (tx_idx, disps) in by_tx {
-        rewrite_tx(&mut txs[tx_idx], &disps, accounts, precisions);
+    (closed, gain, mixed, remaining)
+}
+
+/// Day-settling retry for a trade that left a disposal (partly)
+/// uncovered: close the still-owed rest against lots that arrived later
+/// the same day, topping up the existing disposal (or creating one).
+/// Without this, a wallet that receives and sells on the same day
+/// strands the arriving lots forever whenever file order books the sale
+/// first — the sale realizes nothing and the lots never leave. Returns
+/// whether any quantity was closed.
+#[allow(clippy::too_many_arguments)]
+fn retry_trade(
+    txs: &[Located<Transaction>],
+    tx_idx: usize,
+    target: Option<&str>,
+    db: &Index,
+    lots: &mut LotQueues,
+    uncovered: &mut HashMap<(usize, usize), Decimal>,
+    disposals: &mut HashMap<(usize, usize), Disposal>,
+) -> bool {
+    let lt = &txs[tx_idx];
+    let date = lt.value.date.to_string();
+    // The same per-commodity sums as the main pass, for the implied rate.
+    let mut sums: HashMap<String, Decimal> = HashMap::new();
+    for lp in &lt.value.postings {
+        if !contributes(&lp.value) {
+            continue;
+        }
+        if let Some(a) = &lp.value.amount {
+            *sums.entry(a.commodity.clone()).or_insert(Decimal::zero()) += a.value;
+        }
     }
+    let mut moved = false;
+    for (p_idx, lp) in lt.value.postings.iter().enumerate() {
+        let Some(rest) = uncovered.get_mut(&(tx_idx, p_idx)) else { continue };
+        if rest.is_zero() {
+            continue;
+        }
+        let Some(a) = &lp.value.amount else { continue };
+        let Some((unit_value, value_commodity)) = (match target {
+            Some(t) => db.find(&a.commodity, t, &date).map(|r| (r, t.to_string())),
+            None => posting_value(&lp.value, &sums),
+        }) else {
+            continue;
+        };
+        let booked = target.and_then(|t| {
+            posting_value(&lp.value, &sums).and_then(|(rate, counter)| {
+                if counter == t {
+                    Some(rate)
+                } else {
+                    db.find(&counter, t, &date).map(|fx| rate.mul_rounded(fx))
+                }
+            })
+        });
+        let queue = lots
+            .entry((lp.value.account.clone(), a.commodity.clone()))
+            .or_default();
+        let (closed, gain, mixed, remaining) =
+            close_against(queue, Decimal::zero() - *rest, unit_value, &value_commodity);
+        if closed.is_empty() {
+            continue;
+        }
+        moved = true;
+        *rest = remaining.abs();
+        if mixed {
+            continue;
+        }
+        let d = disposals.entry((tx_idx, p_idx)).or_insert_with(|| Disposal {
+            tx_idx,
+            posting_idx: p_idx,
+            commodity: a.commodity.clone(),
+            decimals: a.decimals,
+            is_virtual: lp.value.is_virtual,
+            balanced: lp.value.balanced,
+            proceeds_per_unit: unit_value,
+            booked_proceeds_per_unit: booked,
+            gain: Decimal::zero(),
+            gain_commodity: value_commodity,
+            acquisition: false,
+            lots: Vec::new(),
+        });
+        d.gain += gain;
+        d.lots.extend(closed);
+    }
+    moved
+}
+
+/// Re-run a finished day's transfers AND uncovered trades until no lot
+/// moves any more. Within one day, file order is arbitrary — a chain's
+/// arrival may be booked before its departure, and a sale before the
+/// arrival that funds it — so lots that landed late must still reach
+/// every onward hop and every still-owed disposal of the same day. The
+/// `migrated` / `uncovered` ledgers guarantee a re-pass only moves what
+/// a leg still owes, so settling is idempotent and the loop terminates
+/// as soon as a full pass moves nothing. A single transfer can't feed
+/// itself, so a day with no retryable trade and fewer than two
+/// transfers needs none. Across days no settling happens — an arrival
+/// dated before its departure is a data error, not an ordering one.
+#[allow(clippy::too_many_arguments)]
+fn settle_day(
+    txs: &[Located<Transaction>],
+    transfers: &[usize],
+    trades: &[usize],
+    target: Option<&str>,
+    db: &Index,
+    lots: &mut LotQueues,
+    migrated: &mut HashMap<(usize, usize), Decimal>,
+    uncovered: &mut HashMap<(usize, usize), Decimal>,
+    disposals: &mut HashMap<(usize, usize), Disposal>,
+) {
+    if trades.is_empty() && transfers.len() < 2 {
+        return;
+    }
+    loop {
+        let mut moved = false;
+        for &t in transfers {
+            moved |= migrate(&txs[t], t, target, lots, migrated);
+        }
+        for &t in trades {
+            moved |= retry_trade(txs, t, target, db, lots, uncovered, disposals);
+        }
+        if !moved {
+            break;
+        }
+    }
+    // What an against-target disposal still owes after the day settled
+    // is a genuine short — a 2-commodity trade whose counter IS the
+    // target money (e.g. USD sold for GBP), later closed by a purchase.
+    // Opening it here, not in the main pass, lets same-day arrivals
+    // cover the sale first, so realization does not depend on file
+    // order or on which commodity happens to be the `-X` target. For
+    // crypto↔crypto (counter ≠ target) no short opens: a later
+    // acquisition "closing" it would book phantom capital.
+    for &t in trades {
+        open_short_rest(txs, t, target, db, lots, uncovered);
+    }
+}
+
+/// Open the deferred short for a day's still-uncovered against-target
+/// disposals — see the trailing step of [`settle_day`].
+fn open_short_rest(
+    txs: &[Located<Transaction>],
+    tx_idx: usize,
+    target: Option<&str>,
+    db: &Index,
+    lots: &mut LotQueues,
+    uncovered: &mut HashMap<(usize, usize), Decimal>,
+) {
+    let lt = &txs[tx_idx];
+    let date = lt.value.date.to_string();
+    let mut sums: HashMap<String, Decimal> = HashMap::new();
+    for lp in &lt.value.postings {
+        if !contributes(&lp.value) {
+            continue;
+        }
+        if let Some(a) = &lp.value.amount {
+            *sums.entry(a.commodity.clone()).or_insert(Decimal::zero()) += a.value;
+        }
+    }
+    if !(sums.len() == 2 && target.is_some_and(|t| sums.contains_key(t))) {
+        return;
+    }
+    for (p_idx, lp) in lt.value.postings.iter().enumerate() {
+        let Some(rest) = uncovered.get_mut(&(tx_idx, p_idx)) else { continue };
+        if rest.is_zero() {
+            continue;
+        }
+        let Some(a) = &lp.value.amount else { continue };
+        let Some((unit_value, value_commodity)) = (match target {
+            Some(t) => db.find(&a.commodity, t, &date).map(|r| (r, t.to_string())),
+            None => posting_value(&lp.value, &sums),
+        }) else {
+            continue;
+        };
+        let booked = target.and_then(|t| {
+            posting_value(&lp.value, &sums).and_then(|(rate, counter)| {
+                if counter == t {
+                    Some(rate)
+                } else {
+                    db.find(&counter, t, &date).map(|fx| rate.mul_rounded(fx))
+                }
+            })
+        });
+        lots.entry((lp.value.account.clone(), a.commodity.clone()))
+            .or_default()
+            .push_back(Lot {
+                qty: Decimal::zero() - *rest,
+                cost_per_unit: unit_value,
+                cost_commodity: value_commodity,
+                date: lt.value.date,
+                booked_per_unit: booked,
+            });
+        *rest = Decimal::zero();
+    }
+}
+
+/// Migrate lots through a transfer transaction (every commodity nets to
+/// zero): outgoing (negative) legs shed their lots FIFO into a
+/// per-commodity stream, incoming (positive) legs receive them in
+/// posting order. Cost basis and acquisition date travel unchanged — a
+/// transfer is not a disposal, so nothing is realized and no posting is
+/// rewritten. Legs in the target commodity are money, not a position,
+/// and are skipped (matching the disposal path); short lots stay put —
+/// an uncovered outflow just migrates nothing, it never fabricates a
+/// basis. The `migrated` ledger records each leg's already-moved
+/// quantity so day-settling re-passes only move the still-owed rest;
+/// returns whether any quantity moved.
+fn migrate(
+    lt: &Located<Transaction>,
+    tx_idx: usize,
+    target: Option<&str>,
+    lots: &mut HashMap<(String, String), VecDeque<Lot>>,
+    migrated: &mut HashMap<(usize, usize), Decimal>,
+) -> bool {
+    let mut moved = false;
+    // Shed: collect the outgoing legs' lots FIFO, one stream per
+    // commodity — a bundled move must never hand one commodity's basis
+    // to another commodity's leg.
+    let mut streams: HashMap<String, VecDeque<Lot>> = HashMap::new();
+    for (p_idx, lp) in lt.value.postings.iter().enumerate() {
+        if !contributes(&lp.value) {
+            continue;
+        }
+        let Some(a) = &lp.value.amount else { continue };
+        if target.is_some_and(|t| a.commodity == t) {
+            continue;
+        }
+        if !a.value.is_negative() {
+            continue;
+        }
+        let Some(queue) = lots.get_mut(&(lp.value.account.clone(), a.commodity.clone())) else {
+            continue;
+        };
+        let done = migrated.entry((tx_idx, p_idx)).or_insert(Decimal::zero());
+        let stream = streams.entry(a.commodity.clone()).or_default();
+        let mut remaining = a.value.abs() - *done;
+        while !remaining.is_zero() {
+            let Some(front) = queue.front_mut() else { break };
+            if front.qty.is_negative() {
+                break;
+            }
+            let take = remaining.min(front.qty);
+            stream.push_back(Lot {
+                qty: take,
+                cost_per_unit: front.cost_per_unit,
+                cost_commodity: front.cost_commodity.clone(),
+                date: front.date,
+                booked_per_unit: front.booked_per_unit,
+            });
+            front.qty -= take;
+            remaining -= take;
+            *done += take;
+            moved = true;
+            if front.qty.is_zero() {
+                queue.pop_front();
+            }
+        }
+    }
+    if streams.is_empty() {
+        return moved;
+    }
+    // Receive: deal each commodity's stream out to its incoming legs in
+    // posting order. A leg beyond the stream (basis unknown) stays
+    // lot-less, exactly like an uncovered acquisition today.
+    for (p_idx, lp) in lt.value.postings.iter().enumerate() {
+        if !contributes(&lp.value) {
+            continue;
+        }
+        let Some(a) = &lp.value.amount else { continue };
+        if a.value.is_negative() || a.value.is_zero() {
+            continue;
+        }
+        let Some(stream) = streams.get_mut(&a.commodity) else {
+            continue;
+        };
+        let done = migrated.entry((tx_idx, p_idx)).or_insert(Decimal::zero());
+        let queue = lots
+            .entry((lp.value.account.clone(), a.commodity.clone()))
+            .or_default();
+        let mut remaining = a.value - *done;
+        while !remaining.is_zero() {
+            let Some(piece) = stream.front_mut() else { break };
+            let take = remaining.min(piece.qty);
+            // An open short at the queue's front means this account
+            // disposed without a basis (uncovered, booked gain-free).
+            // The arriving quantity neutralizes it silently — its basis
+            // is spent covering the short, no gain is realized either
+            // way. Appending behind the short instead would jam the
+            // queue: every later disposal stops at the short and the
+            // account never realizes again.
+            if let Some(front) = queue.front_mut()
+                && front.qty.is_negative()
+            {
+                let net = take.min(front.qty.abs());
+                front.qty += net;
+                if front.qty.is_zero() {
+                    queue.pop_front();
+                }
+                piece.qty -= net;
+                remaining -= net;
+                *done += net;
+                moved = true;
+                if piece.qty.is_zero() {
+                    stream.pop_front();
+                }
+                continue;
+            }
+            queue.push_back(Lot {
+                qty: take,
+                cost_per_unit: piece.cost_per_unit,
+                cost_commodity: piece.cost_commodity.clone(),
+                date: piece.date,
+                booked_per_unit: piece.booked_per_unit,
+            });
+            piece.qty -= take;
+            remaining -= take;
+            *done += take;
+            moved = true;
+            if piece.qty.is_zero() {
+                stream.pop_front();
+            }
+        }
+    }
+    moved
 }
 
 /// Rewrite a transaction's disposal postings: each becomes one leg per
@@ -848,6 +1462,376 @@ mod tests {
         // is a plain leg.
         assert_eq!(split_legs(&txs, "BTC").len(), 1);
         assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-90").unwrap());
+    }
+
+    #[test]
+    fn transfer_migrates_cost_basis_native() {
+        // Buy on the exchange account, transfer to the wallet account,
+        // sell from the wallet. The transfer carries the lot across, so
+        // the wallet disposal realizes against the exchange's cost:
+        // 1 × (150 − 100) = 50.
+        let src = "\
+            2024-01-01 buy\n\
+            \tassets:exchange   1 BTC @ 100 USD\n\
+            \tassets:cash    -100 USD\n\
+            2024-02-01 transfer\n\
+            \tassets:exchange  -1 BTC\n\
+            \tassets:wallet     1 BTC\n\
+            2024-06-01 sell\n\
+            \tassets:wallet    -1 BTC @ 150 USD\n\
+            \tassets:cash     150 USD\n";
+        let (mut txs, db, prec) = setup(src);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
+        assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-50").unwrap());
+        // The disposal leg carries the ORIGINAL acquisition date.
+        let legs = split_legs(&txs, "BTC");
+        assert_eq!(legs.len(), 1);
+        assert_eq!(legs[0].lot_date.unwrap().to_string(), "2024-01-01");
+    }
+
+    #[test]
+    fn transfer_migrates_market_basis_under_x() {
+        // Under -X the lot opens at the acquisition-date market value.
+        // The transfer moves it unchanged — the wallet sale realizes the
+        // move since ACQUISITION (90 → 180), not since the transfer.
+        let src = "\
+            P 2024-01-01 BTC GBP 90\n\
+            P 2024-02-01 BTC GBP 120\n\
+            P 2024-06-01 BTC GBP 180\n\
+            2024-01-01 buy\n\
+            \tassets:exchange   1 BTC\n\
+            \tassets:cash     -90 GBP\n\
+            2024-02-01 transfer\n\
+            \tassets:exchange  -1 BTC\n\
+            \tassets:wallet     1 BTC\n\
+            2024-06-01 sell\n\
+            \tassets:wallet    -1 BTC\n\
+            \tassets:cash     180 GBP\n";
+        let (mut txs, db, prec) = setup(src);
+        realize_capital(&mut txs, &caps(), Some("GBP"), &db, &prec);
+        assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-90").unwrap());
+    }
+
+    #[test]
+    fn transfer_with_fee_leg_splits_the_migrating_lot() {
+        // A withdrawal sheds 1 BTC and lands as a fee sliver plus the
+        // transferred remainder — three legs, one commodity. The lot
+        // splits across the receivers; the wallet sale realizes only on
+        // its 0.9 share: 0.9 × (200 − 100) = 90.
+        let src = "\
+            2024-01-01 buy\n\
+            \tassets:exchange     1 BTC @ 100 USD\n\
+            \tassets:cash      -100 USD\n\
+            2024-02-01 withdraw\n\
+            \tassets:exchange    -1 BTC\n\
+            \tassets:fees       0.1 BTC\n\
+            \tassets:wallet     0.9 BTC\n\
+            2024-06-01 sell\n\
+            \tassets:wallet    -0.9 BTC @ 200 USD\n\
+            \tassets:cash      180 USD\n";
+        let (mut txs, db, prec) = setup(src);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
+        assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-90").unwrap());
+    }
+
+    #[test]
+    fn transfer_through_transit_account_chains() {
+        // Real journals book a transfer as TWO transactions meeting on a
+        // transit account (source → transit, transit → destination). The
+        // lot must survive both hops.
+        let src = "\
+            2024-01-01 buy\n\
+            \tassets:exchange       1 BTC @ 100 USD\n\
+            \tassets:cash        -100 USD\n\
+            2024-02-01 out\n\
+            \tassets:exchange      -1 BTC\n\
+            \tassets:transit        1 BTC\n\
+            2024-02-01 in\n\
+            \tassets:transit       -1 BTC\n\
+            \tassets:wallet         1 BTC\n\
+            2024-06-01 sell\n\
+            \tassets:wallet        -1 BTC @ 150 USD\n\
+            \tassets:cash         150 USD\n";
+        let (mut txs, db, prec) = setup(src);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
+        assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-50").unwrap());
+    }
+
+    #[test]
+    fn transfer_without_lots_migrates_nothing() {
+        // A transfer whose source has no lots (history starts mid-way)
+        // must not fabricate a basis: the later sale stays uncovered and
+        // realizes nothing, exactly as before.
+        let src = "\
+            2024-02-01 transfer\n\
+            \tassets:exchange  -1 BTC\n\
+            \tassets:wallet     1 BTC\n\
+            2024-06-01 sell\n\
+            \tassets:wallet    -1 BTC @ 150 USD\n\
+            \tassets:cash     150 USD\n";
+        let (mut txs, db, prec) = setup(src);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
+        assert!(!any_capital(&txs));
+    }
+
+    #[test]
+    fn money_transfer_under_x_is_ignored() {
+        // A plain bank transfer in the target commodity is money moving,
+        // not a position — the migration must leave it alone.
+        let src = "\
+            2024-02-01 transfer\n\
+            \tassets:bank-a   -100 GBP\n\
+            \tassets:bank-b    100 GBP\n";
+        let (mut txs, db, prec) = setup(src);
+        realize_capital(&mut txs, &caps(), Some("GBP"), &db, &prec);
+        assert!(!any_capital(&txs));
+    }
+
+    #[test]
+    fn open_lots_reports_remaining_fifo_queue() {
+        // Two buys, one partial sale: FIFO consumes lot 1 entirely and
+        // 1 BTC of lot 2 — the report shows the 1-BTC remainder of lot 2
+        // at its own basis and date, front first.
+        let src = "\
+            2024-01-01 buy a\n\
+            \tassets:btc    1 BTC @ 30000 USD\n\
+            \tassets:cash  -30000 USD\n\
+            2024-02-01 buy b\n\
+            \tassets:btc    2 BTC @ 40000 USD\n\
+            \tassets:cash  -80000 USD\n\
+            2024-06-01 sell\n\
+            \tassets:btc   -2 BTC @ 50000 USD\n\
+            \tassets:cash   100000 USD\n";
+        let (txs, db, _) = setup(src);
+        let lots = open_lots(&txs, None, &db);
+        // Native mode tracks every commodity, so the USD cash side opens
+        // lots too — pick out the BTC position.
+        let btc: Vec<_> = lots.iter().filter(|l| l.commodity == "BTC").collect();
+        assert_eq!(btc.len(), 1);
+        assert_eq!(btc[0].account, "assets:btc");
+        assert_eq!(btc[0].qty, Decimal::parse("1").unwrap());
+        assert_eq!(btc[0].cost_per_unit, Decimal::parse("40000").unwrap());
+        assert_eq!(btc[0].cost_commodity, "USD");
+        assert_eq!(btc[0].date.to_string(), "2024-02-01");
+    }
+
+    #[test]
+    fn open_lots_carry_market_basis_under_x() {
+        // Under -X the open lot's basis is the acquisition-day market
+        // value, not the booked trade rate.
+        let src = "\
+            P 2024-01-01 BTC GBP 90\n\
+            2024-01-01 buy\n\
+            \tassets:btc    1 BTC\n\
+            \tassets:cash  -85 GBP\n";
+        let (txs, db, _) = setup(src);
+        let lots = open_lots(&txs, Some("GBP"), &db);
+        assert_eq!(lots.len(), 1);
+        assert_eq!(lots[0].cost_per_unit, Decimal::parse("90").unwrap());
+        assert_eq!(lots[0].cost_commodity, "GBP");
+    }
+
+    #[test]
+    fn open_lots_follow_transfers_with_original_date() {
+        // Buy on the exchange, transfer to the wallet: the open lot sits
+        // on the wallet with the exchange's basis and acquisition date.
+        let src = "\
+            2024-01-01 buy\n\
+            \tassets:exchange   1 BTC @ 100 USD\n\
+            \tassets:cash    -100 USD\n\
+            2024-02-01 transfer\n\
+            \tassets:exchange  -1 BTC\n\
+            \tassets:wallet     1 BTC\n";
+        let (txs, db, _) = setup(src);
+        let lots = open_lots(&txs, None, &db);
+        assert_eq!(lots.len(), 1);
+        assert_eq!(lots[0].account, "assets:wallet");
+        assert_eq!(lots[0].cost_per_unit, Decimal::parse("100").unwrap());
+        assert_eq!(lots[0].date.to_string(), "2024-01-01");
+    }
+
+    #[test]
+    fn open_lots_do_not_mutate_the_journal() {
+        // The report path must leave the transactions untouched — no
+        // split legs, no injected capital postings.
+        let src = "\
+            2024-01-01 buy\n\
+            \tassets:btc    1 BTC @ 30000 USD\n\
+            \tassets:cash  -30000 USD\n\
+            2024-06-01 sell\n\
+            \tassets:btc   -1 BTC @ 50000 USD\n\
+            \tassets:cash   50000 USD\n";
+        let (txs, db, _) = setup(src);
+        let _ = open_lots(&txs, None, &db);
+        assert!(!any_capital(&txs));
+        assert!(split_legs(&txs, "BTC").is_empty());
+    }
+
+    #[test]
+    fn open_lots_carry_booked_rate_under_x() {
+        // Bought at a trade rate of 100 USD while the market said 90 GBP;
+        // USD/GBP = 0.8. The market basis is 90 GBP (capital math), the
+        // booked basis 100 × 0.8 = 80 GBP (what was actually paid).
+        let src = "\
+            P 2024-01-01 BTC GBP 90\n\
+            P 2024-01-01 USD GBP 0.8\n\
+            2024-01-01 buy\n\
+            \tassets:btc    1 BTC @ 100 USD\n\
+            \tassets:cash  -100 USD\n";
+        let (txs, db, _) = setup(src);
+        let lots = open_lots(&txs, Some("GBP"), &db);
+        let btc: Vec<_> = lots.iter().filter(|l| l.commodity == "BTC").collect();
+        assert_eq!(btc.len(), 1);
+        assert_eq!(btc[0].cost_per_unit, Decimal::parse("90").unwrap());
+        assert_eq!(btc[0].booked_per_unit, Some(Decimal::parse("80").unwrap()));
+    }
+
+    #[test]
+    fn booked_rate_survives_a_transfer() {
+        let src = "\
+            P 2024-01-01 BTC GBP 90\n\
+            2024-01-01 buy\n\
+            \tassets:exchange   1 BTC @ 85 GBP\n\
+            \tassets:cash     -85 GBP\n\
+            2024-02-01 transfer\n\
+            \tassets:exchange  -1 BTC\n\
+            \tassets:wallet     1 BTC\n";
+        let (txs, db, _) = setup(src);
+        let lots = open_lots(&txs, Some("GBP"), &db);
+        assert_eq!(lots.len(), 1);
+        assert_eq!(lots[0].account, "assets:wallet");
+        assert_eq!(lots[0].booked_per_unit, Some(Decimal::parse("85").unwrap()));
+    }
+
+    #[test]
+    fn realizations_report_booked_cost_and_proceeds() {
+        // Bought for a booked 85 GBP (market 90), sold for a booked
+        // 150 GBP (market 140): the report carries the real payments —
+        // cost 85, proceeds 150 — alongside the market figures.
+        let src = "\
+            P 2024-01-01 BTC GBP 90\n\
+            P 2024-06-01 BTC GBP 140\n\
+            2024-01-01 buy\n\
+            \tassets:btc    1 BTC @ 85 GBP\n\
+            \tassets:cash  -85 GBP\n\
+            2024-06-01 sell\n\
+            \tassets:btc   -1 BTC @ 150 GBP\n\
+            \tassets:cash   150 GBP\n";
+        let (txs, db, _) = setup(src);
+        let sales = realizations(&txs, Some("GBP"), &db);
+        assert_eq!(sales.len(), 1);
+        let s = &sales[0];
+        assert_eq!(s.account, "assets:btc");
+        assert_eq!(s.qty, Decimal::parse("1").unwrap());
+        assert_eq!(s.first_buy_date.to_string(), "2024-01-01");
+        assert_eq!(s.sell_date.to_string(), "2024-06-01");
+        assert_eq!(s.market_cost, Decimal::parse("90").unwrap());
+        assert_eq!(s.market_proceeds, Decimal::parse("140").unwrap());
+        assert_eq!(s.booked_cost, Some(Decimal::parse("85").unwrap()));
+        assert_eq!(s.booked_proceeds, Some(Decimal::parse("150").unwrap()));
+        assert!(!s.short);
+    }
+
+    #[test]
+    fn realizations_include_zero_gain_sales() {
+        // Buy and sell at the same market rate: realize_capital books
+        // nothing (no gain), but the report still shows the sale.
+        let src = "\
+            2024-01-01 buy\n\
+            \tassets:btc    1 BTC\n\
+            \tassets:cash  -30000 USD\n\
+            2024-06-01 sell\n\
+            \tassets:btc   -1 BTC\n\
+            \tassets:cash   30000 USD\n";
+        let (txs, db, _) = setup(src);
+        let sales = realizations(&txs, None, &db);
+        assert!(sales.iter().any(|s| s.commodity == "BTC"));
+    }
+
+    #[test]
+    fn realizations_aggregate_lots_per_sale() {
+        // One sale pulling two lots is ONE report entry with the FIFO
+        // cost summed: 4×100 + 6×110 = 1060, earliest buy date kept.
+        let src = "\
+            2024-01-01 buy a\n\
+            \tassets:btc    4 BTC @ 100 USD\n\
+            \tassets:cash  -400 USD\n\
+            2024-02-01 buy b\n\
+            \tassets:btc    6 BTC @ 110 USD\n\
+            \tassets:cash  -660 USD\n\
+            2024-06-01 sell\n\
+            \tassets:btc  -10 BTC @ 120 USD\n\
+            \tassets:cash  1200 USD\n";
+        let (txs, db, _) = setup(src);
+        let sales = realizations(&txs, None, &db);
+        let btc: Vec<_> = sales.iter().filter(|s| s.commodity == "BTC").collect();
+        assert_eq!(btc.len(), 1);
+        assert_eq!(btc[0].qty, Decimal::parse("10").unwrap());
+        assert_eq!(btc[0].market_cost, Decimal::parse("1060").unwrap());
+        assert_eq!(btc[0].first_buy_date.to_string(), "2024-01-01");
+    }
+
+    #[test]
+    fn same_day_sale_before_arrival_still_realizes() {
+        // The wallet's sale is booked BEFORE the transfer's arrival on
+        // the same day (file order). The day-settling trade retry must
+        // close the sale against the late-arriving lot: gain 50
+        // realized, no lot stranded on the wallet.
+        let src = "\
+            2024-01-01 buy\n\
+            \tassets:exchange   1 BTC @ 100 USD\n\
+            \tassets:cash    -100 USD\n\
+            2024-02-01 sell\n\
+            \tassets:wallet    -1 BTC @ 150 USD\n\
+            \tassets:cash     150 USD\n\
+            2024-02-01 transfer\n\
+            \tassets:exchange  -1 BTC\n\
+            \tassets:wallet     1 BTC\n";
+        let (mut txs, db, prec) = setup(src);
+        realize_capital(&mut txs, &caps(), None, &db, &prec);
+        assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-50").unwrap());
+    }
+
+    #[test]
+    fn same_day_sale_before_arrival_strands_no_lots() {
+        let src = "\
+            2024-01-01 buy\n\
+            \tassets:exchange   1 BTC @ 100 USD\n\
+            \tassets:cash    -100 USD\n\
+            2024-02-01 sell\n\
+            \tassets:wallet    -1 BTC @ 150 USD\n\
+            \tassets:cash     150 USD\n\
+            2024-02-01 transfer\n\
+            \tassets:exchange  -1 BTC\n\
+            \tassets:wallet     1 BTC\n";
+        let (txs, db, _) = setup(src);
+        let lots = open_lots(&txs, None, &db);
+        assert!(!lots.iter().any(|l| l.commodity == "BTC"));
+    }
+
+    #[test]
+    fn same_day_sale_against_target_covers_before_shorting() {
+        // The sale trades BTC directly against the target (GBP) and is
+        // booked before the same-day arrival. It must NOT open a short
+        // that silently swallows the arrival gain-free — the day-settling
+        // retry covers it first: gain 1 × (150 − 100) = 50, no lots left.
+        let src = "\
+            P 2024-01-01 BTC GBP 100\n\
+            P 2024-02-01 BTC GBP 150\n\
+            2024-01-01 buy\n\
+            \tassets:exchange   1 BTC\n\
+            \tassets:cash    -100 GBP\n\
+            2024-02-01 sell\n\
+            \tassets:wallet    -1 BTC\n\
+            \tassets:cash     150 GBP\n\
+            2024-02-01 transfer\n\
+            \tassets:exchange  -1 BTC\n\
+            \tassets:wallet     1 BTC\n";
+        let (mut txs, db, prec) = setup(src);
+        realize_capital(&mut txs, &caps(), Some("GBP"), &db, &prec);
+        assert_eq!(gain_on(&txs, "income:capital"), Decimal::parse("-50").unwrap());
+        let (txs2, db2, _) = setup(src);
+        assert!(open_lots(&txs2, Some("GBP"), &db2).is_empty());
     }
 
     #[test]
