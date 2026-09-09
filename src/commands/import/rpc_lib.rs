@@ -29,7 +29,35 @@ pub(super) fn call(
     version: &str,
     timeout: Duration,
 ) -> Result<Value, Error> {
-    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
+    call_via(None, url, method, params, auth, version, timeout)
+}
+
+/// [`call`], routed through a proxy (`socks5://…` or `http://…`) when one is
+/// given. Only the remote-endpoint backend (ethereum) passes one — the
+/// local-daemon backends must stay direct, so they use plain `call`.
+pub(super) fn call_via(
+    proxy: Option<&str>,
+    url: &str,
+    method: &str,
+    params: Value,
+    auth: &Auth,
+    version: &str,
+    timeout: Duration,
+) -> Result<Value, Error> {
+    // native-tls is a cargo feature, not a default — without an explicit
+    // connector the agent can speak only http (fine for the local daemons,
+    // dead for the https endpoints).
+    let connector = native_tls::TlsConnector::new()
+        .map_err(|e| Error::from(format!("import: native-tls init: {}", e)))?;
+    let mut builder = ureq::AgentBuilder::new()
+        .timeout(timeout)
+        .tls_connector(std::sync::Arc::new(connector));
+    if let Some(p) = proxy {
+        let p = ureq::Proxy::new(p)
+            .map_err(|e| Error::from(format!("import: rpc proxy '{}': {}", p, e)))?;
+        builder = builder.proxy(p);
+    }
+    let agent = builder.build();
     let body = serde_json::json!({
         "jsonrpc": version, "id": "acc", "method": method, "params": params
     })

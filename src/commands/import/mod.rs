@@ -1,8 +1,8 @@
 //! `import` command — dispatch a per-profile import to its source backend
-//! (`fiat` CSV files; a `monero` wallet RPC or a `bitcoin`/`litecoin` Bitcoin
-//! Core-family RPC, optionally reto-enriched; an exchange — `kraken` via its
-//! REST API, `crypto` via statement CSVs) and append the new, deduped
-//! transactions to a `@cash` file.
+//! (`fiat` CSV files; a `monero` wallet RPC, a `bitcoin`/`litecoin` Bitcoin
+//! Core-family RPC, optionally reto-enriched, or an `ethereum` public
+//! endpoint; an exchange — `kraken` via its REST API, `crypto` via statement
+//! CSVs) and append the new, deduped transactions to a `@cash` file.
 //! This module holds the dispatcher plus the vocabulary EVERY source shares:
 //! the categorization `Rule` grammar, own↔own `Transit`, the diff preview, and
 //! the small IO helpers. Anything used by only the wallet-RPC backends (their
@@ -12,6 +12,7 @@ mod bitcoin_lib;
 mod bitcoin_rpc;
 mod crypto_csv;
 mod crypto_lib;
+mod ethereum_rpc;
 mod exchange_lib;
 mod fiat_csv;
 mod kraken_api;
@@ -36,6 +37,8 @@ pub fn run(csvs: &[String], conf_path: &str, write: bool) -> Result<(), Error> {
             // own thin entry point that forwards to the shared bitcoin_lib.
             "bitcoin" => bitcoin_rpc::run(conf_path, write),
             "litecoin" => litecoin_rpc::run(conf_path, write),
+            // ethereum needs no own daemon — a public endpoint plus event logs.
+            "ethereum" => ethereum_rpc::run(conf_path, write),
             other => Err(Error::from(format!("import: unknown wallet.coin '{}'", other))),
         };
     }
