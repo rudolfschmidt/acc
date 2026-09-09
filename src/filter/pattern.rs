@@ -61,6 +61,17 @@ impl PatternMatcher {
         self.conjuncts.is_empty()
             || self.conjuncts.iter().any(|q| q.eval_account_only(&account_lower))
     }
+
+    /// Account + commodity check for lot-based reports (`lots`,
+    /// `signal`), where a position is the unit of selection —
+    /// `^wallet$ and com xmr` picks one. The description/code
+    /// dimensions are treated as unconstrained (always match).
+    pub fn matches_position(&self, account: &str, commodity: &str) -> bool {
+        let account_lower = account.to_lowercase();
+        let commodity_lower = commodity.to_lowercase();
+        self.conjuncts.is_empty()
+            || self.conjuncts.iter().any(|q| q.eval_position(&account_lower, &commodity_lower))
+    }
 }
 
 // ==================== Query AST ====================
@@ -139,6 +150,26 @@ impl Query {
             }
             Query::Or(a, b) => {
                 a.eval_account_only(account_lower) || b.eval_account_only(account_lower)
+            }
+        }
+    }
+
+    /// Evaluate with an account and a commodity available (a position).
+    /// Matches on the remaining dimensions return `true` (no constraint
+    /// from this side).
+    fn eval_position(&self, account_lower: &str, commodity_lower: &str) -> bool {
+        match self {
+            Query::Match(Dim::Account, pat) => pat.test(account_lower),
+            Query::Match(Dim::Commodity, pat) => pat.test(commodity_lower),
+            Query::Match(_, _) => true,
+            Query::Not(q) => !q.eval_position(account_lower, commodity_lower),
+            Query::And(a, b) => {
+                a.eval_position(account_lower, commodity_lower)
+                    && b.eval_position(account_lower, commodity_lower)
+            }
+            Query::Or(a, b) => {
+                a.eval_position(account_lower, commodity_lower)
+                    || b.eval_position(account_lower, commodity_lower)
             }
         }
     }

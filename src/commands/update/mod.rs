@@ -1,7 +1,7 @@
 mod cli;
 mod fetch;
 mod fiat;
-mod file;
+pub(crate) mod file;
 
 use colored::Colorize;
 

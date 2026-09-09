@@ -10,6 +10,8 @@ pub mod diff;
 pub mod format;
 pub mod import;
 pub mod lint;
+pub mod lots;
+pub mod signal;
 pub mod navigate;
 pub mod print;
 pub mod register;

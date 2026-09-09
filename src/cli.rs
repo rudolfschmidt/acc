@@ -245,6 +245,90 @@ enum Command {
         /// Filter by account name pattern
         pattern: Vec<String>,
     },
+    /// Show each position's trade history and open lots: what was bought
+    /// when at which real price, what was sold when for how much, and
+    /// the profit — realized per sale, unrealized per open lot (with
+    /// `-V`, priced at the latest rate). Entry/Exit are booked trade
+    /// rates (the actual payments, converted into the `-X` target at
+    /// the trade date), so a line's profit spans market move plus
+    /// execution spread — it reconciles with `capital` + `slippage`
+    /// together. The first open lot of a position is the FIFO front the
+    /// next sale closes. The account pattern picks which positions are
+    /// shown; tracking always spans the whole journal, since lots
+    /// migrate between accounts through transfers
+    Lots {
+        /// Show only sales dated on or after this date; the open lots
+        /// always show. Accepts YYYY-MM-DD, or YYYY / YYYY-MM (their
+        /// first day)
+        #[arg(long = "begin", short = 'b')]
+        begin: Option<String>,
+        /// Show the lots as of this date: only transactions strictly
+        /// before it feed the FIFO queues. Accepts YYYY-MM-DD, or
+        /// YYYY / YYYY-MM (their first day). Lot ages are measured
+        /// against the day before
+        #[arg(long = "end", short = 'e')]
+        end: Option<String>,
+        /// Feed forward-dated transactions into the tracking too
+        /// (hidden by default, like every report)
+        #[arg(long)]
+        future: bool,
+        /// Value the cost basis in this commodity — each lot at the
+        /// market rate of its acquisition day. Defaults to the config's
+        /// `[exchange] default` like every report
+        #[arg(short = 'X', long = "exchange", value_name = "COMMODITY")]
+        exchange: Option<String>,
+        /// Skip the default valuation: show each lot's booked trade-rate
+        /// basis in its native counter-commodity. No effect when `-X` is
+        /// given explicitly
+        #[arg(long = "native")]
+        native: bool,
+        /// Append two columns per lot: its value at the latest available
+        /// rate and the unrealized gain/loss against the basis. Only
+        /// meaningful together with `-X`
+        #[arg(short = 'V', long = "unrealized")]
+        unrealized: bool,
+        /// Filter by account name pattern
+        pattern: Vec<String>,
+    },
+    /// Swap-cycle signal over the journal's booked rates, made for a
+    /// shell prompt: one dim line with the current price, the buy-back
+    /// and sell marks with the distance to each, and what acting now
+    /// would bring — a loud SWAP line only when a mark is crossed. The
+    /// sell mark is the entry side's average booked cost x (1+T/100),
+    /// the buy-back mark the exit side's sale rate / (1+T/100), so a
+    /// full cycle lands on the original entry price and multiplies the
+    /// stack by (1+T/100). The journal-derived rates are cached (keyed
+    /// on the flags, invalidated by the journal files' mtimes), so only
+    /// the first run after an import pays for the tracking
+    Signal {
+        /// The held asset position: its open lots' average booked cost
+        /// is the entry rate (lots pattern, e.g. '^wallet$ and com xmr')
+        #[arg(long = "entry", value_name = "PATTERN")]
+        entry: String,
+        /// The position holding a past sale's proceeds: its open lots
+        /// give the sale rate and the quantity given away (lots
+        /// pattern, e.g. '^wallet$ and com usdc')
+        #[arg(long = "exit", value_name = "PATTERN")]
+        exit: String,
+        /// Price pair for the current rate, as in `update --pair`
+        #[arg(long = "pair", value_name = "BASE/QUOTE")]
+        pair: String,
+        /// Signal threshold in percent, symmetric around the round trip
+        #[arg(long = "threshold", value_name = "PERCENT", default_value = "40")]
+        threshold: String,
+        /// Value the entry side in this commodity — pick the unit the
+        /// pair quotes in. Defaults to the config's `[exchange] default`
+        #[arg(short = 'X', long = "exchange", value_name = "COMMODITY")]
+        exchange: Option<String>,
+        /// Render for a status bar: the same segments uncoloured and
+        /// without the SWAP lines, each leading with the rate its mark
+        /// derives from, the crossed side's label in capitals. Split on
+        /// `|` for one block per segment
+        #[arg(long = "bar")]
+        bar: bool,
+        /// Scenario price: evaluate at this rate instead of the price DB
+        price: Option<String>,
+    },
     /// Interactive account navigater
     Navigate {
         #[command(flatten)]
@@ -472,6 +556,11 @@ impl Command {
             | Self::Codes { pattern, .. }
             | Self::Commodities { pattern, .. }
             | Self::Navigate { pattern, .. } => pattern.as_slice(),
+            // `lots` filters its account pattern itself — the queues must
+            // be tracked over the whole journal first, so the generic
+            // filter phase must not see the pattern.
+            Self::Lots { .. } => &[],
+            Self::Signal { .. } => &[],
             Self::Update { .. }
             | Self::Lint { .. }
             | Self::Format { .. }
@@ -502,6 +591,8 @@ impl Command {
             | Self::Import { .. }
             | Self::Rename { .. }
             | Self::Completions { .. }
+            | Self::Lots { .. }
+            | Self::Signal { .. }
             | Self::Sweep { .. } => None,
         }
     }
@@ -924,16 +1015,22 @@ fn start(raw_args: Vec<String>, inject: crate::Inject) -> Result<(), crate::Erro
     // Effective valuation target: an explicit `-X` wins; otherwise, unless the
     // run is `--native`, fall back to the config's `[exchange] default` (unset →
     // no default, i.e. native amounts). This is the single source of truth for
-    // whether — and into what — the report values.
-    let exchange: Option<String> = filter_args.and_then(|f| {
-        if let Some(x) = &f.exchange {
+    // whether — and into what — the report values. `lots` carries its own
+    // (reduced) flag set instead of `ReportArgs`, so it resolves here too.
+    let resolve_exchange = |explicit: Option<&String>, native: bool| {
+        if let Some(x) = explicit {
             Some(x.clone())
-        } else if f.native {
+        } else if native {
             None
         } else {
             crate::loader::config::default_exchange()
         }
-    });
+    };
+    let exchange: Option<String> = match &command {
+        Command::Lots { exchange, native, .. } => resolve_exchange(exchange.as_ref(), *native),
+        Command::Signal { exchange, .. } => resolve_exchange(exchange.as_ref(), false),
+        _ => filter_args.and_then(|f| resolve_exchange(f.exchange.as_ref(), f.native)),
+    };
 
     // Price-DB files (`$PRICES`, only under `-X`) are kept separate
     // from the user's journal files so they can be loaded *selectively*: the
@@ -963,6 +1060,34 @@ fn start(raw_args: Vec<String>, inject: crate::Inject) -> Result<(), crate::Erro
         } else {
             journal_paths.push(path.to_path_buf());
         }
+    }
+
+    // `signal` decides warm/cold itself: with a fresh cache it never
+    // loads the journal or the price DB — that is what makes it cheap
+    // enough for a shell prompt. The loader is handed in lazily for the
+    // cold path (a journal file newer than the cache).
+    if let Command::Signal { entry, exit, pair, threshold, bar, price, .. } = &command {
+        let mut load = || {
+            if price_paths.is_empty() {
+                crate::load_report_with(&journal_paths, &mut *inject)
+            } else {
+                crate::load_selective_report_with(
+                    &journal_paths,
+                    &price_paths,
+                    exchange.as_deref(),
+                    &mut *inject,
+                )
+            }
+            .map_err(|e| crate::Error::from(e.to_string()))
+        };
+        return crate::commands::signal::run(
+            &crate::commands::signal::Cycle { entry, exit, pair, threshold },
+            exchange.as_deref(),
+            price.as_deref(),
+            *bar,
+            &journal_paths,
+            &mut load,
+        );
     }
 
     // print --raw: dump source bytes (prices first, then user files), skip
@@ -997,6 +1122,46 @@ fn start(raw_args: Vec<String>, inject: crate::Inject) -> Result<(), crate::Erro
     let exchange_target: Option<String> = exchange.as_deref().map(|t| {
         journal.aliases.get(t).cloned().unwrap_or_else(|| t.to_string())
     });
+
+    // `lots` bypasses enrichment and filtering: it runs the lotter's
+    // tracking itself over the *unenriched* journal (an enriched one
+    // already carries `{}`-annotated split legs, which the tracker would
+    // misread as manual lots) and applies only the date cutoff — the
+    // account pattern merely scopes the display inside the command.
+    if let Command::Lots { begin, end, future, unrealized, pattern, .. } = &command {
+        let user_end: Option<crate::date::Date> = end.as_deref().map(|e| {
+            let (start, _) = expand_period(e).unwrap_or_else(|err| fail(&err));
+            crate::date::Date::parse(&start).unwrap_or_else(|err| fail(&err))
+        });
+        // Same default future cutoff as every report: today+1, exclusive.
+        let future_cap: Option<crate::date::Date> = (!future)
+            .then(|| crate::date::Date::from_days(crate::date::Date::today().days() + 1));
+        let cutoff = match (user_end, future_cap) {
+            (Some(u), Some(cap)) => Some(if u < cap { u } else { cap }),
+            (a, b) => a.or(b),
+        };
+        if let Some(c) = cutoff {
+            journal.transactions.retain(|lt| lt.value.date < c);
+        }
+        // Ages are measured against the last day *inside* the cutoff.
+        let as_of = cutoff
+            .map(|c| crate::date::Date::from_days(c.days().saturating_sub(1)))
+            .unwrap_or_else(crate::date::Date::today);
+        // `-b` scopes which *sales* are shown, not what is tracked.
+        let begin: Option<crate::date::Date> = begin.as_deref().map(|b| {
+            let (start, _) = expand_period(b).unwrap_or_else(|err| fail(&err));
+            crate::date::Date::parse(&start).unwrap_or_else(|err| fail(&err))
+        });
+        crate::commands::lots::run(
+            &journal,
+            exchange_target.as_deref(),
+            *unrealized,
+            as_of,
+            begin,
+            pattern,
+        );
+        return Ok(());
+    }
 
     // Enrichment phases (realizer → lotter → translator, plus
     // the `--unrealized` revaluator). These must see the whole journal —
