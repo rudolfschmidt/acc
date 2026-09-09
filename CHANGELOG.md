@@ -1,5 +1,250 @@
 # Changelog
 
+## 0.31.0 — 2026-09-09
+
+### Wed 09 Sep 2026 - `acc signal`: swap-cycle marks for the shell prompt
+
+**One dim line that says whether to act.** `acc signal --entry '^wallet$ and
+com xmr' --exit '^stable$ and com usdc' --pair XMR/USDT --threshold 40 -X '$'`
+prints the current price, both trigger marks with the distance to each, and
+what acting right now would bring — a loud SWAP line only when a mark is
+crossed:
+
+    XMR $260 (-1.2% 24h) · buy $250 (-3.8%) saved XMR0.69 ≈ $180 · sell $280 (-7.1%) gained $240
+
+Both sides come from the same lot tracking as `lots`. The entry side is the
+held asset: the average booked cost of its open lots is the entry rate, their
+quantity prices the *gain* of selling now. The exit side is the position
+holding a past sale's proceeds: its open lots' booked cost (tracked in the
+asset itself) is the quantity given away, the inverted average the sale rate,
+and both price the *saved* of buying back now — the extra asset a buy-back
+would yield, with its value at the current price. One threshold is symmetric
+around the round trip: sell at entry x (1+T/100), buy back at the sale rate /
+(1+T/100). Multiplicative up, divisive down — a full cycle lands on the
+original entry price again and multiplies the stack by (1+T/100).
+
+**Cheap enough to run on every terminal start.** The four journal-derived
+rates only change when the journal does, so they are cached under
+`$XDG_CACHE_HOME/acc/` (keyed on the defining flags, invalidated by the
+journal files' mtimes); the warm path loads neither the journal nor the price
+DB and answers in ~30ms where the cold tracking takes over a second. The
+current price is read fresh from the pair's price file on every run, with one
+`update` for exactly that pair when today's rate is missing; a positional
+price argument (`acc signal … 350`) plays a scenario through without touching
+the price DB. This began as a bash script parsing the `lots` table with awk —
+moving it into acc replaced fragile column positions with the lotter's typed
+exports, so display changes can never silently skew the numbers again.
+
+**`--bar` puts the cycle in a status bar.** The same figure-first grammar as
+the terminal line — annotations in parentheses, commas inside — but with
+`|` between the segments (one bar block each, the separator stays the
+strongest break), uncoloured and without the SWAP lines, and with the room
+the prompt has not. Ordered action first, analysis after:
+both marks lead, then each position as acc writes it in the journal —
+quantity `@` rate — with its outcome at the current price. The threshold
+does not appear (the marks already carry it), and the crossed side's label
+shouts:
+
+    FOO $100 (+2.0% 24h) | BUY $100 (+0.0%) | sell $150 (-33.3%) | sold FOO2.00 @ $150 (saved FOO1.00 ≈ $100) | hold FOO3.00 @ $100 (gained $0)
+
+The positions are what make a mark checkable — without them `buy $100` is a
+number to trust rather than one to verify. Splitting on `|` gives one block
+per segment, so a bar paints just the crossed mark; recognising the alarm by
+the capitals means the wrapper needs no exit codes and no parsing rules.
+Whole dollars throughout — the cents of a mark never decide anything.
+
+**The price says where it is heading and how old it is.** Every line now
+carries the 24h change from the previous day's rate (`+2.1% 24h`) — the
+marks say where the price stands, not which way it is moving. A rate that is
+not from today is marked `stale` with its date, capitalised in `--bar` so the
+alarm colour applies. That matters because `--bar` never fetches: a status bar
+runs every few seconds and has no business going online, so it renders what
+the price DB holds and says how old that is, while an interactive run still
+tops the file up when today's rate is missing.
+
+**What the line says when things go the other way.** A negative edge is not a
+smaller saving but the opposite outcome, so the word switches instead of the
+sign: `saved FOO1.00 ≈ $100` becomes `lost FOO1.00 ≈ $100` above the sale rate,
+`gained` becomes `lost` below the entry — a "saved -1.00" has to be read twice.
+The loud SWAP lines repeat that same figure rather than a second percentage on
+a different base (the status line measures the distance to the mark, the old
+SWAP line measured the distance to the entry — two numbers for one event).
+Both marks can fire at once: with a threshold below the spread between entry
+and sale rate the zones overlap, and selling part while buying back part is a
+legitimate answer, so both directions are announced. Valuing in the pair's own
+base is rejected — every figure is the price times a quantity and therefore
+lives in the quote unit; `-X` on the base would label those figures with the
+asset and leave the entry side without a rate. Patterns that match nothing say
+so instead of printing a bare price line under a green tick.
+
+**`com` now filters lot reports.** The pattern language's commodity keyword
+was accepted but unconstrained in `lots` (the matcher only saw account names),
+so `lots wallet and com xmr` showed every commodity of the wallet. Positions
+are the unit of selection in lot-based reports: a shared account+commodity
+matcher narrows both `lots` and `signal` to the named commodity.
+
+### Tue 08 Sep 2026 - `acc lots`: trade history and open lots at real prices
+
+**One table answers the position questions: what was bought when at which real
+price, what was sold when for how much, and the profit.** The lotter has always
+tracked per-(account, commodity) FIFO lot queues to realize capital gains, but
+neither the queues nor the sales history were visible, and the internal cost
+basis is the acquisition-day *market* rate — useless for "what did I actually
+pay". `acc lots [PATTERN]` renders both sections per position: the realized
+sales (one line per disposal, FIFO cost aggregated over the closed lots, ROI
+against real cost) and the open lots in FIFO order (the first line is the front
+the next sale closes), each with booked Entry/Exit per-unit rates, amounts, and holding
+span. `Sold` / `Open` summary lines close each section; a `Total` sums cost,
+value and profit across everything shown. `-b` windows the sales, `-e` replays
+the journal up to a cutoff ("what was the FIFO front when I sold"), `-V` prices
+the open lots at the latest available rate.
+
+**Booked rates, not market rates.** Every lot now carries a second basis: the
+*booked* trade rate — the `@` cost or the implied rate of the exchange,
+converted into the target at the trade date — alongside the market basis the
+capital math needs. It migrates through transfers like the lot itself. A line's
+profit therefore spans market move plus execution spread: it reconciles with
+`capital` + `slippage` together, not with `capital` alone. Lots without a
+derivable trade rate show empty cells rather than a guessed number.
+
+**The reverse yardstick comes free.** `acc lots -X XMR` measures the same
+table in XMR: stablecoin positions show how much XMR they cost, what they
+would buy back at the latest rate, and the profit *in XMR* — the view for a
+strategy whose goal is accumulating the asset, not the fiat.
+
+**Same-day sales no longer strand arriving lots.** The day-settling pass
+re-ran only *transfers*, never trades — so a wallet that receives and sells on
+the same day (a swap wallet's daily churn) left the sale uncovered whenever
+file order booked it before the arrival: no capital realized, and the arriving
+lots stranded on the account forever (an empty wallet still showed them as
+open). Settling now also retries the day's uncovered disposals against lots
+that landed later the same day, topping up the disposal's closed lots and gain.
+An `uncovered` ledger per (tx, posting) keeps the retry idempotent, mirroring
+the transfer pass's `migrated` ledger. This corrects historical `capital`
+figures upward where sales previously realized against nothing.
+
+**Shorts open at the day's end, not mid-day — realization no longer depends
+on the `-X` target.** An uncovered against-target disposal used to open its
+short immediately; a same-day arrival then neutralized it silently, gain-free.
+The identical journal thus realized fewer sales under `-X $` (where the sale's
+counter IS the target and the short path swallowed it) than under `-X €`
+(where the retry path realized it) — the report's sale count changed with the
+valuation currency. The short now opens only for what is STILL owed after the
+day settled, so same-day coverage always wins and every target sees the same
+sales. Genuine overnight shorts behave exactly as before.
+
+**Implementation.** Phase 1 of `realize_capital` moved into a shared `track`
+returning the queues plus the disposals; `realize_capital` keeps its rewrite
+phase on top (the zero-gain filter moved out of `track` so the report sees
+every sale — booking behaviour unchanged). New exports `open_lots` and
+`realizations` flatten the tracker state for the report. The command bypasses
+enrichment deliberately — an enriched journal already carries `{}`-annotated
+split legs, which the tracker would misread as manual lots — and applies only
+the date cutoff before tracking; the account pattern only scopes the display.
+
+### Mon 07 Sep 2026 - Ethereum import: keyless ERC-20 history and bisected native movements
+
+**`wallet.coin ethereum` imports over a plain JSON-RPC endpoint — no indexer
+account.** Every ERC-20 transfer writes a `Transfer(address,address,uint256)`
+event whose sender and recipient are indexed topics, so `eth_getLogs` filtered
+by the wallet address enumerates the token history completely. The backend
+scans each configured `token` contract in block chunks from `wallet.start`
+(continuing from the highest block already imported), reads each token's
+`decimals()` from the contract, and fetches the receipt of every own send for
+its gas fee — paid in ETH, so a token send books two commodities. Failed sends
+book the fee alone: the revert still burned gas.
+
+**Native ETH writes no event, so it cannot be listed — but it can be found.**
+The balance history is bisectable: discovery models the expected balance from
+the known bookings, binary-searches every height where the chain disagrees
+(~13 `eth_getBalance` reads per movement), and reads the movement's
+transaction out of that block's body. `ethtx <hash>` profile lines remain as
+the manual override for what discovery cannot name (internal contract
+transfers, movement pairs that mask each other). A final balance check
+compares the booked sums per commodity against `eth_getBalance` / `balanceOf`
+and reports any remaining gap instead of letting it slip through silently.
+
+**The transport honours `HTTPS_PROXY`/`ALL_PROXY`** (e.g. `socks5://…`) for
+every request of the run — this backend only, the local-daemon backends must
+never be proxied; ureq gains its `socks-proxy` feature for it.
+
+### Fri 04 Sep 2026 - Fiat fee legs, subtree-total printing, commodity-code titles
+
+**Fiat statements with a separate fee column book the fee explicitly.**
+`field.fee` + `fee.account`: banks that charge beside the amount (the balance
+moves by amount − fee) put the fee on the named account, the bank leg carries
+the real balance move; zero or empty fees book plainly, and a mapped fee
+field without `fee.account` is an error. With three or more legs the entry
+turns fully explicit — the counter writes its amount sign-flipped, matching
+the journal convention that only plain two-posting entries leave the last leg
+bare. Date cells may carry a time behind the date (`2025-05-10 15:47:33`);
+each component now ends at whitespace.
+
+**The balance tree decides printing on the subtree total, not the raw node
+balance.** A branch whose own residue offsets a child's (own −0.01 beside a
+revalued child's +0.004) printed a chain of bare-zero headers under `-V` —
+`has_balance` said "something non-zero in here" from the raw per-node
+balances while every rendered total rounded to 0. It now asks the question
+the renderer answers: does the subtree total show non-zero, or would a child
+print? Genuine zero-total branches with visible children keep their 0 header.
+
+**Generated titles name the commodity by its lowercase code.** CTA releases
+say which native strand produced the drift (`commodity translation adjustment
+xmr`), and the revaluator switches from the raw symbol to the same form
+(`holding revaluation gbp`). The code comes from the commodity's declared
+alias, falling back to the lowercased symbol — no currency knowledge
+hardcoded.
+
+### Wed 02 Sep 2026 - Multi-currency fiat imports; the inject hook grows teeth; filter submodules
+
+**Multi-currency fiat accounts import row by row.** `commodity.field NAME`
+books each row in the currency its column names — codes map through the
+commodities file, unknown codes stay verbatim, empty cells fall back to
+`output.commodity`, which becomes optional (an empty cell without a fallback
+is an error, never a silent guess), and each commodity formats at its own
+declared precision. `pair.type SUBSTRING` merges a currency exchange's rows —
+one per commodity, all referencing the funded transaction — into ONE
+transaction per (date, reference) whose legs balance as a trade; every leg
+keeps its own `; csv:` line so dedup sees every row, and a
+partially-imported group is an error instead of a silent double-book.
+
+**Smaller fiat conveniences.** `amount.decimal comma` reads EU-style amounts
+(`1.234,56`); `order.funding first` moves a processor's instant funding
+deposit directly before the payment it covers; fiat CSVs accept multiple
+files and directories through the same case-insensitive expansion crypto
+uses, concatenated in argument order with dedup over the whole set; transit
+keys may carry spaces — the line splits at the LAST whitespace, and since
+IBANs and addresses never contain any, existing profiles parse unchanged.
+
+**The inject hook can refuse a journal and convert at historical rates.** An
+embedder's rules may hard-error the load — better no report than one built
+on bookings a rule flagged as ambiguous — and render that refusal exactly
+like acc's own errors through the new pub `source_error`. The hook receives
+the price index built before it runs, so a rule missing a rate errors
+instead of silently booking differently between runs; whether to skip or
+hard-error without a rate is the embedder's decision, the loader no longer
+prescribes a policy.
+
+**Structure and hygiene.** The 1500-line filter phase splits into
+`pattern.rs` (the pattern language), `amount.rs` (the posting-level
+projections) and the phase itself. Clippy lands on zero: `BookError` boxes
+its kind so results stay small, `filter` takes a `Selection` struct instead
+of nine loose parameters, `render_posting` takes an `AmountMode` enum,
+navigate groups its column geometry in `RowLayout`. Tests, fixtures and doc
+examples carry no user currencies or identifiers any more — `$` is the
+standard test currency, `£` the second fiat.
+
+### Fri 21 Aug 2026 - A neutral diff module; dead loaders dropped
+
+**The diff renderer untangles into `acc::diff`.** One band renderer owns the
+neutral primitives — band geometry, gutter, context rows, white add/remove
+rows, tab expansion, `~`-collapsed paths — while import layers only its
+addition palette on top and reconcile stays white, so the two can no longer
+perturb each other. The dead `load_report`/`load_selective_report` pair is
+gone (the `_with` hook variants are the report path), and fifteen stale
+comments that still described the removed `=` auto-rule expander now name
+the pre-book inject hook.
+
 ## 0.30.0 — 2026-07-26
 
 ### Fri 26 Jul 2026 - Display labels carry `skip` structurally; the `$segment` token is gone
