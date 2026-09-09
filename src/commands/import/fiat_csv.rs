@@ -607,10 +607,10 @@ impl Profile {
         } else {
             s.push_str(&format!("\t{}", counter));
         }
-        if let Some(fa) = &self.fee_account {
-            if fee.parse::<f64>().unwrap_or(0.0) != 0.0 {
-                s.push_str(&format!("\n\t{}  {}{}", fa, symbol, fee));
-            }
+        if let Some(fa) = &self.fee_account
+            && fee.parse::<f64>().unwrap_or(0.0) != 0.0
+        {
+            s.push_str(&format!("\n\t{}  {}{}", fa, symbol, fee));
         }
         Ok(s)
     }
