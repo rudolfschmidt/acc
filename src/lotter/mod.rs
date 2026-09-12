@@ -664,10 +664,13 @@ fn retry_trade(
 /// every onward hop and every still-owed disposal of the same day. The
 /// `migrated` / `uncovered` ledgers guarantee a re-pass only moves what
 /// a leg still owes, so settling is idempotent and the loop terminates
-/// as soon as a full pass moves nothing. A single transfer can't feed
-/// itself, so a day with no retryable trade and fewer than two
-/// transfers needs none. Across days no settling happens — an arrival
-/// dated before its departure is a data error, not an ordering one.
+/// as soon as a full pass moves nothing. One transfer alone is reason
+/// enough: the lot it carries on may be opened by a trade booked after
+/// it, and an ACQUIRING trade never enters `trades` — that list holds
+/// the day's uncovered disposals. Under `-X` such a trade is invisible
+/// twice over, since its counter leg is the target money and is skipped
+/// outright. Across days no settling happens — an arrival dated before
+/// its departure is a data error, not an ordering one.
 #[allow(clippy::too_many_arguments)]
 fn settle_day(
     txs: &[Located<Transaction>],
@@ -680,7 +683,7 @@ fn settle_day(
     uncovered: &mut HashMap<(usize, usize), Decimal>,
     disposals: &mut HashMap<(usize, usize), Disposal>,
 ) {
-    if trades.is_empty() && transfers.len() < 2 {
+    if trades.is_empty() && transfers.is_empty() {
         return;
     }
     loop {

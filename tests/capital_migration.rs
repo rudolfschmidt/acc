@@ -795,6 +795,31 @@ fn day_settling_never_moves_a_leg_twice() {
     assert_eq!(capital(&txs, "USD"), dec("-800"), "1800 proceeds − 1000 cost, conserved");
 }
 
+#[test]
+fn same_day_chain_settles_when_the_only_trade_acquires() {
+    // Under `-X` the day held ONE transfer and one trade that merely
+    // ACQUIRED — the swap's counter leg is the target money and is
+    // skipped, so it never entered the retry list and the settling pass
+    // used to be skipped outright. The landing then ran before the swap
+    // that funds it, the basis stayed stranded on the transit, and the
+    // wallet's position was basis-less: the sale realized its full
+    // 3 ABC instead of the 1 the market actually moved.
+    let src = "\
+         P 2024-01-01 ABC BTC 0.002\n\
+         P 2024-06-01 ABC BTC 0.003\n\
+         2024-01-01 * land (booked first in file order)\n\
+         \tassets:transit    -1000 ABC\n\
+         \tassets:wallet      1000 ABC\n\
+         2024-01-01 * swap into the transit (booked second)\n\
+         \tassets:exchange      -2 BTC\n\
+         \tassets:transit     1000 ABC @@ 2 BTC\n\
+         2024-06-01 * sell the wallet\n\
+         \tassets:wallet     -1000 ABC @@ 3 BTC\n\
+         \tassets:exchange       3 BTC\n";
+    let txs = common::run_x_cfg(ACCOUNTS, src, "BTC");
+    assert_eq!(capital(&txs, "BTC"), dec("-1"), "3 BTC market value against a 2 BTC basis");
+}
+
 // ─── R13: arrivals neutralize an uncovered short ──────────────────────
 
 #[test]
