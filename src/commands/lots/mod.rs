@@ -39,10 +39,11 @@ use crate::lotter::{OpenLot, Realization};
 /// most recent rate on record (same convention as the revaluator).
 const LATEST: &str = "9999-12-31";
 
-/// Column order: Date, Size, Entry, Cost, Exit, Value, Profit, ROI, Held.
-const COLS: usize = 9;
+/// Column order: Date, Size, Entry, Cost, Exit, Value, Profit, ROI,
+/// ROI/m, Held.
+const COLS: usize = 10;
 const HEADER: [&str; COLS] =
-    ["Date", "Size", "Entry", "Cost", "Exit", "Value", "Profit", "ROI", "Held"];
+    ["Date", "Size", "Entry", "Cost", "Exit", "Value", "Profit", "ROI", "ROI/m", "Held"];
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tone {
@@ -152,6 +153,11 @@ pub fn run(
 
     let mut lines: Vec<Line> = Vec::new();
     let mut totals: Vec<Nums> = Vec::new();
+    // Earliest acquisition anywhere in the report — the Total line's
+    // holding period runs from there to the report's as-of day, i.e. it
+    // asks what the whole book returned per month if everything still
+    // open were sold today.
+    let mut first_buy: Option<Date> = None;
     let mut summaries = 0usize;
     let mut last_account = "";
 
@@ -188,13 +194,14 @@ pub fn run(
         let mut sell_max: Option<Date> = None;
         for r in sold.iter().filter(|r| r.account == account && r.commodity == commodity) {
             buy_min = Some(buy_min.map_or(r.first_buy_date, |m: Date| m.min(r.first_buy_date)));
+            first_buy = Some(first_buy.map_or(r.first_buy_date, |m: Date| m.min(r.first_buy_date)));
             sell_max = Some(sell_max.map_or(r.sell_date, |m: Date| m.max(r.sell_date)));
             let (cells, nums) = sale_row(r, &money, &qty_prec);
             lines.push(Line::Row(cells));
             section.push(nums);
         }
         if !section.is_empty() {
-            let held = buy_min.zip(sell_max).map(|(b, s)| age(b, s));
+            let held = buy_min.zip(sell_max);
             let (cells, sum) =
                 summary_row("Sold", &section, commodity, true, held, &money, &qty_prec);
             lines.push(Line::Row(cells));
@@ -214,6 +221,7 @@ pub fn run(
         let mut open_min: Option<Date> = None;
         for l in position_open {
             open_min = Some(open_min.map_or(l.date, |m: Date| m.min(l.date)));
+            first_buy = Some(first_buy.map_or(l.date, |m: Date| m.min(l.date)));
             let (cells, nums) = open_row(l, spot, as_of, &money, &qty_prec);
             lines.push(Line::Row(cells));
             section.push(nums);
@@ -239,7 +247,7 @@ pub fn run(
             section.push(Nums { qty: residual, cost: None, value, profit: None });
         }
         if !section.is_empty() {
-            let held = open_min.map(|m| age(m, as_of));
+            let held = open_min.map(|m| (m, as_of));
             let (cells, sum) =
                 summary_row("Open", &section, commodity, false, held, &money, &qty_prec);
             lines.push(Line::Row(cells));
@@ -252,7 +260,8 @@ pub fn run(
     // A grand total only where it adds up: a single valuation commodity
     // (`-X`) and more than one summary to combine.
     if target.is_some() && summaries > 1 {
-        let (cells, _) = summary_row("Total", &totals, "", false, None, &money, &qty_prec);
+        let span = first_buy.map(|f| (f, as_of));
+        let (cells, _) = summary_row("Total", &totals, "", false, span, &money, &qty_prec);
         let mut cells = cells;
         cells[1] = Cell::empty(); // quantities across commodities don't add
         cells[2] = Cell::empty();
@@ -303,6 +312,37 @@ fn roi_cell(profit: &Decimal, cost: &Decimal) -> Cell {
     Cell::signed(format!("{}%", pct.format_decimal(1)), pct.is_negative())
 }
 
+/// Days in an average month — the Gregorian year's 365.2425 over
+/// twelve, so a holding period converts to months without a calendar
+/// walk.
+const DAYS_PER_MONTH: f64 = 30.436875;
+
+/// The same return restated as a MONTHLY rate: the rate that, compounded
+/// over the holding period, yields exactly it — `(1 + roi)^(1/months) −
+/// 1`. Only this makes two positions of unequal holding period
+/// comparable, since 60% over three months is a different investment
+/// from 60% over twelve. Dividing instead of taking the root would
+/// overstate every span beyond a month.
+///
+/// The root has no exact decimal form, so it runs in `f64`. That is
+/// sound here because the figure is display-only and derived from two
+/// exact decimals; nothing downstream computes with it. A position that
+/// lost more than its cost has no real root and stays empty, as does a
+/// span of less than a day.
+fn roi_month_cell(profit: &Decimal, cost: &Decimal, from: Date, to: Date) -> Cell {
+    let days = from.days_until(to);
+    if cost.is_zero() || days <= 0 {
+        return Cell::empty();
+    }
+    let factor = 1.0 + profit.to_f64() / cost.abs().to_f64();
+    if factor <= 0.0 {
+        return Cell::empty();
+    }
+    let monthly = factor.powf(DAYS_PER_MONTH / days as f64) - 1.0;
+    let pct = monthly * 100.0;
+    Cell::signed(format!("{:.1}%", pct), pct < 0.0)
+}
+
 /// One realized sale: Date is the sell date, Size the sold quantity
 /// (negative — it left the account; positive for a short cover), Entry /
 /// Exit the booked per-unit rates, Held the holding period from the
@@ -339,6 +379,7 @@ fn sale_row(
         Cell::empty(),
         Cell::empty(),
         Cell::empty(),
+        Cell::empty(),
         Cell::dim(age(r.first_buy_date, r.sell_date)),
     ];
     if let Some(c) = &cost {
@@ -353,6 +394,7 @@ fn sale_row(
         cells[6] = Cell::signed(money.rate(p, vc), p.is_negative());
         if let Some(c) = &cost {
             cells[7] = roi_cell(p, c);
+            cells[8] = roi_month_cell(p, c, r.first_buy_date, r.sell_date);
         }
     }
     (cells, Nums { qty: r.qty, cost, value, profit })
@@ -391,6 +433,7 @@ fn open_row(
         Cell::empty(),
         Cell::empty(),
         Cell::empty(),
+        Cell::empty(),
         Cell::dim(age(l.date, as_of)),
     ];
     if let Some(b) = &booked {
@@ -409,6 +452,7 @@ fn open_row(
         cells[6] = Cell::signed(money.rate(p, vc), p.is_negative());
         if let Some(c) = &cost {
             cells[7] = roi_cell(p, c);
+            cells[8] = roi_month_cell(p, c, l.date, as_of);
         }
     }
     (cells, Nums { qty: l.qty, cost, value, profit })
@@ -422,7 +466,7 @@ fn summary_row(
     rows: &[Nums],
     commodity: &str,
     negate_qty: bool,
-    held: Option<String>,
+    held: Option<(Date, Date)>,
     money: &Money,
     qty_prec: &HashMap<String, usize>,
 ) -> ([Cell; COLS], Nums) {
@@ -458,7 +502,8 @@ fn summary_row(
         Cell::empty(),
         Cell::empty(),
         Cell::empty(),
-        held.map(Cell::dim).unwrap_or_else(Cell::empty),
+        Cell::empty(),
+        held.map(|(f, t)| Cell::dim(age(f, t))).unwrap_or_else(Cell::empty),
     ];
     if money.target.is_some() {
         if let Some(c) = &cost {
@@ -479,6 +524,9 @@ fn summary_row(
             cells[6] = Cell::signed(money.rate(p, vc), p.is_negative());
             if let Some(c) = &cost {
                 cells[7] = roi_cell(p, c);
+                if let Some((f, t)) = held {
+                    cells[8] = roi_month_cell(p, c, f, t);
+                }
             }
         }
     }
@@ -511,7 +559,7 @@ fn print_lines(lines: &[Line]) {
     let mut active = [false; COLS];
     active[0] = true;
     active[1] = true;
-    active[8] = true;
+    active[9] = true;
     for line in lines {
         if let Line::Row(cells) = line {
             for (i, c) in cells.iter().enumerate() {
