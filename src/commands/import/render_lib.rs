@@ -182,7 +182,7 @@ mod tests {
         // A posting exactly as `format_source` emits it (untabbed): account,
         // an aligned run of spaces, then the amount. Re-colouring must not move
         // the amount by a single column.
-        let line = "    assets:12:bitcoin-uncategorized        BTC0.00018958";
+        let line = "    assets:12:bitcoin-uncategorized     BTC0.00018958";
         assert_eq!(strip_ansi(&colorize_added(line)), line);
     }
 }
