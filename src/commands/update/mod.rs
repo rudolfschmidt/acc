@@ -5,7 +5,7 @@ pub(crate) mod file;
 
 use colored::Colorize;
 
-use crate::date::{date_to_ms, day_after};
+use crate::date::date_to_ms;
 use crate::error::Error;
 
 use cli::{parse_pair, Pair};
@@ -48,22 +48,30 @@ pub enum Cadence {
 
 pub fn run(
     pairs: &[String],
-    since: Option<&str>,
-    date: Option<&str>,
+    range: &crate::period::Range,
     cadence: Cadence,
     skip: bool,
     flags: UpdateFlags,
 ) -> Result<(), Error> {
+    // A report can hold several periods apart and match against their
+    // union; a fetch would have to walk the gap between them, so it
+    // takes one span at a time.
+    if range.periods.len() > 1 {
+        return Err(Error::new(
+            "update takes one -p at a time — use -b/-e for a span across periods".to_string(),
+        ));
+    }
+    let (begin, end) = (range.begin.as_deref(), range.end.as_deref());
     if flags.crypto {
-        run_crypto(pairs, since, date)?;
+        run_crypto(pairs, begin, end)?;
     }
     if flags.fiat {
-        fiat::run(since, date, cadence, skip)?;
+        fiat::run(begin, end, cadence, skip)?;
     }
     Ok(())
 }
 
-fn run_crypto(pairs: &[String], since: Option<&str>, date: Option<&str>) -> Result<(), Error> {
+fn run_crypto(pairs: &[String], begin: Option<&str>, end: Option<&str>) -> Result<(), Error> {
     if pairs.is_empty() {
         let discovered = file::discover_crypto_pairs()?;
         if discovered.is_empty() {
@@ -75,20 +83,20 @@ fn run_crypto(pairs: &[String], since: Option<&str>, date: Option<&str>) -> Resu
         }
         for (base, quote) in discovered {
             let pair = Pair { base, quote };
-            process_pair(&pair, since, date);
+            process_pair(&pair, begin, end);
         }
         return Ok(());
     }
     for spec in pairs {
         match parse_pair(spec) {
-            Ok(pair) => process_pair(&pair, since, date),
+            Ok(pair) => process_pair(&pair, begin, end),
             Err(e) => eprintln!("{} skip '{}': {}", "!".yellow(), spec, e),
         }
     }
     Ok(())
 }
 
-fn process_pair(pair: &Pair, since: Option<&str>, date: Option<&str>) {
+fn process_pair(pair: &Pair, begin: Option<&str>, end: Option<&str>) {
     let path = match file::path_for(&pair.base, &pair.quote) {
         Ok(p) => p,
         Err(e) => {
@@ -105,30 +113,33 @@ fn process_pair(pair: &Pair, since: Option<&str>, date: Option<&str>) {
         }
     };
 
-    // --date D takes precedence: replace only that one day.
-    let (start_date, end_date) = if let Some(d) = date {
-        existing.retain(|(date, _)| date.as_str() != d);
-        (d.to_string(), Some(d.to_string()))
-    } else if let Some(d) = since {
-        let cutoff = d.to_string();
-        existing.retain(|(date, _)| date.as_str() < cutoff.as_str());
-        (cutoff, None)
-    } else if let Some((last_date, _)) = existing.last() {
-        match day_after(last_date) {
-            Ok(d) => (d, None),
-            Err(e) => {
-                eprintln!("{} {}: invalid date in cache: {}", "✗".red(), pair.display(), e);
+    let start_date = match begin {
+        Some(b) => b.to_string(),
+        // The last stored day is refetched, not skipped. An exchange's
+        // daily candle only closes at 00:00 UTC, so a row written while
+        // its day was still running holds the rate of whatever moment
+        // the fetch happened to land on. Starting one day later would
+        // freeze that provisional rate forever; starting on the day
+        // itself replaces it, with the current rate while the day runs
+        // and with the real close once it is over. Every earlier day is
+        // final and stays untouched.
+        None => match existing.last() {
+            Some((last_date, _)) => last_date.clone(),
+            None => {
+                eprintln!(
+                    "{} {}: no existing file — provide -b DATE or -p PERIOD",
+                    "!".yellow(),
+                    pair.display()
+                );
                 return;
             }
-        }
-    } else {
-        eprintln!(
-            "{} {}: no existing file — provide --since DATE or --date DATE",
-            "!".yellow(),
-            pair.display()
-        );
-        return;
+        },
     };
+    // Whatever is fetched replaces what is stored for those days, so the
+    // range is dropped here and the fetched rows take its place.
+    existing.retain(|(d, _)| {
+        d.as_str() < start_date.as_str() || end.is_some_and(|e| d.as_str() >= e)
+    });
 
     let start_ms = match date_to_ms(&start_date) {
         Ok(m) => m,
@@ -150,13 +161,11 @@ fn process_pair(pair: &Pair, since: Option<&str>, date: Option<&str>) {
         }
     };
 
+    // MEXC serves from the start day to now, so the exclusive end is
+    // applied here rather than in the request.
     let fetched: Vec<(String, String)> = fetched_raw
         .into_iter()
-        .filter(|(d, _)| match &end_date {
-            // In single-date mode keep only the requested day.
-            Some(only) => d.as_str() == only.as_str(),
-            None => true,
-        })
+        .filter(|(d, _)| end.is_none_or(|e| d.as_str() < e))
         .collect();
     let new_count = fetched.len();
 

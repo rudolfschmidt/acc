@@ -8,14 +8,14 @@ const OXR_BASE: &str = "https://openexchangerates.org/api/historical";
 
 /// Entry point: update fiat rate files.
 /// Fetches **all** currencies OXR returns for USD base — no symbol filter.
-/// - `date` (if Some): fetch only that single day.
-/// - `since` (if Some): fetch range [since, today].
-/// - else: fetch (day after latest existing file) to today.
+/// - `begin` (if Some): the first day to fetch, else the latest existing
+///   file, which is refetched because it may hold a provisional rate.
+/// - `end` (if Some): stop before this day, else run up to today.
 ///
 /// `cadence` controls step size (daily / monthly / yearly) for the loop.
 pub fn run(
-    since: Option<&str>,
-    date: Option<&str>,
+    begin: Option<&str>,
+    end: Option<&str>,
     cadence: super::Cadence,
     skip: bool,
 ) -> Result<(), Error> {
@@ -23,22 +23,18 @@ pub fn run(
         Error::new("no `[exchange] openexchangerates` key in the CONFIG_DIR config".to_string())
     })?;
 
-    if let Some(d) = date {
-        if skip && file::fiat_path_for(d)?.exists() {
-            println!("{} fiat {}: exists, skipping", "!".yellow(), d);
-            return Ok(());
-        }
-        return fetch_and_write(&app_id, d);
-    }
-
     let (latest, _symbols) = file::scan_fiat()?;
-    let start = match since {
+    let start = match begin {
         Some(d) => d.to_string(),
         None => match latest {
-            Some(d) => advance(&d, cadence)?,
+            // The latest file is refetched, not skipped. OXR dates a day
+            // at 23:59:59 UTC, so a file written while its day was still
+            // running holds an intra-day snapshot; starting one step
+            // later would freeze that snapshot forever.
+            Some(d) => d,
             None => {
                 return Err(Error::new(
-                    "fiat: no existing files found — provide --since DATE or --date DATE",
+                    "fiat: no existing files found — provide -b DATE or -p PERIOD",
                 ));
             }
         },
@@ -53,7 +49,9 @@ pub fn run(
     let mut written = 0;
     let mut skipped = 0;
     loop {
-        if cursor.as_str() > today.as_str() {
+        // Today caps every run, since a day the world has not reached
+        // has no rate; `end` is exclusive and cuts in before that.
+        if cursor.as_str() > today.as_str() || end.is_some_and(|e| cursor.as_str() >= e) {
             break;
         }
         if skip && file::fiat_path_for(&cursor)?.exists() {

@@ -26,6 +26,30 @@ struct Args {
     command: Option<Command>,
 }
 
+/// The date-range flags, flattened into the report commands and into
+/// `update` alike — a period means the same span wherever it is
+/// written, and `crate::period` resolves it for both.
+#[derive(ClapArgs, Clone, Debug)]
+struct PeriodArgs {
+    /// Start at this date, inclusive. Takes a year (YYYY), a month
+    /// (YYYY-MM) or a day (YYYY-MM-DD) and uses its first day.
+    #[arg(long = "begin", short = 'b', conflicts_with = "periods")]
+    begin: Option<String>,
+
+    /// Stop before this date, exclusive. Takes the same forms as
+    /// `--begin` and uses the first day of the period named, so
+    /// `-e 2025` and `-e 2025-01-01` are the same bound.
+    #[arg(long = "end", short = 'e', conflicts_with = "periods")]
+    end: Option<String>,
+
+    /// A whole period instead of `--begin`/`--end`. Accepts a year
+    /// (YYYY), a month (YYYY-MM), or a single day (YYYY-MM-DD).
+    /// Reports take `-p` repeatedly and keep a transaction that
+    /// matches any of them; `update` works on one period at a time.
+    #[arg(long = "period", short = 'p', value_name = "PERIOD")]
+    periods: Vec<String>,
+}
+
 /// Filter / sort / conversion flags shared by every report-style
 /// command (`balance`, `register`, `print`, `accounts`, `codes`,
 /// `commodities`, `navigate`). Flattened into each variant via
@@ -33,21 +57,8 @@ struct Args {
 /// --help` stay uncluttered.
 #[derive(ClapArgs, Clone, Debug)]
 struct ReportArgs {
-    /// Include only transactions on or after this date (YYYY-MM-DD)
-    #[arg(long = "begin", short = 'b', conflicts_with = "periods")]
-    begin: Option<String>,
-
-    /// Include only transactions before this date (YYYY-MM-DD)
-    #[arg(long = "end", short = 'e', conflicts_with = "periods")]
-    end: Option<String>,
-
-    /// Include only transactions in this period. Accepts a year
-    /// (YYYY), a month (YYYY-MM), or a single day (YYYY-MM-DD).
-    /// Shortcut for setting `--begin` and `--end` together. Repeat
-    /// `-p` to include multiple discrete periods — each period works
-    /// independently and a transaction is kept if it matches any.
-    #[arg(long = "period", short = 'p', value_name = "PERIOD")]
-    periods: Vec<String>,
+    #[command(flatten)]
+    period: PeriodArgs,
 
     /// Include transactions dated after today. Hidden by default so
     /// forward-dated recurring entries (rent, subscriptions) don't
@@ -257,17 +268,13 @@ enum Command {
     /// shown; tracking always spans the whole journal, since lots
     /// migrate between accounts through transfers
     Lots {
-        /// Show only sales dated on or after this date; the open lots
-        /// always show. Accepts YYYY-MM-DD, or YYYY / YYYY-MM (their
-        /// first day)
-        #[arg(long = "begin", short = 'b')]
-        begin: Option<String>,
-        /// Show the lots as of this date: only transactions strictly
-        /// before it feed the FIFO queues. Accepts YYYY-MM-DD, or
-        /// YYYY / YYYY-MM (their first day). Lot ages are measured
-        /// against the day before
-        #[arg(long = "end", short = 'e')]
-        end: Option<String>,
+        /// `-b` scopes which SALES are shown (the open lots always
+        /// show), `-e` is the tracking cutoff — only transactions
+        /// strictly before it feed the FIFO queues, and lot ages are
+        /// measured against the day before. `-p 2025` sets both, so a
+        /// period means here what it means everywhere else.
+        #[command(flatten)]
+        period: PeriodArgs,
         /// Feed forward-dated transactions into the tracking too
         /// (hidden by default, like every report)
         #[arg(long)]
@@ -482,12 +489,12 @@ enum Command {
         /// crypto files under $PRICES/crypto/ are updated.
         #[arg(long = "pair")]
         pairs: Vec<String>,
-        /// Overwrite data from this date onwards (YYYY-MM-DD)
-        #[arg(long = "since", conflicts_with = "date")]
-        since: Option<String>,
-        /// Fetch only this specific date (YYYY-MM-DD). Overrides --since.
-        #[arg(long = "date")]
-        date: Option<String>,
+        /// The days to fetch, overwriting what is stored for them. Without
+        /// them the run continues at the last stored day, which is
+        /// refetched because it may still have been open when it was
+        /// written.
+        #[command(flatten)]
+        period: PeriodArgs,
         /// Step forward by day (default). Compatible with crypto and fiat.
         #[arg(long, conflicts_with_all = ["monthly", "yearly"])]
         daily: bool,
@@ -629,39 +636,13 @@ fn fail(msg: &str) -> ! {
     std::process::exit(1);
 }
 
-/// Expand a `-p` period string into `(begin, end)` half-open bounds.
-/// Accepts `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`.
-///
-/// - `2024`       → `2024-01-01` .. `2025-01-01`
-/// - `2024-12`    → `2024-12-01` .. `2025-01-01`
-/// - `2024-12-06` → `2024-12-06` .. `2024-12-07`
-fn expand_period(s: &str) -> Result<(String, String), String> {
-    let parts: Vec<&str> = s.split('-').collect();
-    match parts.as_slice() {
-        [y] => {
-            let year: i32 = y.parse().map_err(|_| format!("invalid year: `{}`", s))?;
-            Ok((format!("{:04}-01-01", year), format!("{:04}-01-01", year + 1)))
-        }
-        [y, m] => {
-            let year: i32 = y.parse().map_err(|_| format!("invalid year: `{}`", s))?;
-            let month: u32 = m.parse().map_err(|_| format!("invalid month: `{}`", s))?;
-            if !(1..=12).contains(&month) {
-                return Err(format!("month out of range: `{}`", s));
-            }
-            let (ny, nm) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
-            Ok((
-                format!("{:04}-{:02}-01", year, month),
-                format!("{:04}-{:02}-01", ny, nm),
-            ))
-        }
-        [_, _, _] => {
-            // Single date: use it as begin, begin+1day as end.
-            let date = crate::date::Date::parse(s).map_err(|e| e.to_string())?;
-            let next = crate::date::Date::from_days(date.days() + 1);
-            Ok((date.to_string(), next.to_string()))
-        }
-        _ => Err(format!("invalid period: `{}` (expected YYYY, YYYY-MM, or YYYY-MM-DD)", s)),
-    }
+/// Hand the `-b` / `-e` / `-p` flags to the shared resolver.
+fn resolve_period(args: Option<&PeriodArgs>) -> Result<crate::period::Range, String> {
+    crate::period::resolve(
+        args.and_then(|a| a.begin.as_deref()),
+        args.and_then(|a| a.end.as_deref()),
+        args.map(|a| a.periods.as_slice()).unwrap_or(&[]),
+    )
 }
 
 /// Recursively collect journal files under `dir` (sorted, skipping
@@ -783,8 +764,7 @@ fn try_standalone(
         // Update fetches exchange rates; it does not read the journal.
         Command::Update {
             pairs,
-            since,
-            date,
+            period,
             monthly,
             yearly,
             skip,
@@ -806,14 +786,11 @@ fn try_standalone(
             } else {
                 crate::commands::update::Cadence::Daily
             };
-            Some(crate::commands::update::run(
-                pairs,
-                since.as_deref(),
-                date.as_deref(),
-                cadence,
-                *skip,
-                flags,
-            ))
+            let range = match resolve_period(Some(period)) {
+                Ok(r) => r,
+                Err(e) => fail(&e),
+            };
+            Some(crate::commands::update::run(pairs, &range, cadence, *skip, flags))
         }
 
         // Import converts a bank CSV into ledger transactions. It reads the
@@ -933,36 +910,11 @@ fn try_standalone(
 fn resolve_date_range(
     filter_args: Option<&ReportArgs>,
 ) -> (Vec<(String, String)>, Option<String>, Option<String>) {
-    let period_ranges: Vec<(String, String)> = filter_args
-        .map(|f| f.periods.as_slice())
-        .unwrap_or(&[])
-        .iter()
-        .map(|p| match expand_period(p) {
-            Ok(pair) => pair,
-            Err(e) => fail(&e),
-        })
-        .collect();
-    let (period_begin, period_end) = match period_ranges.len() {
-        1 => (
-            Some(period_ranges[0].0.clone()),
-            Some(period_ranges[0].1.clone()),
-        ),
-        _ => (None, None),
+    let range = match resolve_period(filter_args.map(|f| &f.period)) {
+        Ok(r) => r,
+        Err(e) => fail(&e),
     };
-    let explicit_begin = filter_args
-        .and_then(|f| f.begin.as_deref())
-        .map(|b| match expand_period(b) {
-            Ok((start, _)) => start,
-            Err(e) => fail(&e),
-        });
-    let explicit_end = filter_args
-        .and_then(|f| f.end.as_deref())
-        .map(|e| match expand_period(e) {
-            Ok((start, _)) => start,
-            Err(e) => fail(&e),
-        });
-    let begin = explicit_begin.or(period_begin);
-    let user_end = explicit_end.or(period_end);
+    let (period_ranges, begin, user_end) = (range.periods, range.begin, range.end);
 
     // The filter's `end` is exclusive, so `today+1` keeps everything up to
     // and including today. With an explicit `-e`/`-p`, take the earlier.
@@ -1128,11 +1080,10 @@ fn start(raw_args: Vec<String>, inject: crate::Inject) -> Result<(), crate::Erro
     // already carries `{}`-annotated split legs, which the tracker would
     // misread as manual lots) and applies only the date cutoff — the
     // account pattern merely scopes the display inside the command.
-    if let Command::Lots { begin, end, future, unrealized, pattern, .. } = &command {
-        let user_end: Option<crate::date::Date> = end.as_deref().map(|e| {
-            let (start, _) = expand_period(e).unwrap_or_else(|err| fail(&err));
-            crate::date::Date::parse(&start).unwrap_or_else(|err| fail(&err))
-        });
+    if let Command::Lots { period, future, unrealized, pattern, .. } = &command {
+        let range = resolve_period(Some(period)).unwrap_or_else(|err| fail(&err));
+        let day = |s: &str| crate::date::Date::parse(s).unwrap_or_else(|err| fail(&err));
+        let user_end: Option<crate::date::Date> = range.end.as_deref().map(day);
         // Same default future cutoff as every report: today+1, exclusive.
         let future_cap: Option<crate::date::Date> = (!future)
             .then(|| crate::date::Date::from_days(crate::date::Date::today().days() + 1));
@@ -1148,10 +1099,7 @@ fn start(raw_args: Vec<String>, inject: crate::Inject) -> Result<(), crate::Erro
             .map(|c| crate::date::Date::from_days(c.days().saturating_sub(1)))
             .unwrap_or_else(crate::date::Date::today);
         // `-b` scopes which *sales* are shown, not what is tracked.
-        let begin: Option<crate::date::Date> = begin.as_deref().map(|b| {
-            let (start, _) = expand_period(b).unwrap_or_else(|err| fail(&err));
-            crate::date::Date::parse(&start).unwrap_or_else(|err| fail(&err))
-        });
+        let begin: Option<crate::date::Date> = range.begin.as_deref().map(day);
         crate::commands::lots::run(
             &journal,
             exchange_target.as_deref(),

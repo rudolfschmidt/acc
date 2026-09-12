@@ -27,6 +27,7 @@ pub mod indexer;
 pub mod loader;
 pub mod lotter;
 pub mod parser;
+pub mod period;
 pub mod pipeline;
 pub mod realizer;
 pub mod rebalancer;
