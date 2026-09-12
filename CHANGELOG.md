@@ -1,5 +1,118 @@
 # Changelog
 
+## 0.32.0 — 2026-09-13
+
+### Sun 13 Sep 2026 - The bar line reads as a swap cycle, and `lots` speaks the period flags
+
+**One block per SIDE of the cycle, not one per figure.** `--bar` used to list
+five peers — price, both marks, both positions — leaving the reader to pair a
+mark with the position it governs. A mark and its position are halves of one
+thought, so they now share a block, and the head carries what the cycle is
+worth and what it has made:
+
+    FOO $100 value $600 p&l +$120 (+25%/32m +1%/m) | sell ≥$150 (-33%) stock FOO3 @ $100 (up&l +$0 0%) | BUY ≤$100 (0%) stock BAR300 (up&l +FOO1.00 ≈ $100 +50%) sold FOO2 @ $150 (rp&l +$120 +67%/6m +9%/m)
+
+Everything in it follows from three rules. The marks carry `≥` and `≤`
+because a bare price never said in which direction it triggers — and not
+"limit", which would claim an order rests at an exchange. Parentheses hold
+what is derived from the figure before them, so a percentage is an aside
+while money and quantities stand free. And the names are one family whose
+arithmetic shows in the names: `up&l` open, `rp&l` closed, `p&l` the sum,
+each with its return over the span it ran and its monthly rate beside it.
+The word names the axis, the sign names the direction, which retires
+`gained`, `lost` and `saved` as three words on three different bases.
+
+**Two figures the line could not give before.** `value` is the whole cycle at
+today's price, the held asset plus the counter stock — not `lots`' Value
+column, which counts the proceeds of every past sale including those whose
+money went elsewhere. And `rp&l` is the profit already closed, taken from the
+same realizations `lots` reports, with a short cover's sign flipped the way
+that report flips it. Both are computed on the cold path and cached, so the
+warm path still reads two files.
+
+**`lots` takes `-p` as well.** It had `-b` and `-e` of its own; they are now
+the shared `PeriodArgs`, so `acc lots -p 2025` scopes the sales shown and the
+tracking cutoff in one flag, exactly as a period does everywhere else. The
+`Total` line gained the `ROI/m` and `Held` it was missing, its span running
+from the earliest acquisition anywhere in the report to the report's as-of
+day — what the whole book returned per month if everything still open were
+sold today.
+
+### Sat 12 Sep 2026 - `lots` states the return per month, and the signal cache counts the binary as an input
+
+**A return is only comparable once its holding period is divided out.** The
+new `ROI/m` column restates each line's ROI as the monthly rate that,
+compounded over the period, produces exactly it — `(1 + roi)^(1/months) − 1`,
+over the exact day count rather than the rounded `Held` label:
+
+    2026-09-07  FOO-1.00004446  $333.16  $333.17  $536.97  $536.99  $203.82  61.2%  16.3%  3m
+
+Sixty percent over three months and sixty percent over twelve are different
+investments, and only this column says so. The root has no exact decimal
+form and runs in `f64`, which is sound for a display-only figure derived from
+two exact decimals; a position that lost more than its cost has no real root
+and stays empty, as does a span shorter than a day.
+
+**`signal`'s rate cache now invalidates when acc itself is rebuilt.** It keyed
+freshness on the journal's mtimes alone, but the four rates are a computed
+result, not a copy of the journal — a fixed lotter derives different numbers
+from the very same files, and the cache went on serving the old answer until
+the journal happened to change. The executable's mtime joins the journal
+files as an input. One `stat`, so the warm path stays a couple of file reads;
+hashing the binary would cost more than the recompute it saves.
+
+### Sat 12 Sep 2026 - A same-day transfer kept its basis when the day's only trade was an acquisition
+
+**A position could land basis-less whenever its funding swap was booked after
+it.** The day-settling pass, which re-runs a finished day's transfers so a
+late-arriving lot still reaches every onward hop, skipped days holding fewer
+than two transfers and no retryable trade. The reasoning was that a single
+transfer cannot feed itself — but it can be fed by a trade of the same day,
+and an ACQUIRING trade never enters that list, which holds only the day's
+uncovered disposals. Under `-X` such a trade is invisible twice over, since
+its counter leg is the target money and is skipped outright. A wallet whose
+arrival was booked before the swap funding it therefore kept no cost basis,
+and the eventual sale realized its full proceeds as gain. The guard now only
+skips a day with no transfer and no trade at all; the `migrated` ledger
+already made a re-pass idempotent, so the extra pass moves nothing where
+nothing is owed.
+
+### Fri 11 Sep 2026 - `update` refetches the day it last stored, and speaks `-p` / `-b` / `-e`
+
+**A stored rate could be a mid-day snapshot that was never corrected.** The
+incremental fetch started at the day *after* the last stored row, so that row
+was written once and never touched again. But an exchange's daily candle only
+closes at 00:00 UTC and OXR dates a day at 23:59:59 UTC, so a row written
+while its day was still running holds the rate of whatever moment the fetch
+happened to land on — and a daily updater writes exactly such rows, every
+day. The start moves onto the last stored day itself, which the merge then
+overwrites: the current rate while the day runs, the real close once it is
+over. Everything before it is final and stays untouched, so the correction
+costs one extra day per request. Measured against a journal updated daily,
+17 days across 15 pairs carried an intra-day snapshot, deviating by up to
+17% from the day's close; every day fetched in bulk, long after it closed,
+was correct. Both domains were affected and both are fixed.
+
+**Breaking: `--since` and `--date` give way to the period flags every other
+command already speaks.** `update` now takes `-b` / `-e` / `-p` with the same
+meaning as in the reports, a period expanding to a half-open span:
+
+    acc update -p 2025            # the whole year, replacing what is stored
+    acc update -p 2025-04-15      # one day — what `--date` did
+    acc update -b 2025 -e 2025-07 # a span across periods
+    acc update                    # continue at the last stored day
+
+Whatever the range covers is dropped and refetched, so `-p` states which days
+to overwrite instead of the two different mechanisms `--since` (from here to
+today) and `--date` (this one day) did. Reports take several `-p` and match
+their union; a fetch would have to walk the gap between them, so `update`
+refuses more than one and points at `-b`/`-e`.
+
+**The period vocabulary moves into `acc::period`.** Expansion and the
+`-b`/`-e`/`-p` precedence sat in `cli.rs` and served the reports alone; they
+are now one module with one `PeriodArgs` flattened into both the report
+commands and `update`, so a period cannot come to mean two things.
+
 ## 0.31.0 — 2026-09-09
 
 ### Wed 09 Sep 2026 - `acc signal`: swap-cycle marks for the shell prompt
